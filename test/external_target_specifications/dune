@@ -1,0 +1,27 @@
+(executable
+ (name external_target_specifications_tool)
+ (modules external_target_specifications_tool)
+ (flags
+  (:standard -I src/.verocaml_core.objs/byte))
+ (preprocess
+  (action
+   (run cat %{input-file})))
+ (preprocessor_deps
+  ../../src/.verocaml_core.objs/byte/external_target_specification_private.cmi
+  ../../src/.verocaml_core.objs/byte/interface_specification_loaded_private.cmi
+  ../../src/.verocaml_core.objs/byte/sst_validation_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_driver_private.cmi)
+ (libraries verocaml_core compiler-libs.common))
+
+(cram
+ (deps
+  (glob_files fixtures/*)
+  external_target_specifications_tool.exe
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name external-target-specifications-check)
+ (deps
+  (alias runtest)))

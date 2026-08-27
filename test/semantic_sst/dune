@@ -1,0 +1,14 @@
+(executable
+ (name semantic_sst_tool)
+ (libraries verocaml_core))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  ../../verocaml.install
+  semantic_sst_tool.exe))
+
+(alias
+ (name semantic-sst-check)
+ (deps
+  (alias runtest)))

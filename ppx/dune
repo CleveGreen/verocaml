@@ -1,0 +1,15 @@
+(library
+ (name vero_ppx_rewriter)
+ (modules
+ vero_ppx_logical_builtin_private
+  vero_ppx_broadcast_private
+  vero_ppx_symbolic_private
+  vero_ppx_rewriter)
+ (libraries compiler-libs.common))
+
+(executable
+ (name vero_ppx)
+ (public_name verocaml-ppx)
+ (package verocaml)
+ (modules vero_ppx)
+ (libraries vero_ppx_rewriter compiler-libs.common))

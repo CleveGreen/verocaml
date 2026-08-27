@@ -1,0 +1,24 @@
+(executable
+ (name trusted_external_bodies_tool)
+ (modules
+  trusted_external_bodies_tool
+  trusted_external_bodies_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core compiler-libs.common))
+
+(rule
+ (targets trusted_external_bodies_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/symbolic_executor_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_driver_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_pipeline.cmi
+  ../../src/.verocaml_core.objs/byte/verification_session.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+(cram
+ (deps (glob_files fixtures/*.ml) trusted_external_bodies_tool.exe
+  ../../ppx/vero_ppx.exe ../../src/verocaml.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+(alias (name trusted-external-bodies-check) (deps (alias runtest)))

@@ -1,0 +1,269 @@
+let fail format = Printf.ksprintf failwith format
+
+open Value_mode_axes
+
+let read_structure file =
+  match (Cmt_format.read_cmt file).Cmt_format.cmt_annots with
+  | Cmt_format.Implementation structure -> structure
+  | _ -> fail "%s is not an implementation CMT" file
+
+let binding_name binding =
+  match binding.Typedtree.vb_pat.pat_desc with
+  | Typedtree.Tpat_var (_, name, _, _, _) -> name.txt
+  | _ -> fail "generated top-level binding is not a variable"
+
+let function_shape id expression =
+  match expression.Typedtree.exp_desc with
+  | Typedtree.Texp_function { params = [ parameter ]; body; ret_mode; _ } ->
+      let pattern =
+        match parameter.Typedtree.fp_kind with
+        | Typedtree.Tparam_pat pattern -> pattern
+        | Tparam_optional_default _ -> fail "%s has an optional parameter" id
+      in
+      let parameter_mode =
+        match pattern.Typedtree.pat_desc with
+        | Typedtree.Tpat_var (_, _, _, _, mode) -> Mode.Value.zap_to_floor mode
+        | _ -> fail "%s parameter is not a variable" id
+      in
+      let body =
+        match body with
+        | Typedtree.Tfunction_body body -> body
+        | Tfunction_cases _ -> fail "%s has function cases" id
+      in
+      ( parameter_mode,
+        Mode.Alloc.zap_to_floor parameter.fp_mode,
+        Mode.Alloc.zap_to_floor ret_mode,
+        body )
+  | _ -> fail "%s is not a one-parameter function" id
+
+let arrow_modes id value_description =
+  match Types.get_desc value_description.Types.val_type with
+  | Types.Tarrow ((_, parameter, result), _, _, _) ->
+      (Mode.Alloc.zap_to_floor parameter, Mode.Alloc.zap_to_floor result)
+  | _ -> fail "%s callee does not have an arrow type" id
+
+let application_shape id body =
+  let applications = ref [] in
+  let base = Tast_iterator.default_iterator in
+  let iterator =
+    {
+      base with
+      expr =
+        (fun self expression ->
+          (match expression.Typedtree.exp_desc with
+          | Typedtree.Texp_apply (callee, _, _, locality, _) ->
+              applications := (callee, locality) :: !applications
+          | _ -> ());
+          base.expr self expression);
+    }
+  in
+  iterator.expr iterator body;
+  match !applications with
+  | [
+   ( { Typedtree.exp_desc = Texp_ident (path, _, description, _, _); _ },
+     locality );
+  ] ->
+      let parameter, result = arrow_modes id description in
+      (Path.name path, parameter, result, Mode.Locality.zap_to_floor locality)
+  | _ -> fail "%s does not contain exactly one direct application" id
+
+let observe_value ~position id expression =
+  let value, parameter, result, body = function_shape id expression in
+  let value = value_combination value
+  and parameter = alloc_combination parameter
+  and result = alloc_combination result in
+  match position with
+  | "parameter" -> Printf.sprintf "pattern={%s};formal={%s}" value parameter
+  | "return" -> Printf.sprintf "return={%s}" result
+  | ("direct" | "retained_import") as call_position ->
+      let target, target_parameter, target_result, locality =
+        application_shape id body
+      in
+      let expected_target =
+        if call_position = "retained_import" then "Mode_provider." ^ id
+        else
+          String.sub id 8 (String.length id - 8) |> fun suffix ->
+          "parameter__" ^ suffix
+      in
+      if target <> expected_target then
+        fail "%s calls %s instead of %s" id target expected_target;
+      Printf.sprintf
+        "actual={%s};formal={%s};return={%s};target=%s;target-formal={%s};target-return={%s};application=%s"
+        value parameter result target
+        (alloc_combination target_parameter)
+        (alloc_combination target_result)
+        (printed Mode.Locality.Const.print locality)
+  | _ -> fail "unknown generated value position %s" position
+
+let position_of_id id =
+  match String.split_on_char '_' id with
+  | "parameter" :: _ -> Some "parameter"
+  | "return" :: _ -> Some "return"
+  | "payload" :: _ -> Some "payload"
+  | "direct" :: _ -> Some "direct"
+  | "retained" :: "import" :: _ -> Some "retained_import"
+  | _ -> None
+
+let collect_position_observations unit_name structure =
+  let observations = ref [] in
+  let add id detail =
+    observations :=
+      Printf.sprintf "%s\t%s\t%s" unit_name id detail :: !observations
+  in
+  List.iter
+    (fun item ->
+      match item.Typedtree.str_desc with
+      | Typedtree.Tstr_value (_, bindings) ->
+          List.iter
+            (fun binding ->
+              let id = binding_name binding in
+              match position_of_id id with
+              | Some
+                  (("parameter" | "return" | "direct" | "retained_import") as
+                   position) ->
+                  add id (observe_value ~position id binding.vb_expr)
+              | Some "payload" | None -> ()
+              | Some position -> fail "unsupported position %s" position)
+            bindings
+      | Typedtree.Tstr_type (_, declarations) ->
+          List.iter
+            (fun declaration ->
+              let id = declaration.Typedtree.typ_name.txt in
+              match position_of_id id with
+              | Some "payload" ->
+                  let modality =
+                    match declaration.Typedtree.typ_kind with
+                    | Typedtree.Ttype_variant
+                        [ { Typedtree.cd_args = Cstr_tuple [ argument ]; _ } ]
+                      ->
+                        argument.Typedtree.ca_modalities
+                    | _ -> fail "%s is not a one-field variant payload" id
+                  in
+                  let mode =
+                    Mode.Modality.Const.apply modality
+                      (Mode.Value.of_const Mode.Value.Const.legacy)
+                    |> Mode.Value.zap_to_floor
+                  in
+                  add id
+                    (Printf.sprintf "modality=%s;payload={%s}"
+                       (printed Mode.Modality.Const.print modality)
+                       (value_combination mode))
+              | Some _ | None -> ())
+            declarations
+      | _ -> ())
+    structure.Typedtree.str_items;
+  !observations
+
+let collect_state_samples structure =
+  let modes = ref [] in
+  let base = Tast_iterator.default_iterator in
+  let iterator =
+    let pat : type kind.
+        Tast_iterator.iterator -> kind Typedtree.general_pattern -> unit =
+     fun self pattern ->
+      (match pattern.Typedtree.pat_desc with
+      | Typedtree.Tpat_var (_, name, _, _, mode)
+        when String.starts_with ~prefix:"inventory__" name.txt ->
+          modes := Mode.Value.zap_to_floor mode :: !modes
+      | _ -> ());
+      base.pat self pattern
+    in
+    { base with pat }
+  in
+  iterator.structure iterator structure;
+  !modes
+
+let read_lines file =
+  let channel = open_in file in
+  Fun.protect
+    ~finally:(fun () -> close_in channel)
+    (fun () ->
+      let rec loop lines =
+        match input_line channel with
+        | line -> loop (line :: lines)
+        | exception End_of_file -> List.rev lines
+      in
+      loop [])
+
+let observations positions mode_client =
+  collect_position_observations "positions" (read_structure positions)
+  @ collect_position_observations "mode_client" (read_structure mode_client)
+  |> List.sort String.compare
+
+let check_unique_ids observations =
+  let ids =
+    List.map
+      (fun row ->
+        match String.split_on_char '\t' row with
+        | _unit_name :: id :: _ -> id
+        | _ -> fail "malformed observation row %s" row)
+      observations
+  in
+  if List.length ids <> List.length (List.sort_uniq String.compare ids) then
+    fail "duplicate compiler position observation"
+
+let inventory positions mode_client manifest expected =
+  let actual_axes = axes () in
+  if actual_axes <> expected_axes then
+    fail "compiler value-axis inventory drifted: %s"
+      (String.concat "," actual_axes);
+  let positions_structure = read_structure positions in
+  let modes = collect_state_samples positions_structure in
+  let states =
+    Mode.Value.Axis.all
+    |> List.map (fun (Mode.Value.Axis.P axis) ->
+        let name = axis_name axis in
+        let values =
+          modes
+          |> List.map (value_axis_state axis)
+          |> List.sort_uniq String.compare
+        in
+        (name, values))
+  in
+  (if states <> expected_states then
+     let show (axis, values) = axis ^ "=" ^ String.concat "," values in
+     fail "compiler value-state inventory drifted: %s"
+       (String.concat "; " (List.map show states)));
+  let combinations =
+    modes |> List.map value_combination |> List.sort_uniq String.compare
+  in
+  if combinations <> expected_combinations then
+    fail "compiler value-mode combination inventory drifted: %s"
+      (String.concat "; " combinations);
+  let observations = observations positions mode_client in
+  check_unique_ids observations;
+  let manifest = read_lines manifest |> List.sort String.compare in
+  let observed_ids =
+    List.map
+      (fun row -> List.nth (String.split_on_char '\t' row) 1)
+      observations
+    |> List.sort String.compare
+  in
+  if observed_ids <> manifest then
+    fail "compiler position-to-observation inventory drifted";
+  if observations <> read_lines expected then
+    fail "compiler position observation snapshot drifted";
+  List.iter
+    (fun (axis, values) ->
+      Printf.printf "axis=%s states=%s\n" axis (String.concat "," values))
+    states;
+  Printf.printf
+    "mode-inventory axes=%d states=%d combinations=%d state-samples=%d \
+     position-observations=%d twin-pairs=%d authority=OxCaml\n"
+    (List.length states)
+    (List.fold_left
+       (fun count (_, values) -> count + List.length values)
+       0 states)
+    (List.length combinations) (List.length modes) (List.length observations)
+    (List.length observations / 2)
+
+let () =
+  match Array.to_list Sys.argv with
+  | [ _; "--dump"; positions; mode_client ] ->
+      List.iter print_endline (observations positions mode_client)
+  | [ _; positions; mode_client; manifest; expected ] ->
+      inventory positions mode_client manifest expected
+  | _ ->
+      fail
+        "usage: value_mode_inventory [--dump] POSITIONS.cmt MODE_CLIENT.cmt \
+         [MANIFEST EXPECTED]"

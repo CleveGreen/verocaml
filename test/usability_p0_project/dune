@@ -1,0 +1,28 @@
+(rule
+ (target value_mode_inventory.ml)
+ (deps value_mode_inventory.ml.in)
+ (action
+  (copy %{deps} %{target})))
+
+(executable
+ (name value_mode_inventory)
+ (modules value_mode_inventory value_mode_axes)
+ (libraries compiler-libs.common))
+
+(cram
+ (deps
+  (glob_files fixtures/*)
+  generate_value_mode_matrix.py
+  value_mode_inventory.ml.in
+  value_mode_axes.ml
+  value_mode_observations.expected
+  value_mode_inventory.exe
+  ../verification_scope/verification_scope_counter_tool.exe
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name usability-p0-project-check)
+ (deps
+  (alias runtest)))

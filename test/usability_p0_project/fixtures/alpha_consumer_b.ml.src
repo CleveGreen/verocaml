@@ -1,0 +1,5 @@
+[@@@verocaml.verify]
+
+let use item =
+  match Alpha_provider_b.make (Alpha_provider_b.id item) with
+  | Alpha_provider_b.Box value -> value

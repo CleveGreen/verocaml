@@ -1,0 +1,17 @@
+(executable
+ (name direct_totality_tool)
+ (libraries verocaml_core))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  direct_totality_tool.exe
+  ../../verocaml.install
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name direct-totality-check)
+ (deps
+  (alias runtest)))

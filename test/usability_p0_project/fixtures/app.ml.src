@@ -1,0 +1,12 @@
+let () =
+  let tree =
+    Provider.Node
+      (1, Provider.Node (2, Provider.Leaf, Provider.Leaf), Provider.Leaf)
+  in
+  Printf.printf "mixed-project: %d %d %d %d %d %d %d\n" (Consumer.evaluate 3)
+    (Consumer.option_payload (Some 4))
+    (Consumer.result_payload (Error 5))
+    (Consumer.list_size [ 1; 2; 3 ])
+    (Consumer.tree_size tree)
+    (Consumer.factory_values 8)
+    (External_client.promised 6)

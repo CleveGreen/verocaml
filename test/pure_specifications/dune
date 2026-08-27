@@ -1,0 +1,17 @@
+(executable
+ (name pure_specifications_tool)
+ (libraries verocaml_core compiler-libs.common))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  pure_specifications_tool.exe
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name pure-specifications-check)
+ (deps
+  (alias runtest)))

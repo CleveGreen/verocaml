@@ -1,0 +1,17 @@
+(executable
+ (name specification_frontend_tool)
+ (libraries verocaml_core compiler-libs.common))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  golden/rewrite.expected
+  specification_frontend_tool.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name specification-frontend-check)
+ (deps
+  (alias runtest)))

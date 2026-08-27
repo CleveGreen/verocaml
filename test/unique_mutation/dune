@@ -1,0 +1,16 @@
+(executable
+ (name unique_mutation_tool)
+ (libraries verocaml_core))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  unique_mutation_tool.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name unique-mutation-check)
+ (deps
+  (alias runtest)))

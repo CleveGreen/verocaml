@@ -1,0 +1,17 @@
+(executable
+ (name source_input_compiler_helper)
+ (libraries unix))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  source_input_compiler_helper.exe
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name source-input-check)
+ (deps
+  (alias runtest)))

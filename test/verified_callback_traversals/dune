@@ -1,0 +1,50 @@
+(executable
+ (name verified_callback_traversals_tool)
+ (modules
+  verified_callback_traversals_tool
+  verified_callback_traversals_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core compiler-libs.common))
+
+(rule
+ (targets verified_callback_traversals_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/logic_quantifier_private.cmi
+  ../../src/.verocaml_core.objs/byte/quantifier_validation_private.cmi
+  ../../src/.verocaml_core.objs/byte/solver_backend_counter_private.cmi
+  ../../src/.verocaml_core.objs/byte/symbolic_executor_private.cmi
+  ../../src/.verocaml_core.objs/byte/typedtree_adapter_issuance_private.cmi
+  ../../src/.verocaml_core.objs/byte/typedtree_logical_builtin_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_driver_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_pipeline.cmi
+  ../../src/.verocaml_core.objs/byte/verification_session.cmi
+  ../../src/.verocaml_core.objs/byte/vir_logic_ir_translation_private.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(cram
+ (deps
+  architecture_check.py
+  (glob_files fixtures/*.ml)
+  (source_tree ../../ppx)
+  (source_tree ../../src)
+  (source_tree ../../test)
+  (source_tree ../../library)
+  (source_tree ../../runtime)
+  (source_tree ../../examples)
+  (source_tree ../../nix)
+  ../../dune-project
+  ../../flake.lock
+  ../../flake.nix
+  ../../verocaml.opam
+  verified_callback_traversals_tool.exe
+  ../../verocaml.install
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name verified-callback-traversals-check)
+ (deps (alias runtest)))

@@ -1,0 +1,3 @@
+let make captured =
+  ();
+  fun delta -> captured + delta

@@ -1,0 +1,76 @@
+(executable
+ (name verified_interfaces_tool)
+ (modules verified_interfaces_tool verified_interfaces_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core compiler-libs.common unix))
+
+(rule
+ (targets verified_interfaces_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/finite_value_registry.cmi
+  ../../src/.verocaml_core.objs/byte/imported_callable.cmi
+  ../../src/.verocaml_core.objs/byte/recursive_spec_encoding.cmi
+  ../../src/.verocaml_core.objs/byte/solver_policy_private.cmi
+  ../../src/.verocaml_core.objs/byte/symbolic_executor_private.cmi
+  ../../src/.verocaml_core.objs/byte/typedtree_adapter_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_driver_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_session.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(rule
+ (targets instrumented_interface_specification.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/interface_specification_environment_private.cmi
+  ../../src/.verocaml_core.objs/byte/finite_formal_requirement.cmi
+  ../../src/.verocaml_core.objs/byte/imported_callable.cmi
+  ../../src/.verocaml_core.objs/byte/spec_definition.cmi
+  ../../src/.verocaml_core.objs/byte/symbolic_executor_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_pipeline.cmi
+  ../../src/.verocaml_core.objs/byte/verification_driver_private.cmi)
+ (action
+  (with-stdout-to
+   %{targets}
+   (echo
+    "include Interface_specification\nlet construct_handle = Interface_specification_environment_private.construct_handle\nlet authenticate_with_handle_builder ~build_handle:_ ~timeout_ms ~dependency_files ~consumer_file =\n  authenticate ~timeout_ms ~dependency_files ~consumer_file\n"))))
+
+(executable
+ (name handle_barrier_tool)
+ (modules handle_barrier_tool instrumented_interface_specification)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core compiler-libs.common unix))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  (glob_files fixtures/*.mli)
+  ../../verocaml.install
+  handle_barrier_tool.exe
+  verified_interfaces_tool.exe
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.mli
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name verified-interfaces-check)
+ (deps
+  (alias runtest)))
+
+(rule
+ (alias verified-interfaces-replay-check)
+ (deps
+  assert_vero063_source_diff.sh
+  (source_tree ../architecture_authority))
+ (action
+  (run sh %{dep:assert_vero063_source_diff.sh} %{workspace_root})))
+
+(rule
+ (alias verified-interfaces-replay-check)
+ (deps
+  assert_vero064_source_diff.sh
+  (source_tree ../architecture_authority))
+ (action
+  (run sh %{dep:assert_vero064_source_diff.sh} %{workspace_root})))

@@ -1,0 +1,51 @@
+(rule
+ (target live-install-receipt.json)
+ (deps
+  policy.py
+  (source_tree ../../ppx)
+  (source_tree ../../src)
+  (source_tree ../../test)
+  (source_tree ../../library)
+  (source_tree ../../runtime)
+  (source_tree ../../examples)
+  (source_tree ../../nix)
+  ../../dune-project
+  ../../flake.lock
+  ../../flake.nix
+  ../../verocaml.opam
+  (alias_rec %{project_root}/install)
+  (sandbox none))
+ (action
+  (bash
+   "source_root=$(cd ../../../.. && pwd); python3 %{dep:policy.py} issue-install-receipt --source \"$source_root\" --context default --output %{target}")))
+
+(cram
+ (applies_to live_policy)
+ (deps
+  live_policy_tests.py
+  live_wrapper.py
+  policy.py
+  records/parametric-ratchet.jsonl
+  (source_tree ../../src)))
+
+(cram
+ (applies_to replay)
+ (alias architecture-authority-replay-check)
+ (runtest_alias false)
+ (deps
+  policy.py
+  replay_tests.py
+  (glob_files records/*)))
+
+(cram
+ (applies_to hygiene)
+ (alias architecture-authority-hygiene-check)
+ (runtest_alias false)
+ (deps hygiene_tests.py policy.py))
+
+(alias
+ (name architecture-authority-check)
+ (deps
+  (alias runtest)
+  (alias architecture-authority-replay-check)
+  (alias architecture-authority-hygiene-check)))

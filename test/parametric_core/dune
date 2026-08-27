@@ -1,0 +1,48 @@
+(executable
+ (name architecture_inventory)
+ (modules architecture_inventory)
+ (libraries compiler-libs.common))
+
+(executable
+ (name parametric_core_tool)
+ (modules parametric_core_tool parametric_core_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core compiler-libs.common))
+
+(rule
+ (targets parametric_core_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/parametric_logic_private.cmi
+  ../../src/.verocaml_core.objs/byte/parametric_type.cmi
+  ../../src/.verocaml_core.objs/byte/solver_backend_counter_private.cmi
+  ../../src/.verocaml_core.objs/byte/symbolic_executor_private.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(cram
+ (deps
+  architecture_manifest.py
+  (source_tree ../architecture_authority)
+  ../architecture_authority/live-install-receipt.json
+  architecture_inventory.exe
+  (source_tree ../../ppx)
+  (source_tree ../../src)
+  (source_tree ../../test)
+  (source_tree ../../library)
+  (source_tree ../../runtime)
+  (source_tree ../../examples)
+  (source_tree ../../nix)
+  ../../dune-project
+  ../../flake.lock
+  ../../flake.nix
+  ../../verocaml.opam
+  parametric_core_tool.exe
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name parametric-core-check)
+ (deps (alias runtest)))

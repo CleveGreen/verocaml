@@ -1,0 +1,39 @@
+type 'a node = Empty | Node of 'a * 'a node
+
+type stack = {
+  top : int node;
+  length : int;
+}
+
+let rec spec_push_n_inline
+    (value : int)
+    (n : int)
+    (stack : stack) : stack =
+  [%verocaml.decreases n];
+  if n <= 0 then
+    stack
+  else
+    let { top; length } = stack in
+    spec_push_n_inline value (n - 1)
+      { top = Node (value, top); length = length + 1 }
+[@@verocaml.spec]
+[@@verocaml.opaque]
+
+let rec spec_node_len (node : int node) : int =
+  [%verocaml.decreases node];
+  match node with
+  | Empty -> 0
+  | Node (_, next) -> 1 + spec_node_len next
+[@@verocaml.spec]
+[@@verocaml.revealed]
+
+let consume_inline
+    (value : int)
+    (n : int)
+    (stack : stack [@finite]) : unit =
+  [%verocaml.requires n >= 0];
+  [%verocaml.ensures fun _result ->
+    let expected = spec_push_n_inline value n stack in
+    expected.length = expected.length
+    && spec_node_len expected.top = spec_node_len expected.top];
+  ()

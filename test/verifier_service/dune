@@ -1,0 +1,21 @@
+(executable
+ (name verifier_service_tool)
+ (modules verifier_service_tool)
+ (libraries verocaml_core compiler-libs.common))
+
+(cram
+ (deps
+  verifier_service_tool.exe
+  ../private_receipt/fixtures/local_positive.ml
+  ../private_receipt/fixtures/failing_callee.ml
+  ../trusted_external_bodies/fixtures/positive.ml
+  ../verified_interfaces/fixtures/model_dependency.ml
+  ../verified_interfaces/fixtures/model_consumer.ml
+  ../../src/verifier_service.mli
+  verifier_service_tool.ml
+  ../../ppx/vero_ppx.exe
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name verifier-service-check)
+ (deps (alias runtest)))

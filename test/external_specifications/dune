@@ -1,0 +1,9 @@
+(executable
+ (name external_specifications_tool)
+ (libraries verocaml_core compiler-libs.common))
+(cram
+ (deps (glob_files fixtures/*.ml) external_specifications_tool.exe
+  ../../ppx/vero_ppx.exe ../../src/verocaml.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+(alias (name external-specifications-check) (deps (alias runtest)))

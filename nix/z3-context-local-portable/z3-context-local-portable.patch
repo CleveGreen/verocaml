@@ -1,0 +1,600 @@
+--- a/scripts/update_api.py
++++ b/scripts/update_api.py
+@@ -1384,6 +1384,30 @@
+ z3_ml_overrides = frozenset([
+     'Z3_mk_config'])
+ 
++# Vero-085: only context-bound operations needed by Vero worker solving.
++# Do not add global parameters, logging/tracing, or memory controls here.
++z3_ml_portable = frozenset([
++    'Z3_mk_config', 'Z3_del_config', 'Z3_set_param_value',
++    'Z3_mk_context_rc', 'Z3_set_ast_print_mode', 'Z3_enable_concurrent_dec_ref',
++    'Z3_mk_string_symbol', 'Z3_mk_int_sort', 'Z3_mk_uninterpreted_sort',
++    'Z3_mk_numeral', 'Z3_mk_func_decl', 'Z3_mk_app', 'Z3_mk_const',
++    'Z3_mk_bool_sort', 'Z3_mk_true', 'Z3_mk_false', 'Z3_mk_not',
++    'Z3_mk_ite', 'Z3_mk_implies', 'Z3_mk_and', 'Z3_mk_or', 'Z3_mk_eq',
++    'Z3_mk_add', 'Z3_mk_mul', 'Z3_mk_sub', 'Z3_mk_unary_minus',
++    'Z3_mk_lt', 'Z3_mk_le', 'Z3_mk_gt', 'Z3_mk_ge',
++    'Z3_mk_distinct', 'Z3_get_bool_value', 'Z3_mk_pattern',
++    'Z3_mk_forall_const', 'Z3_mk_quantifier_const',
++    'Z3_mk_quantifier_const_ex', 'Z3_mk_null_symbol', 'Z3_mk_params', 'Z3_params_set_bool',
++    'Z3_params_set_uint', 'Z3_model_eval', 'Z3_mk_solver', 'Z3_mk_solver_for_logic',
++    'Z3_solver_set_params', 'Z3_solver_reset', 'Z3_solver_assert',
++    'Z3_solver_check', 'Z3_solver_check_assumptions', 'Z3_solver_get_model',
++    'Z3_solver_get_reason_unknown', 'Z3_solver_to_string', 'Z3_ast_to_string',
++])
++z3_ml_portable_helpers = frozenset([
++    'context_of_ast', 'context_of_params', 'context_of_solver',
++    'context_of_model', 'is_null_model', 'mk_null_symbol',
++])
++
+ z3_ml_callbacks = frozenset([
+     'Z3_solver_propagate_init',
+     'Z3_solver_propagate_fixed',
+@@ -1431,6 +1455,8 @@
+             ml_native.write('%s' % param2ml(p))
+         if len(op) > 0:
+             ml_native.write(')')
++        if name in z3_ml_portable:
++            ml_native.write(' @@ portable')
+         if len(ip) > 5:
+             ml_native.write('  = "n_%s_bytecode" "n_%s"\n' % (ml_method_name(name), ml_method_name(name)))
+         else:
+@@ -1442,9 +1468,15 @@
+         type_name = Type2Str[type_id]
+         if ml_has_plus_type(type_name) and not type_name in ['Z3_context', 'Z3_sort', 'Z3_func_decl', 'Z3_app', 'Z3_pattern']:
+             ml_name = type2ml(type_id)
+-            ml_native.write('external context_of_%s : %s -> context = "n_context_of_%s"\n' % (ml_name, ml_name, ml_name))
+-            ml_native.write('external is_null_%s : %s -> bool = "n_is_null_%s"\n' % (ml_name, ml_name, ml_name))
+-            ml_native.write('external mk_null_%s : context -> %s = "n_mk_null_%s"\n\n' % (ml_name, ml_name, ml_name))
++            context_helper = 'context_of_%s' % ml_name
++            null_helper = 'is_null_%s' % ml_name
++            context_portable = ' @@ portable' if context_helper in z3_ml_portable_helpers else ''
++            null_portable = ' @@ portable' if null_helper in z3_ml_portable_helpers else ''
++            ml_native.write('external context_of_%s : %s -> context%s = "n_context_of_%s"\n' % (ml_name, ml_name, context_portable, ml_name))
++            ml_native.write('external is_null_%s : %s -> bool%s = "n_is_null_%s"\n' % (ml_name, ml_name, null_portable, ml_name))
++            mk_null_helper = 'mk_null_%s' % ml_name
++            mk_null_portable = ' @@ portable' if mk_null_helper in z3_ml_portable_helpers else ''
++            ml_native.write('external mk_null_%s : context -> %s%s = "n_mk_null_%s"\n\n' % (ml_name, ml_name, mk_null_portable, ml_name))
+ 
+     ml_native.write('(**/**)\n')
+     ml_native.close()
+--- a/src/api/ml/z3native.ml.pre
++++ b/src/api/ml/z3native.ml.pre
+@@ -3,7 +3,7 @@
+ open Z3enums
+ 
+ (**/**)
+-type ptr
++type ptr : value mod nonportable
+ type symbol = ptr
+ type config = ptr
+ type context = ptr
+@@ -35,5 +35,5 @@
+ type param_descrs = ptr
+ type rcf_num = ptr
+ 
+-external set_internal_error_handler : ptr -> unit
++external set_internal_error_handler : ptr -> unit @@ portable
+   = "n_set_internal_error_handler"
+--- a/src/api/ml/z3.ml
++++ b/src/api/ml/z3.ml
+@@ -77,7 +77,7 @@
+ module rec AST :
+ sig
+   type ast = Z3native.ast
+-  val gc : ast -> context
++  val gc : ast -> context @@ portable
+   module ASTVector :
+   sig
+     type ast_vector = Z3native.ast_vector
+@@ -208,14 +208,14 @@
+ and Sort :
+ sig
+   type sort = AST.ast
+-  val gc : sort -> context
++  val gc : sort -> context @@ portable
+   val equal : sort -> sort -> bool
+   val get_id : sort -> int
+   val get_sort_kind : sort -> Z3enums.sort_kind
+   val get_name : sort -> Symbol.symbol
+   val to_string : sort -> string
+   val mk_uninterpreted : context -> Symbol.symbol -> sort
+-  val mk_uninterpreted_s : context -> string -> sort
++  val mk_uninterpreted_s : context -> string -> sort @@ portable
+ end = struct
+   type sort = Z3native.sort
+   let gc a = Z3native.context_of_ast a
+@@ -233,7 +233,7 @@
+ and FuncDecl :
+ sig
+   type func_decl = Z3native.func_decl
+-  val gc : func_decl -> context
++  val gc : func_decl -> context @@ portable
+   module Parameter :
+   sig
+     type parameter =
+@@ -255,7 +255,7 @@
+     val get_rational : parameter -> string
+   end
+   val mk_func_decl : context -> Symbol.symbol -> Sort.sort list -> Sort.sort -> func_decl
+-  val mk_func_decl_s : context -> string -> Sort.sort list -> Sort.sort -> func_decl
++  val mk_func_decl_s : context -> string -> Sort.sort list -> Sort.sort -> func_decl @@ portable
+   val mk_rec_func_decl : context -> Symbol.symbol -> Sort.sort list -> Sort.sort -> func_decl
+   val mk_rec_func_decl_s : context -> string -> Sort.sort list -> Sort.sort -> func_decl
+   val add_rec_def : context -> func_decl -> Expr.expr list -> Expr.expr -> unit
+@@ -402,11 +402,11 @@
+     val get_size : param_descrs -> int
+     val to_string : param_descrs -> string
+   end
+-  val add_bool : params -> Symbol.symbol -> bool -> unit
+-  val add_int : params -> Symbol.symbol -> int -> unit
++  val add_bool : params -> Symbol.symbol -> bool -> unit @@ portable
++  val add_int : params -> Symbol.symbol -> int -> unit @@ portable
+   val add_float : params -> Symbol.symbol -> float -> unit
+   val add_symbol : params -> Symbol.symbol -> Symbol.symbol -> unit
+-  val mk_params : context -> params
++  val mk_params : context -> params @@ portable
+   val to_string : params -> string
+ 
+   val update_param_value : context -> string -> string -> unit
+@@ -447,7 +447,7 @@
+ and Expr :
+ sig
+   type expr = AST.ast
+-  val gc : expr -> context
++  val gc : expr -> context @@ portable
+   val ast_of_expr  :  expr -> AST.ast
+   val expr_of_ast  :  AST.ast -> expr
+   val expr_of_func_app : context -> FuncDecl.func_decl -> expr list -> expr
+@@ -462,17 +462,17 @@
+   val substitute_one : expr -> expr -> expr -> expr
+   val substitute_vars : expr -> expr list -> expr
+   val translate : expr -> context -> expr
+-  val to_string : expr -> string
++  val to_string : expr -> string @@ portable
+   val is_numeral : expr -> bool
+   val is_well_sorted : expr -> bool
+   val get_sort : expr -> Sort.sort
+   val is_const : expr -> bool
+   val mk_const : context -> Symbol.symbol -> Sort.sort -> expr
+-  val mk_const_s : context -> string -> Sort.sort -> expr
++  val mk_const_s : context -> string -> Sort.sort -> expr @@ portable
+   val mk_const_f : context -> FuncDecl.func_decl -> expr
+   val mk_fresh_const : context -> string -> Sort.sort -> expr
+-  val mk_app : context -> FuncDecl.func_decl -> expr list -> expr
+-  val mk_numeral_string : context -> string -> Sort.sort -> expr
++  val mk_app : context -> FuncDecl.func_decl -> expr list -> expr @@ portable
++  val mk_numeral_string : context -> string -> Sort.sort -> expr @@ portable
+   val mk_numeral_int : context -> int -> Sort.sort -> expr
+   val equal : expr -> expr -> bool
+   val compare : expr -> expr -> int
+--- a/src/api/ml/z3.mli
++++ b/src/api/ml/z3.mli
+@@ -30,7 +30,7 @@
+     (...)
+     </code>
+ *)
+-type context
++type context : value mod nonportable
+ 
+ (** Create a context object
+     The following parameters can be set:
+@@ -47,7 +47,7 @@
+     - unsat_core  (Boolean)      unsat-core generation for solvers, this parameter can be overwritten when creating a solver
+     - encoding                   the string encoding used internally (must be either "unicode" - 18 bit, "bmp" - 16 bit or "ascii" - 8 bit)
+ *)
+-val mk_context : (string * string) list -> context
++val mk_context : (string * string) list -> context @@ portable
+ 
+ (** Interrupt the execution of a Z3 procedure.
+ 
+@@ -104,8 +104,7 @@
+ (** Symbols are used to name several term and type constructors *)
+ module Symbol :
+ sig
+-  type symbol
+-
++  type symbol : value mod nonportable
+   (** The kind of the symbol (int or string) *)
+   val kind : symbol -> Z3enums.symbol_kind
+ 
+@@ -130,7 +129,7 @@
+   val mk_int : context -> int -> symbol
+ 
+   (** Creates a new symbol using a string. *)
+-  val mk_string : context -> string -> symbol
++  val mk_string : context -> string -> symbol @@ portable
+ 
+   (** Create a list of symbols. *)
+   val mk_ints : context -> int list -> symbol list
+@@ -142,13 +141,11 @@
+ (** The abstract syntax tree (AST) module *)
+ module rec AST :
+ sig
+-  type ast
+-
++  type ast : value mod nonportable
+   (** Vectors of ASTs *)
+   module ASTVector :
+   sig
+-    type ast_vector
+-
++    type ast_vector : value mod nonportable
+     (** Create an empty AST vector *)
+     val mk_ast_vector : context -> ast_vector
+ 
+@@ -186,8 +183,7 @@
+   (** Map from AST to AST *)
+   module ASTMap :
+   sig
+-    type ast_map
+-
++    type ast_map : value mod nonportable
+     (** Create an empty mapping from AST to AST *)
+     val mk_ast_map : context -> ast_map
+ 
+@@ -266,8 +262,7 @@
+ (** The Sort module implements type information for ASTs *)
+ and Sort :
+ sig
+-  type sort
+-
++  type sort : value mod nonportable
+   (** Comparison operator.
+       @return True if the two sorts are from the same context
+       and represent the same sort; false otherwise. *)
+@@ -289,14 +284,13 @@
+   val mk_uninterpreted : context -> Symbol.symbol -> sort
+ 
+   (** Create a new uninterpreted sort. *)
+-  val mk_uninterpreted_s : context -> string -> sort
++  val mk_uninterpreted_s : context -> string -> sort @@ portable
+ end
+ 
+ (** Function declarations *)
+ and FuncDecl :
+ sig
+-  type func_decl
+-
++  type func_decl : value mod nonportable
+   (** Parameters of Func_Decls *)
+   module Parameter :
+   sig
+@@ -339,7 +333,7 @@
+   val mk_func_decl : context -> Symbol.symbol -> Sort.sort list -> Sort.sort -> func_decl
+ 
+   (** Creates a new function declaration. *)
+-  val mk_func_decl_s : context -> string -> Sort.sort list -> Sort.sort -> func_decl
++  val mk_func_decl_s : context -> string -> Sort.sort list -> Sort.sort -> func_decl @@ portable
+ 
+   (** Creates a function declaration that can be used in a recursive function definition.
+       {!add_rec_def} *)
+@@ -411,13 +405,11 @@
+     A Params objects represents a configuration in the form of Symbol.symbol/value pairs. *)
+ and Params :
+ sig
+-  type params
+-
++  type params : value mod nonportable
+   (** ParamDescrs describe sets of parameters (of Solvers, Tactics, ...) *)
+   module ParamDescrs :
+   sig
+-    type param_descrs
+-
++    type param_descrs : value mod nonportable
+     (** Validate a set of parameters. *)
+     val validate : param_descrs -> params -> unit
+ 
+@@ -435,10 +427,10 @@
+   end
+ 
+   (** Adds a parameter setting. *)
+-  val add_bool : params -> Symbol.symbol -> bool -> unit
++  val add_bool : params -> Symbol.symbol -> bool -> unit @@ portable
+ 
+   (** Adds a parameter setting. *)
+-  val add_int : params -> Symbol.symbol -> int -> unit
++  val add_int : params -> Symbol.symbol -> int -> unit @@ portable
+ 
+   (** Adds a parameter setting. *)
+   val add_float : params -> Symbol.symbol -> float -> unit
+@@ -447,7 +439,7 @@
+   val add_symbol : params -> Symbol.symbol -> Symbol.symbol -> unit
+ 
+   (** Creates a new parameter set *)
+-  val mk_params : context -> params
++  val mk_params : context -> params @@ portable
+ 
+   (** A string representation of the parameter set. *)
+   val to_string : params -> string
+@@ -479,8 +471,7 @@
+ (** General Expressions (terms) *)
+ and Expr :
+ sig
+-  type expr
+-
++  type expr : value mod nonportable
+   val ast_of_expr : Expr.expr -> AST.ast
+   val expr_of_ast : AST.ast -> Expr.expr
+ 
+@@ -528,7 +519,7 @@
+   val translate : Expr.expr -> context -> expr
+ 
+   (** Returns a string representation of the expression. *)
+-  val to_string : Expr.expr -> string
++  val to_string : Expr.expr -> string @@ portable
+ 
+   (** Indicates whether the term is a numeral *)
+   val is_numeral : Expr.expr -> bool
+@@ -547,7 +538,7 @@
+   val mk_const : context -> Symbol.symbol -> Sort.sort -> expr
+ 
+   (** Creates a new constant. *)
+-  val mk_const_s : context -> string -> Sort.sort -> expr
++  val mk_const_s : context -> string -> Sort.sort -> expr @@ portable
+ 
+   (** Creates a  constant from the func_decl. *)
+   val mk_const_f : context -> FuncDecl.func_decl -> expr
+@@ -556,7 +547,7 @@
+   val mk_fresh_const : context -> string -> Sort.sort -> expr
+ 
+   (** Create a new function application. *)
+-  val mk_app : context -> FuncDecl.func_decl -> Expr.expr list -> expr
++  val mk_app : context -> FuncDecl.func_decl -> Expr.expr list -> expr @@ portable
+ 
+   (** Create a numeral of a given sort.
+       @return A Term with the given value and sort *)
+@@ -580,7 +571,7 @@
+ module Boolean :
+ sig
+   (** Create a Boolean sort *)
+-  val mk_sort : context -> Sort.sort
++  val mk_sort : context -> Sort.sort @@ portable
+ 
+   (** Create a Boolean constant. *)
+   val mk_const : context -> Symbol.symbol -> Expr.expr
+@@ -595,38 +586,38 @@
+   val mk_false : context -> Expr.expr
+ 
+   (** Creates a Boolean value. *)
+-  val mk_val : context -> bool -> Expr.expr
++  val mk_val : context -> bool -> Expr.expr @@ portable
+ 
+   (** Mk an expression representing [not(a)]. *)
+-  val mk_not : context -> Expr.expr -> Expr.expr
++  val mk_not : context -> Expr.expr -> Expr.expr @@ portable
+ 
+   (** Create an expression representing an if-then-else: [ite(t1, t2, t3)]. *)
+-  val mk_ite : context -> Expr.expr -> Expr.expr -> Expr.expr -> Expr.expr
++  val mk_ite : context -> Expr.expr -> Expr.expr -> Expr.expr -> Expr.expr @@ portable
+ 
+   (** Create an expression representing [t1 iff t2]. *)
+   val mk_iff : context -> Expr.expr -> Expr.expr -> Expr.expr
+ 
+   (** Create an expression representing [t1 -> t2]. *)
+-  val mk_implies : context -> Expr.expr -> Expr.expr -> Expr.expr
++  val mk_implies : context -> Expr.expr -> Expr.expr -> Expr.expr @@ portable
+ 
+   (** Create an expression representing [t1 xor t2]. *)
+   val mk_xor : context -> Expr.expr -> Expr.expr -> Expr.expr
+ 
+   (** Create an expression representing the AND of args *)
+-  val mk_and : context -> Expr.expr list -> Expr.expr
++  val mk_and : context -> Expr.expr list -> Expr.expr @@ portable
+ 
+   (** Create an expression representing the OR of args *)
+-  val mk_or : context -> Expr.expr list -> Expr.expr
++  val mk_or : context -> Expr.expr list -> Expr.expr @@ portable
+ 
+   (** Creates the equality between two expr's. *)
+-  val mk_eq : context -> Expr.expr -> Expr.expr -> Expr.expr
++  val mk_eq : context -> Expr.expr -> Expr.expr -> Expr.expr @@ portable
+ 
+   (** Creates a [distinct] term. *)
+-  val mk_distinct : context -> Expr.expr list -> Expr.expr
++  val mk_distinct : context -> Expr.expr list -> Expr.expr @@ portable
+ 
+   (** Indicates whether the expression is the true or false expression
+       or something else (L_UNDEF). *)
+-  val get_bool_value : Expr.expr -> Z3enums.lbool
++  val get_bool_value : Expr.expr -> Z3enums.lbool @@ portable
+ 
+   (** Indicates whether the term has Boolean sort. *)
+   val is_bool : Expr.expr -> bool
+@@ -668,9 +659,8 @@
+ (** Quantifier expressions *)
+ module Quantifier :
+ sig
+-  type quantifier
+-
+-  val expr_of_quantifier : quantifier -> Expr.expr
++  type quantifier : value mod nonportable
++  val expr_of_quantifier : quantifier -> Expr.expr @@ portable
+   val quantifier_of_expr : Expr.expr -> quantifier
+ 
+   (** Quantifier patterns
+@@ -680,8 +670,7 @@
+       also called a multi-pattern. *)
+   module Pattern :
+   sig
+-    type pattern
+-
++    type pattern : value mod nonportable
+     (** The number of terms in the pattern. *)
+     val get_num_terms : pattern -> int
+ 
+@@ -748,14 +737,14 @@
+   val mk_bound : context -> int -> Sort.sort -> Expr.expr
+ 
+   (** Create a quantifier pattern. *)
+-  val mk_pattern : context -> Expr.expr list -> Pattern.pattern
++  val mk_pattern : context -> Expr.expr list -> Pattern.pattern @@ portable
+ 
+ 
+   (** Create a universal Quantifier. *)
+   val mk_forall : context -> Sort.sort list -> Symbol.symbol list -> Expr.expr -> int option -> Pattern.pattern list -> Expr.expr list -> Symbol.symbol option -> Symbol.symbol option -> quantifier
+ 
+   (** Create a universal Quantifier. *)
+-  val mk_forall_const : context -> Expr.expr list -> Expr.expr -> int option -> Pattern.pattern list -> Expr.expr list -> Symbol.symbol option -> Symbol.symbol option -> quantifier
++  val mk_forall_const : context -> Expr.expr list -> Expr.expr -> int option -> Pattern.pattern list -> Expr.expr list -> Symbol.symbol option -> Symbol.symbol option -> quantifier @@ portable
+ 
+   (** Create an existential Quantifier. *)
+   val mk_exists : context -> Sort.sort list -> Symbol.symbol list -> Expr.expr -> int option -> Pattern.pattern list -> Expr.expr list -> Symbol.symbol option -> Symbol.symbol option -> quantifier
+@@ -1192,7 +1181,7 @@
+   module Integer :
+   sig
+     (** Create a new integer sort. *)
+-    val mk_sort : context -> Sort.sort
++    val mk_sort : context -> Sort.sort @@ portable
+ 
+     (** Get a big_int from an integer numeral *)
+     val get_big_int : Expr.expr -> Z.t
+@@ -1215,7 +1204,7 @@
+     val mk_rem : context -> Expr.expr -> Expr.expr -> Expr.expr
+ 
+     (** Create an integer numeral. *)
+-    val mk_numeral_s : context -> string -> Expr.expr
++    val mk_numeral_s : context -> string -> Expr.expr @@ portable
+ 
+     (** Create an integer numeral.
+         @return A Term with the given value and sort Integer *)
+@@ -1378,16 +1367,16 @@
+   val is_algebraic_number : Expr.expr -> bool
+ 
+   (** Create an expression representing [t[0] + t[1] + ...]. *)
+-  val mk_add : context -> Expr.expr list -> Expr.expr
++  val mk_add : context -> Expr.expr list -> Expr.expr @@ portable
+ 
+   (** Create an expression representing [t[0] * t[1] * ...]. *)
+-  val mk_mul : context -> Expr.expr list -> Expr.expr
++  val mk_mul : context -> Expr.expr list -> Expr.expr @@ portable
+ 
+   (** Create an expression representing [t[0] - t[1] - ...]. *)
+-  val mk_sub : context -> Expr.expr list -> Expr.expr
++  val mk_sub : context -> Expr.expr list -> Expr.expr @@ portable
+ 
+   (** Create an expression representing [-t]. *)
+-  val mk_unary_minus : context -> Expr.expr -> Expr.expr
++  val mk_unary_minus : context -> Expr.expr -> Expr.expr @@ portable
+ 
+   (** Create an expression representing [t1 / t2]. *)
+   val mk_div : context -> Expr.expr -> Expr.expr -> Expr.expr
+@@ -1396,16 +1385,16 @@
+   val mk_power : context -> Expr.expr -> Expr.expr -> Expr.expr
+ 
+   (** Create an expression representing [t1 < t2] *)
+-  val mk_lt : context -> Expr.expr -> Expr.expr -> Expr.expr
++  val mk_lt : context -> Expr.expr -> Expr.expr -> Expr.expr @@ portable
+ 
+   (** Create an expression representing [t1 <= t2] *)
+-  val mk_le : context -> Expr.expr -> Expr.expr -> Expr.expr
++  val mk_le : context -> Expr.expr -> Expr.expr -> Expr.expr @@ portable
+ 
+   (** Create an expression representing [t1 > t2] *)
+-  val mk_gt : context -> Expr.expr -> Expr.expr -> Expr.expr
++  val mk_gt : context -> Expr.expr -> Expr.expr -> Expr.expr @@ portable
+ 
+   (** Create an expression representing [t1 >= t2] *)
+-  val mk_ge : context -> Expr.expr -> Expr.expr -> Expr.expr
++  val mk_ge : context -> Expr.expr -> Expr.expr -> Expr.expr @@ portable
+ end
+ 
+ (** Functions to manipulate bit-vector expressions *)
+@@ -2858,8 +2847,7 @@
+     A Model contains interpretations (assignments) of constants and functions. *)
+ module Model :
+ sig
+-  type model
+-
++  type model : value mod nonportable
+   (** Function interpretations
+ 
+       A function interpretation is represented as a finite map and an 'else'.
+@@ -2944,10 +2932,10 @@
+       is partial (MODEL_PARTIAL enabled), or if it is not well-sorted.
+       In this case a [ModelEvaluationFailedException] is thrown.
+   *)
+-  val eval : model -> Expr.expr -> bool -> Expr.expr option
++  val eval : model -> Expr.expr -> bool -> Expr.expr option @@ portable
+ 
+   (** Alias for [eval]. *)
+-  val evaluate : model -> Expr.expr -> bool -> Expr.expr option
++  val evaluate : model -> Expr.expr -> bool -> Expr.expr option @@ portable
+ 
+   (** The number of uninterpreted sorts that the model has an interpretation for. *)
+   val get_num_sorts : model -> int
+@@ -3233,7 +3221,7 @@
+ (** Solvers *)
+ module Solver :
+ sig
+-  type solver
++  type solver : value mod nonportable
+   type status = UNSATISFIABLE | UNKNOWN | SATISFIABLE
+ 
+   val string_of_status : status -> string
+@@ -3242,7 +3230,7 @@
+   val get_help : solver -> string
+ 
+   (** Sets the solver parameters. *)
+-  val set_parameters : solver -> Params.params -> unit
++  val set_parameters : solver -> Params.params -> unit @@ portable
+ 
+   (** Retrieves parameter descriptions for solver. *)
+   val get_param_descrs : solver -> Params.ParamDescrs.param_descrs
+@@ -3263,10 +3251,10 @@
+ 
+   (** Resets the Solver.
+       This removes all assertions from the solver. *)
+-  val reset : solver -> unit
++  val reset : solver -> unit @@ portable
+ 
+   (** Assert a constraint (or multiple) into the solver. *)
+-  val add : solver -> Expr.expr list -> unit
++  val add : solver -> Expr.expr list -> unit @@ portable
+ 
+   (** Assert multiple constraints (cs) into the solver, and track them (in the
+       unsat) core using the Boolean constants in ps.
+@@ -3297,13 +3285,13 @@
+       {!Model}
+       {!get_unsat_core}
+       {!Proof}     *)
+-  val check : solver -> Expr.expr list -> status
++  val check : solver -> Expr.expr list -> status @@ portable
+ 
+   (** The model of the last [Check].
+ 
+       The result is [None] if [Check] was not invoked before,
+       if its results was not [SATISFIABLE], or if model production is not enabled. *)
+-  val get_model : solver -> Model.model option
++  val get_model : solver -> Model.model option @@ portable
+ 
+   (** The proof of the last [Check].
+ 
+@@ -3319,7 +3307,7 @@
+   val get_unsat_core : solver -> Expr.expr list
+ 
+   (** A brief justification of why the last call to [Check] returned [UNKNOWN]. *)
+-  val get_reason_unknown : solver -> string
++  val get_reason_unknown : solver -> string @@ portable
+ 
+   (** Solver statistics. *)
+   val get_statistics : solver -> Statistics.statistics
+@@ -3333,7 +3321,7 @@
+ 
+   (** Creates a new (incremental) solver.
+       {!mk_solver} *)
+-  val mk_solver_s : context -> string -> solver
++  val mk_solver_s : context -> string -> solver @@ portable
+ 
+   (** Creates a new (incremental) solver.  *)
+   val mk_simple_solver : context -> solver
+@@ -3351,7 +3339,7 @@
+   val translate : solver -> context -> solver
+ 
+   (** A string representation of the solver. *)
+-  val to_string : solver -> string
++  val to_string : solver -> string @@ portable
+ 
+   (** Solver local interrupt.
+ 

@@ -1,0 +1,36 @@
+opam-version: "2.0"
+maintainer: "Jane Street developers"
+authors: ["Jane Street Group, LLC"]
+homepage: "https://github.com/janestreet/parallel"
+bug-reports: "https://github.com/janestreet/parallel/issues"
+dev-repo: "git+https://github.com/janestreet/parallel.git"
+doc: "https://ocaml.janestreet.com/ocaml-core/latest/doc/parallel/index.html"
+license: "MIT"
+build: [
+  ["dune" "build" "-p" name "-j" jobs]
+]
+depends: [
+  "ocaml"                    {>= "5.2.0"}
+  "await"                    {= "v0.18~preview.130.83+317+verocaml.1"}
+  "base"                     {= "v0.18~preview.130.83+317"}
+  "concurrent"               {= "v0.18~preview.130.83+317+verocaml.1"}
+  "handled_effect"           {= "v0.18~preview.130.83+317"}
+  "portable"                 {= "v0.18~preview.130.83+317"}
+  "portable_ws_deque"        {= "v0.18~preview.130.83+317"}
+  "ppx_jane"                 {= "v0.18~preview.130.83+317"}
+  "unboxed_datatypes"        {= "v0.18~preview.130.83+317"}
+  "unique"                   {= "v0.18~preview.130.83+317"}
+  "dune"                     {>= "3.17.0"}
+]
+available: arch != "arm32" & arch != "x86_32"
+synopsis: "OxCaml Parallelism"
+description: """
+ Parallelism infrastructure.
+"""
+url {
+  src:
+    "https://github.com/janestreet/parallel/archive/e488373bb887e8cce4dab95bb23ec5d2f41d4f17.tar.gz"
+  checksum:
+    "sha256=7b0f3180d7640a9418241c24d3e6616451ed494635e323c871c3dc46b44c0d8f"
+}
+conflicts: "oxcaml-compiler" {> "5.2.0minus25"}

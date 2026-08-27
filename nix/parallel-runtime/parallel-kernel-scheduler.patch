@@ -1,0 +1,42 @@
+diff --git a/kernel/dune b/kernel/dune
+index a174716..cf948a5 100644
+--- a/kernel/dune
++++ b/kernel/dune
+@@ -4,7 +4,6 @@
+   (names stack_pointer_stubs parallel_stubs))
+  (name parallel_kernel)
+  (public_name parallel.kernel)
+- (libraries await base concurrent handled_effect unboxed.int64_u
+-   unboxed.nativeint_u portable unboxed_datatypes unique)
++ (libraries await base concurrent handled_effect portable unboxed_datatypes unique)
+  (preprocess
+   (pps ppx_jane)))
+diff --git a/kernel/stack_pointer.ml b/kernel/stack_pointer.ml
+index 253682f..679e0f4 100644
+--- a/kernel/stack_pointer.ml
++++ b/kernel/stack_pointer.ml
+@@ -22,8 +22,12 @@ external unsafe_to_value
+   = "caml_native_pointer_to_value_bytecode" "caml_native_pointer_to_value"
+ [@@noalloc] [@@builtin] [@@no_effects] [@@no_coeffects]
+ 
+-let null = Nativeint_u.zero
+-let equal = Nativeint_u.equal
++external box_nativeint : nativeint# -> (nativeint[@local_opt]) @@ portable = "%box_nativeint"
++external unbox_nativeint : (nativeint[@local_opt]) -> nativeint# @@ portable = "%unbox_nativeint"
++external unbox_int64 : (int64[@local_opt]) -> int64# @@ portable = "%unbox_int64"
++
++let[@inline] null () = unbox_nativeint Nativeint.zero
++let[@inline] equal x y = Nativeint.equal (box_nativeint x) (box_nativeint y)
+ 
+ let[@inline] unsafe_with_value (type a) (a : a) ~f = exclave_
+   (* Safe because [opaque_identity] does not look at [a]. *)
+@@ -51,7 +55,8 @@ module Imm = struct
+     @@ portable
+     = "%reinterpret_unboxed_int64_as_tagged_int63"
+ 
+-  let[@inline] of_ptr ptr = of_i64 (Int64_u.unbox (Nativeint_u.to_int64 ptr))
++  let[@inline] of_ptr ptr =
++    of_i64 (unbox_int64 (Int64.of_nativeint (box_nativeint ptr)))
+ 
+   external to_ptr
+     :  'a t

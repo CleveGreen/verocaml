@@ -1,0 +1,20 @@
+(executable
+ (name logic_ir_tool)
+ (modules logic_ir_tool logic_ir_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core ))
+
+(rule
+ (targets logic_ir_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(cram
+ (deps
+  logic_ir_tool.exe))
+(alias
+ (name logic-ir-check)
+ (deps
+  (alias runtest)))

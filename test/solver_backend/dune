@@ -1,0 +1,21 @@
+(executable
+ (name solver_backend_tool)
+ (modules solver_backend_tool solver_backend_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core ))
+
+(rule
+ (targets solver_backend_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/vir_logic_ir_translation_private.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(cram
+ (deps
+  solver_backend_tool.exe))
+(alias
+ (name solver-backend-check)
+ (deps
+  (alias runtest)))

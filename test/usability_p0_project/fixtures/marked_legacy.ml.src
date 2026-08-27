@@ -1,0 +1,13 @@
+[@@@verocaml.verify]
+
+let promised value =
+  try value + 1 with _ -> value
+
+module Unsupported = struct
+  class ['a] state (initial : 'a) = object
+    val mutable value = initial
+    method get = value
+  end
+end
+
+exception Legacy of int

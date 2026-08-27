@@ -1,0 +1,38 @@
+(executable
+ (name prepared_vc_jobs_tool)
+ (modules prepared_vc_jobs_tool prepared_vc_jobs_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core compiler-libs.common))
+
+(rule
+ (targets prepared_vc_jobs_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/vc_solver_job_private.cmi
+  ../../src/.verocaml_core.objs/byte/solver_backend_counter_private.cmi
+  ../../src/.verocaml_core.objs/byte/recursive_spec_encoding.cmi
+  ../../src/.verocaml_core.objs/byte/recursive_spec_retry_demand_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_driver_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_solver_private.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(cram
+ (deps
+ prepared_vc_jobs_tool.exe
+  (glob_files ../proof_body_assertions/fixtures/*.ml)
+  (glob_files ../private_receipt/fixtures/*.ml)
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi
+  ../../src/vc_solver_job_private.ml
+  ../../src/vc_solver_job_private.mli
+  ../../src/verification_solver_private.ml
+  ../../src/solver_backend_counter_private.ml
+  ../../src/recursive_spec_encoding.ml
+  ../../src/z3_bridge.ml))
+
+(alias
+ (name prepared-vc-jobs-check)
+ (deps (alias runtest)))

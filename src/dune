@@ -1,0 +1,263 @@
+(executable
+ (name trusted_import_generator)
+ (modules trusted_import_generator)
+ (libraries compiler-libs.common))
+
+(rule
+ (targets trusted_imports.ml)
+ (deps
+  (:stdlib %{ocaml_where}/stdlib.cmi)
+  (:effect %{ocaml_where}/stdlib__Effect.cmi)
+  (:domain %{ocaml_where}/stdlib__Domain.cmi)
+  (:ghost %{lib:verocaml.ghost:vero_ghost.cmi}))
+ (action
+  (run
+   %{exe:trusted_import_generator.exe}
+   %{stdlib}
+   %{effect}
+   %{domain}
+   %{ghost}
+   %{targets})))
+
+(library
+ (name verocaml_core)
+ (public_name verocaml.core)
+ (wrapped false)
+ (modules
+  diagnostic
+  parametric_type
+  spec_function_type_private
+  symbolic_application_private
+  parametric_adt
+  parametric_rank_domain_private
+  verified_provider_completion_private
+  parametric_signature_private
+  external_target_specification_private
+  external_specification_validation_private
+  retained_exec_result_private
+  retained_callable_summary_private
+  parametric_interface_lowering_private
+  parametric_interface_provider_private
+  parametric_lowering_private
+  parametric_adt_lowering_private
+  parametric_function_selection_private
+  int_bounds
+  cmt_input
+  finite_formal_requirement
+  imported_callable
+  typedtree_adapter_issuance_private
+  typedtree_logical_builtin_private
+  typedtree_broadcast_private
+  typedtree_symbolic_private
+  typedtree_callback_private
+  typedtree_surface_private
+  typedtree_adapter_private
+  interface_specification_environment_private
+  interface_specification_candidate_private
+  verification_scope_private
+  interface_specification_loaded_private
+  interface_specification
+  verifier_service
+  instance_mode
+  callback_shape_private
+  callback_certificate_private
+  callback_contract_private
+  callback_call_private
+  sst_callback_private
+  logic_quantifier_private
+  sst
+  spec_function_sst_private
+  typedtree_spec_function_private
+  spec_function_logic_private
+  symbolic_declaration_private
+  broadcast_scope_private
+  broadcast_declaration_private
+  quantifier_validation_private
+  parametric_sst_validation_private
+  sst_policy
+  sst_normalize
+  spec_definition
+  recursive_spec_tuple_match_private
+  recursive_spec_body_validation_private
+  immutable_aggregate_fact_relevance_private
+  immutable_aggregate_reconstruction_private
+  recursive_spec_retry_demand_private
+  sst_rank_domain_validation_private
+  sst_validation_private
+  sst_validation
+  type_invariant
+  sst_callable
+  termination
+  spec_unfolding
+  logic_ir
+  logical_adt_schema_private
+  recursive_spec_application_identity
+  vir
+  broadcast_vc_private
+  external_target_specification_use_private
+  aggregate_logic_symbol_private
+  logical_adt_encoding_private
+  parametric_logic_private
+  solver_policy_private
+  retained_model_application_private
+  vir_logic_ir_translation_private
+  shared_scalar_heap_private
+  shared_invariant_cell_private
+  vir_integer_conditional_private
+  recursive_spec_preservation
+  solver_backend_counter_private
+  solver_backend
+  symbolic_executor
+  trusted_imports
+  typedtree_adapter
+  typedtree_lowering
+  typedtree_lowering_private
+  verification_identity
+  finite_value_registry
+  finite_induction_private
+  recursive_spec_term_private
+  verification_session
+  logical_spec_capability_private
+  logical_spec_authentication_private
+  logical_spec_admission_private
+  logical_adt_evaluation_private
+  logical_spec_evaluation_private
+  symbolic_parametric_private
+  call_contract_execution_private
+  symbolic_executor_private
+  verification_pipeline
+  function_frontier_private
+  function_vc_worker_private
+  physical_core_count_private
+  spec_unfolding_private
+  logical_aggregate_term_normalization_private
+  z3_datatype_private
+  z3_bridge
+  recursive_spec_verification_private
+  recursive_spec_encoding
+  vc_solver_job_private
+  rank_encoding
+  verification_solver_private
+  verification_driver_private)
+ (private_modules
+  parametric_type
+  spec_function_type_private
+  symbolic_application_private
+  parametric_adt
+  parametric_rank_domain_private
+  verified_provider_completion_private
+  parametric_signature_private
+  external_target_specification_private
+  external_specification_validation_private
+  retained_exec_result_private
+  retained_callable_summary_private
+  parametric_interface_lowering_private
+  parametric_interface_provider_private
+  parametric_lowering_private
+  parametric_adt_lowering_private
+  parametric_function_selection_private
+  parametric_sst_validation_private
+  parametric_logic_private
+  finite_formal_requirement
+  imported_callable
+  typedtree_adapter_issuance_private
+  typedtree_logical_builtin_private
+  typedtree_broadcast_private
+  typedtree_symbolic_private
+  typedtree_callback_private
+  typedtree_surface_private
+  typedtree_adapter_private
+  interface_specification_environment_private
+  interface_specification_candidate_private
+  verification_scope_private
+  interface_specification_loaded_private
+  typedtree_lowering_private
+  instance_mode
+  callback_shape_private
+  callback_certificate_private
+  callback_contract_private
+  callback_call_private
+  sst_callback_private
+  spec_function_sst_private
+  typedtree_spec_function_private
+  spec_function_logic_private
+  symbolic_declaration_private
+  logic_quantifier_private
+  broadcast_scope_private
+  broadcast_declaration_private
+  broadcast_vc_private
+  quantifier_validation_private
+  call_contract_execution_private
+  spec_definition
+  recursive_spec_tuple_match_private
+  recursive_spec_body_validation_private
+  immutable_aggregate_fact_relevance_private
+  immutable_aggregate_reconstruction_private
+  recursive_spec_retry_demand_private
+  sst_rank_domain_validation_private
+  sst_validation_private
+  verification_identity
+  recursive_spec_application_identity
+  aggregate_logic_symbol_private
+  logical_adt_schema_private
+  logical_adt_encoding_private
+  recursive_spec_preservation
+  solver_backend_counter_private
+  solver_policy_private
+  retained_model_application_private
+  vir_logic_ir_translation_private
+  external_target_specification_use_private
+  shared_scalar_heap_private
+  shared_invariant_cell_private
+  vir_integer_conditional_private
+  finite_value_registry
+  finite_induction_private
+  recursive_spec_term_private
+  verification_session
+  logical_spec_capability_private
+  logical_spec_authentication_private
+  logical_spec_admission_private
+  logical_adt_evaluation_private
+  logical_spec_evaluation_private
+  symbolic_parametric_private
+  symbolic_executor_private
+  verification_pipeline
+  function_frontier_private
+  function_vc_worker_private
+  physical_core_count_private
+  spec_unfolding_private
+  logical_aggregate_term_normalization_private
+  z3_datatype_private
+  z3_bridge
+  recursive_spec_verification_private
+  recursive_spec_encoding
+  vc_solver_job_private
+  rank_encoding
+  verification_solver_private
+  verification_driver_private)
+ (foreign_stubs
+  (language c)
+  (names physical_core_count_stubs))
+ (libraries
+  compiler-libs.common
+  smtml
+  zarith
+  z3
+  parallel.kernel
+  parallel.scheduler))
+
+(library
+ (name verocaml_bin_private)
+ (wrapped false)
+ (modules
+  verocaml_bin
+  verocaml_bin_render
+  verocaml_bin_trusted_external_private
+  verocaml_bin_project_private)
+ (libraries verocaml_core unix))
+
+(executable
+ (name verocaml)
+ (public_name verocaml)
+ (modules verocaml)
+ (libraries verocaml_bin_private))

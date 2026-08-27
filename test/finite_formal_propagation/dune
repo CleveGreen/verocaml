@@ -1,0 +1,29 @@
+(executable
+ (name finite_formal_counter_tool)
+ (modules finite_formal_counter_tool finite_formal_counter_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core))
+
+(rule
+ (targets finite_formal_counter_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/finite_value_registry.cmi
+  ../../src/.verocaml_core.objs/byte/imported_callable.cmi
+  ../../src/.verocaml_core.objs/byte/verification_session.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  (glob_files fixtures/*.mli)
+  (glob_files fixtures/*.abi)
+  finite_formal_counter_tool.exe
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name finite-formal-propagation-check)
+ (deps (alias runtest)))

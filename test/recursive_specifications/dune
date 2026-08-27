@@ -1,0 +1,40 @@
+(executable
+ (name recursive_specifications_tool)
+ (modules recursive_specifications_tool recursive_specifications_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core  compiler-libs.common))
+
+(rule
+ (targets recursive_specifications_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/recursive_spec_encoding.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(rule
+ (target verocaml-install-root)
+ (deps
+  (alias_rec %{project_root}/install)
+  (sandbox none))
+ (action
+  (with-stdout-to %{target}
+   (bash "printf '%s/install/default\\n' \"$(cd ../../.. && pwd)\""))))
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  ../../verocaml.install
+  ../../src/verocaml.exe
+  recursive_specifications_tool.exe
+  verocaml-install-root
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+(alias
+ (name recursive-specifications-check)
+ (deps
+  (alias runtest)))
+(alias
+ (name structural-recursion-check)
+ (deps
+  (alias runtest)))

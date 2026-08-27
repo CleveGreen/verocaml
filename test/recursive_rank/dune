@@ -1,0 +1,22 @@
+(executable
+ (name recursive_rank_tool)
+ (modules recursive_rank_tool recursive_rank_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core ))
+
+(rule
+ (targets recursive_rank_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/rank_encoding.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  recursive_rank_tool.exe))
+(alias
+ (name recursive-rank-check)
+ (deps
+  (alias runtest)))

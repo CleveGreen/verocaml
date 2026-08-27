@@ -1,0 +1,29 @@
+(executable
+ (name proof_activation_routing_tool)
+ (modules proof_activation_routing_tool proof_activation_routing_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core compiler-libs.common))
+
+(rule
+ (targets proof_activation_routing_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/verification_session.cmi
+  ../../src/.verocaml_core.objs/byte/verification_driver_private.cmi
+  ../../src/.verocaml_core.objs/byte/recursive_spec_encoding.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi
+  proof_activation_routing_tool.exe))
+
+(alias
+ (name proof-activation-routing-check)
+ (deps
+  (alias runtest)))

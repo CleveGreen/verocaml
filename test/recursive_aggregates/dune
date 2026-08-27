@@ -1,0 +1,16 @@
+(executable
+ (name recursive_aggregates_tool)
+ (libraries smtml verocaml_core))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  recursive_aggregates_tool.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name recursive-aggregates-check)
+ (deps
+  (alias runtest)))

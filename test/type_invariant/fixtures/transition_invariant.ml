@@ -1,0 +1,43 @@
+type snapshot = { length : int }
+
+module type STACK = sig
+  type t
+  val singleton : int -> t @ unique
+  val model : t @ read -> snapshot @ immutable
+  val invariant : t @ read -> bool
+  val snapshot : t @ read -> snapshot @ immutable
+  val drop : t @ unique -> t @ unique
+end
+
+module Stack : STACK = struct
+  type node = Empty | Node of { mutable value : int; mutable next : node }
+  type t = { mutable top : node; mutable length : int }
+
+  let singleton value : t @ unique =
+    { top = Node { value; next = Empty }; length = 1 }
+
+  let model (stack : t @ read) : snapshot @ immutable =
+    { length = stack.length }
+  [@@verocaml.spec]
+
+  let invariant (stack : t @ read) =
+    (model stack).length >= 0
+  [@@verocaml.type_invariant]
+
+  let snapshot (stack : t @ read) : snapshot @ immutable =
+    { length = stack.length }
+
+  let drop (stack : t @ unique) : t @ unique =
+    match stack.top with
+    | Empty -> stack
+    | Node { value = _; next } ->
+        stack.top <- next;
+        stack.length <- 0;
+        stack
+end
+
+let run value =
+  let stack = Stack.singleton value in
+  let stack = Stack.drop stack in
+  let _ = Stack.snapshot stack in
+  stack

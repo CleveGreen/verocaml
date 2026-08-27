@@ -1,0 +1,13 @@
+(executable
+ (name cmt_input_tool)
+ (libraries verocaml_core compiler-libs.common zarith unix))
+
+(cram
+ (deps
+  (glob_files fixtures/*)
+  cmt_input_tool.exe))
+
+(alias
+ (name cmt-input-check)
+ (deps
+  (alias runtest)))

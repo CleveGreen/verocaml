@@ -1,0 +1,19 @@
+(executable
+ (name encapsulated_recursive_mutation_tool)
+ (libraries verocaml_core))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  ../type_invariant/fixtures/transition_invariant.ml
+  ../type_invariant/fixtures/transition_nested_invariant.ml
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi
+  ../../verocaml.install
+  encapsulated_recursive_mutation_tool.exe))
+
+(alias
+ (name encapsulated-recursive-mutation-check)
+ (deps
+  (alias runtest)))

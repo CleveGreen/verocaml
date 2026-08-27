@@ -1,0 +1,37 @@
+(executable
+ (name shared_invariant_cell_tool)
+ (modules
+  shared_invariant_cell_tool
+  shared_invariant_cell_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core compiler-libs.common))
+
+(rule
+ (targets shared_invariant_cell_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/shared_invariant_cell_private.cmi
+  ../../src/.verocaml_core.objs/byte/shared_scalar_heap_private.cmi
+  ../../src/.verocaml_core.objs/byte/symbolic_executor_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_driver_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_pipeline.cmi
+  ../../src/.verocaml_core.objs/byte/verification_session.cmi
+  ../../src/.verocaml_core.objs/byte/recursive_spec_encoding.cmi
+  ../../src/.verocaml_core.objs/byte/solver_backend.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  shared_invariant_cell_tool.exe
+  ../../verocaml.install
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name shared-invariant-cell-check)
+ (deps
+  (alias runtest)))

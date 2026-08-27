@@ -1,0 +1,34 @@
+[@@@verocaml.verify]
+
+let option_payload value =
+  match Provider.copy_option value with None -> 0 | Some payload -> payload
+
+let result_payload value =
+  match Provider.copy_result value with
+  | Ok payload -> payload
+  | Error payload -> payload
+
+let list_size values = Provider.length (Provider.append values [])
+let tree_size tree = Provider.tree_size (Provider.pass_tree tree)
+
+let factory_values value =
+  let record = Provider.make_record value in
+  let unique = Provider.make_unique_record value in
+  let box = Provider.pass_box (Provider.make_box value) in
+  let _unique_value = unique.Provider.value in
+  let _box_value = box.Provider.box_value in
+  record.Provider.value
+
+let evaluate value =
+  [%verocaml.requires value >= 0];
+  let tree =
+    Provider.Node
+      ( value,
+        Provider.make_tree value,
+        Provider.Node (value, Provider.Leaf, Provider.Leaf) )
+  in
+  let copied = Provider.id value in
+  let _option = option_payload (Some copied) in
+  let _result = result_payload (Ok copied) in
+  let _list = list_size [ copied; copied ] in
+  tree_size tree

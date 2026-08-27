@@ -1,0 +1,16 @@
+(executable
+ (name contracts_and_calls_tool)
+ (libraries verocaml_core))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  contracts_and_calls_tool.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name contracts-and-calls-check)
+ (deps
+  (alias runtest)))

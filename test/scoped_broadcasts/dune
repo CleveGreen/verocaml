@@ -1,0 +1,51 @@
+(executable
+ (name scoped_broadcasts_tool)
+ (modules scoped_broadcasts_tool scoped_broadcasts_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core compiler-libs.common))
+
+(rule
+ (targets scoped_broadcasts_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/broadcast_declaration_private.cmi
+  ../../src/.verocaml_core.objs/byte/broadcast_scope_private.cmi
+  ../../src/.verocaml_core.objs/byte/broadcast_vc_private.cmi
+  ../../src/.verocaml_core.objs/byte/logic_quantifier_private.cmi
+  ../../src/.verocaml_core.objs/byte/solver_backend_counter_private.cmi
+  ../../src/.verocaml_core.objs/byte/typedtree_broadcast_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_pipeline.cmi
+  ../../src/.verocaml_core.objs/byte/verification_solver_private.cmi
+  ../../src/.verocaml_core.objs/byte/vir_logic_ir_translation_private.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(cram
+ (deps
+  architecture_check.py
+  (source_tree ../architecture_authority)
+  ../architecture_authority/live-install-receipt.json
+  mutate_broadcast_carrier.py
+  (glob_files fixtures/*.ml)
+  (source_tree ../../ppx)
+  (source_tree ../../src)
+  (source_tree ../../test)
+  (source_tree ../../library)
+  (source_tree ../../runtime)
+  (source_tree ../../examples)
+  (source_tree ../../nix)
+  ../../dune-project
+  ../../flake.lock
+  ../../flake.nix
+  ../../verocaml.opam
+  scoped_broadcasts_tool.exe
+  ../parametric_core/architecture_inventory.exe
+  ../../verocaml.install
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name scoped-broadcasts-check)
+ (deps (alias runtest)))

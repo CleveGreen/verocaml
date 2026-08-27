@@ -1,0 +1,18 @@
+(cram
+ (deps
+  manifest.txt
+  fixtures/failed-proof.ml
+  ../../docs/TUTORIAL.org
+  ../../examples/tutorial/01-contracts.ml
+  ../../examples/tutorial/02-recursive-specification.ml
+  ../../examples/tutorial/03-scalar-induction.ml
+  ../../examples/tutorial/04-list-induction.ml
+  ../../examples/tutorial/05-tree-induction.ml
+  ../../examples/tutorial/06-finite-formals.ml
+  ../../examples/tutorial/07-owned-recursive-stack.ml
+  ../../examples/tutorial/08-abstract-nested-mutation.ml
+  ../../ppx/vero_ppx.exe))
+
+(alias
+ (name tutorial-examples-check)
+ (deps (alias runtest)))

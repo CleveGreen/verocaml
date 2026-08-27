@@ -1,0 +1,52 @@
+(executable
+ (name verified_callbacks_tool)
+ (modules verified_callbacks_tool verified_callbacks_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core compiler-libs.common))
+
+(rule
+ (targets verified_callbacks_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/typedtree_logical_builtin_private.cmi
+  ../../src/.verocaml_core.objs/byte/typedtree_callback_private.cmi
+  ../../src/.verocaml_core.objs/byte/callback_shape_private.cmi
+  ../../src/.verocaml_core.objs/byte/callback_certificate_private.cmi
+  ../../src/.verocaml_core.objs/byte/callback_contract_private.cmi
+  ../../src/.verocaml_core.objs/byte/callback_call_private.cmi
+  ../../src/.verocaml_core.objs/byte/sst_callback_private.cmi
+  ../../src/.verocaml_core.objs/byte/call_contract_execution_private.cmi
+  ../../src/.verocaml_core.objs/byte/solver_backend_counter_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_pipeline.cmi
+  ../../src/.verocaml_core.objs/byte/verification_session.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(cram
+ (deps
+  architecture_check.py
+  (source_tree ../architecture_authority)
+  ../architecture_authority/live-install-receipt.json
+  (glob_files fixtures/*.ml)
+  (source_tree ../../ppx)
+  (source_tree ../../src)
+  (source_tree ../../test)
+  (source_tree ../../library)
+  (source_tree ../../runtime)
+  (source_tree ../../examples)
+  (source_tree ../../nix)
+  ../../dune-project
+  ../../flake.lock
+  ../../flake.nix
+  ../../verocaml.opam
+  verified_callbacks_tool.exe
+  ../parametric_core/architecture_inventory.exe
+  ../../verocaml.install
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name verified-callbacks-check)
+ (deps (alias runtest)))

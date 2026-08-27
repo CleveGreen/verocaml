@@ -1,0 +1,154 @@
+{
+  "format": "verocaml-live-architecture-policy-v1",
+  "package_manifests": {
+    "interfaces": {
+      "path": "test/rank_backed_specifications/manifests/installed-interfaces.manifest",
+      "rows": 222,
+      "sha256": "7e60ba2fd5c04c15848dea3e3f9e5ce0082bc38353d155da8bac5e982e51904f"
+    },
+    "paths": {
+      "path": "test/rank_backed_specifications/manifests/installed-paths.manifest",
+      "rows": 920,
+      "sha256": "4be24f090dc87fa4774121dcbe5bfeee2d2b61722f04bc56187fc3cf11cd0a65"
+    },
+    "public": {
+      "path": "test/rank_backed_specifications/manifests/installed-public-modules.manifest",
+      "rows": 21,
+      "sha256": "c7cd2560be752ccd8dd0f769e8188c153799c982a9000cb6fb37c636de8a11e8"
+    }
+  },
+  "runtime_ratchet": {
+    "runtime/dune": "50665ffc0633b3cd0ff326751d47f774c8df98880aac7805ad0c0d419143ef3f",
+    "runtime/vero_ghost.ml": "103abdfa44884d11432a5ead7f6b192cd226a16b9497ea475d47110f225c72bc",
+    "runtime/vero_ghost.mli": "3f94e939ebb53daa51fc1852db02e36d2cb96c396bb8c97952d8ac50fb01cbbb"
+  },
+  "suites": {
+    "first-class-specifications": {
+      "concentration_cap": 58942,
+      "concentration_paths": [
+        "src/imported_callable.ml",
+        "src/instance_mode.ml",
+        "src/recursive_spec_encoding.ml",
+        "src/sst_validation_private.ml",
+        "src/symbolic_executor.ml",
+        "src/symbolic_executor_private.ml",
+        "src/typedtree_adapter_private.ml",
+        "src/verification_session.ml"
+      ],
+      "function_cap": 140,
+      "interface_cap": 180,
+      "label": "first-class-specifications",
+      "module_cap": 650,
+      "owners": [
+        "src/spec_function_type_private.ml",
+        "src/typedtree_spec_function_private.ml",
+        "src/spec_function_sst_private.ml",
+        "src/spec_function_logic_private.ml"
+      ],
+      "private_package_modules": [
+        "spec_function_type_private",
+        "typedtree_spec_function_private",
+        "spec_function_sst_private",
+        "spec_function_logic_private"
+      ],
+      "runtime_ratchet": true
+    },
+    "scoped-broadcasts": {
+      "concentration_cap": 58942,
+      "concentration_paths": [
+        "src/imported_callable.ml",
+        "src/instance_mode.ml",
+        "src/recursive_spec_encoding.ml",
+        "src/sst_validation_private.ml",
+        "src/symbolic_executor.ml",
+        "src/symbolic_executor_private.ml",
+        "src/typedtree_adapter_private.ml",
+        "src/verification_session.ml"
+      ],
+      "forbidden_tokens": [
+        "observed_type_registry",
+        "broadcast_retry",
+        "global_broadcast_theory",
+        "infer_broadcast_trigger"
+      ],
+      "function_cap": 140,
+      "interface_cap": 180,
+      "label": "scoped-broadcasts",
+      "module_cap": 650,
+      "owners": [
+        "ppx/vero_ppx_broadcast_private.ml",
+        "src/typedtree_broadcast_private.ml",
+        "src/broadcast_declaration_private.ml",
+        "src/broadcast_scope_private.ml",
+        "src/broadcast_vc_private.ml",
+        "src/logic_quantifier_private.ml"
+      ],
+      "private_package_modules": [
+        "broadcast_declaration_private",
+        "broadcast_scope_private",
+        "broadcast_vc_private",
+        "typedtree_broadcast_private"
+      ],
+      "runtime_ratchet": false
+    },
+    "symbolic-specifications": {
+      "concentration_cap": 58942,
+      "concentration_paths": [
+        "src/imported_callable.ml",
+        "src/instance_mode.ml",
+        "src/recursive_spec_encoding.ml",
+        "src/sst_validation_private.ml",
+        "src/symbolic_executor.ml",
+        "src/symbolic_executor_private.ml",
+        "src/typedtree_adapter_private.ml",
+        "src/verification_session.ml"
+      ],
+      "function_cap": 140,
+      "interface_cap": 180,
+      "label": "symbolic",
+      "module_cap": 650,
+      "owners": [
+        "ppx/vero_ppx_symbolic_private.ml",
+        "src/symbolic_application_private.ml",
+        "src/symbolic_declaration_private.ml",
+        "src/typedtree_symbolic_private.ml"
+      ],
+      "private_package_modules": [
+        "symbolic_application_private",
+        "symbolic_declaration_private",
+        "typedtree_symbolic_private"
+      ],
+      "runtime_ratchet": true
+    },
+    "verified-callbacks": {
+      "concentration_cap": 49186,
+      "concentration_paths": [
+        "src/typedtree_adapter_private.ml",
+        "src/imported_callable.ml",
+        "src/sst_validation_private.ml",
+        "src/symbolic_executor_private.ml",
+        "src/verification_session.ml"
+      ],
+      "function_cap": 140,
+      "interface_cap": 180,
+      "label": "verified-callbacks",
+      "module_cap": 650,
+      "owners": [
+        "ppx/vero_ppx_logical_builtin_private.ml",
+        "src/callback_call_private.ml",
+        "src/callback_certificate_private.ml",
+        "src/callback_contract_private.ml",
+        "src/callback_shape_private.ml",
+        "src/call_contract_execution_private.ml",
+        "src/sst_callback_private.ml",
+        "src/typedtree_callback_private.ml",
+        "src/typedtree_logical_builtin_private.ml",
+        "src/logical_adt_schema_private.ml",
+        "src/logical_adt_encoding_private.ml",
+        "src/z3_datatype_private.ml"
+      ],
+      "private_package_modules": [],
+      "runtime_ratchet": false
+    }
+  }
+}

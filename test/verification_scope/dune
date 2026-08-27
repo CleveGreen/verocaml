@@ -1,0 +1,34 @@
+(executable
+ (name verification_scope_counter_tool)
+ (modules verification_scope_counter_tool)
+ (flags
+  (:standard -I src/.verocaml_core.objs/byte))
+ (preprocess
+  (action
+   (run cat %{input-file})))
+ (preprocessor_deps
+  ../../src/.verocaml_core.objs/byte/interface_specification_candidate_private.cmi
+  ../../src/.verocaml_core.objs/byte/interface_specification_loaded_private.cmi
+  ../../src/.verocaml_core.objs/byte/sst_validation_private.cmi
+  ../../src/.verocaml_core.objs/byte/typedtree_lowering_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_driver_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_pipeline.cmi
+  ../../src/.verocaml_core.objs/byte/verification_scope_private.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (libraries verocaml_core compiler-libs.common))
+
+(cram
+ (deps
+  (glob_files fixtures/*)
+  verification_scope_counter_tool.exe
+  ../../src/verocaml.exe
+  ../../src/verification_scope_private.ml
+  ../../src/verocaml_bin_project_private.ml
+  ../../src/verocaml_bin.ml
+  ../../ppx/vero_ppx.exe
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name verification-scope-check)
+ (deps
+  (alias runtest)))

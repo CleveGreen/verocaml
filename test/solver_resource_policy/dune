@@ -1,0 +1,26 @@
+(executable
+ (name solver_resource_policy_tool)
+ (modules solver_resource_policy_tool solver_resource_policy_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core compiler-libs.common))
+
+(rule
+ (targets solver_resource_policy_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/recursive_spec_encoding.cmi
+  ../../src/.verocaml_core.objs/byte/solver_policy_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_driver_private.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(cram
+ (deps
+  solver_resource_policy_tool.exe
+  ../../src/solver_backend.ml
+  ../../src/z3_bridge.ml))
+
+(alias
+ (name solver-resource-policy-check)
+ (deps
+  (alias runtest)))

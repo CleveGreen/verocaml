@@ -1,0 +1,3 @@
+[@@@verocaml.verify]
+
+let bypass value = Legacy.promised value

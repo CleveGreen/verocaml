@@ -1,0 +1,46 @@
+(executable
+ (name retained_exec_results_tool)
+ (modules retained_exec_results_tool retained_exec_results_prerequisites)
+ (flags
+  (:standard -I src/.verocaml_core.objs/byte))
+ (preprocess
+  (action
+   (run cat %{input-file})))
+ (preprocessor_deps
+  ../../src/.verocaml_core.objs/byte/interface_specification.cmi
+  ../../src/.verocaml_core.objs/byte/retained_exec_result_private.cmi
+  ../../src/.verocaml_core.objs/byte/solver_backend_counter_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_driver_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_pipeline.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (libraries verocaml_core compiler-libs.common))
+
+(rule
+ (targets retained_exec_results_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/interface_specification.cmi
+  ../../src/.verocaml_core.objs/byte/retained_exec_result_private.cmi
+  ../../src/.verocaml_core.objs/byte/solver_backend_counter_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_driver_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_pipeline.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to
+   %{targets}
+   (echo "let ready = ()"))))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  (glob_files fixtures/*.mli)
+  retained_exec_results_tool.ml
+  retained_exec_results_tool.exe
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name retained-exec-results-check)
+ (deps
+  (alias runtest)))

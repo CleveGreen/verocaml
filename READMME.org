@@ -1,0 +1,135 @@
+* [[https://en.wiktionary.org/wiki/vero#Etymology_2_2][vērō]]caml
+
+[[https://en.wiktionary.org/wiki/vero#Etymology_2_2][vērō]]caml is a tool for verifying the correctness of programs written in written
+in OxCaml and OCaml. You specify what your program should do, and verocaml
+statically checks that your OxCaml / OCaml code will always satisfy your
+specifications.
+
+** Status
+
+Currently, vērōcaml only supports a subset of OxCaml / OCaml and compilation
+targets (only 64 bit). This support will be expanded as time goes on, a goal
+is to eventually be able to prove the correctness of the standard library
+without major modifications to the existing standard library implementation.
+
+Furthermore, *vērōcaml is still very young and should be considered a
+prototype*. You may encounter bugs and rough edges while using it. Bug reports
+are greatly appreciated, even for already known issues, as they help us
+prioritize what to focus on during development.
+
+** Philosophy / Design Goals
+
+*** Familiarity
+
+Proof, specification, and executable functions in vērōcaml intentionally feel
+like everyday OxCaml / OCaml functions with annotations, it leverages the same
+type system and diagnostics providing a familiar developer experience.
+
+When the verifier is being ran, the annotations / proofs / specs are lowered
+into standard OxCaml and picked back up from the ~Typedtree~, when the verifier
+is not being ran these annotations are all erased.
+
+#+BEGIN_SRC ocaml
+
+let my_inductive_proof (s : 'a seq) =
+  [%verocaml.requires true ];
+  [%verocaml.ensures fun _ -> true];
+  [%verocaml.decreases s];
+  if is_empty s then
+    (* base case *)
+    ()
+  else begin
+    (* IH *)
+    let last_ = last s in
+    let p = drop s 1 in
+    my_inductive_proof p
+  end
+[@@verocaml.proof]
+
+#+END_SRC
+
+*** Failures to be Local and Understandable (ish)
+
+A common headache for users of SMT-backed verification tools is that failures
+can feel surprisingly non-local. You might have five functions or proofs
+verifying without issue, only to add an unrelated proof and suddenly find that
+one of the earlier obligations now times out or exceeds a resource limit. A
+frequent cause is the implicit broadcasting of facts and lemmas: as more proofs
+are added, the solver is given an increasingly large context, even when most of
+it is irrelevant to the obligation at hand.
+
+vērōcaml addresses this by making broadcasts lexically scoped. Facts can be
+activated only for the region of code that needs them:
+
+#+BEGIN_SRC ocaml
+
+let my_function x =
+  [%verocaml.activate [some; facts] (
+    (* [some] and [facts] are broadcast to VCs inside this scope.
+       The scope may also contain executable code; it is not erased. *)
+    ()
+  )]
+
+(* Module-wide broadcasting is still available when desired. *)
+[@@@verocaml.activate [some; facts]]
+
+#+END_SRC
+
+Keeping solver context local is especially important when
+collaborating. Non-local verification behavior does not just make individual
+proofs harder to debug; it makes independent changes interfere with one
+another. Two branches may each verify successfully in isolation, yet fail after
+being merged because their newly introduced facts are now competing for solver
+resources or changing proof search elsewhere in the module. Lexically scoped
+broadcasts make these dependencies explicit and help preserve a useful property
+for collaborative verification: adding a proof in one place should not
+unexpectedly destabilize an unrelated proof somewhere else.Keeping solver
+context local is especially important when collaborating. Non-local verification
+behavior does not just make individual proofs harder to debug; it makes
+independent changes interfere with one another. Two branches may each verify
+successfully in isolation, yet fail after being merged because their newly
+introduced facts are now competing for solver resources or changing proof search
+elsewhere in the module. Lexically scoped broadcasts make these dependencies
+explicit and help preserve a useful property for collaborative verification:
+adding a proof in one place should not unexpectedly destabilize an unrelated
+proof somewhere else.
+
+*** Broad Support
+
+A long-term goal of vērōcaml is to avoid getting in the way of
+performance-sensitive implementations. Aggressive optimization is precisely
+where correctness becomes more subtle, and therefore where verification can be
+most valuable: both for establishing that an optimization is sound and for
+making its reasoning understandable to the reader.
+
+This is also a major reason vērōcaml verifies OCaml/OxCaml directly rather than
+lowering programs into a separate intermediate verification language. An
+intermediate language inevitably introduces its own semantic model and set of
+supported constructs. The source program must then fit within those constraints,
+which can make low-level, representation-sensitive, or language-specific
+optimizations difficult to express faithfully and can ultimately box in the
+verifier as the source language evolves. By staying close to the source
+language, vērōcaml aims to let programmers verify optimized implementations as
+they are actually written, rather than requiring them to reshape those
+implementations around the capabilities of a separate verification language.
+
+** Feature Support Summary
+
+| Area                                  | Status        | Feature Support | Test Confidence | Summary |
+|---------------------------------------+---------------+-----------------+-----------------+---------|
+| Scalars and control flow              | Supported     |            8/10 |            8/10 | Unit, bool, checked int, lets, sequencing, branches, total matches, guards |
+| Tuples, records, variants, ADTs       | Supported     |            8/10 |            8/10 | Boxed tuples, records, variants, option, list, result, recursive data |
+| First-order generics                  | Supported     |            8/10 |            8/10 | Generic immutable functions/ADTs, labeled calls, cross-unit types, structural recursion |
+| Calls and direct recursion            | Supported     |            8/10 |            8/10 | Direct same/cross-unit calls and checked single-function recursion |
+| Contracts, specifications, proofs     | Supported     |            8/10 |            8/10 | Requires/ensures, old, assertions, Spec/Proof, reveal/fuel, invariants |
+| Quantifiers and symbolic logic        | Supported     |            8/10 |            8/10 | Forall/exists, triggers, symbolic declarations, axioms, logical Spec functions |
+| OxCaml uniqueness and owned mutation  | Supported     |            8/10 |            8/10 | Unique/aliased evidence and bounded mutable-record transitions |
+| let mutable                           | Partial       |            6/10 |            6/10 | Local definitely-unique mutable bindings; no general heap interactions |
+| Verified callbacks                    | Partial       |            6/10 |            8/10 | Contracted nonescaping callbacks; not general higher-order OCaml |
+| Modules and interfaces                | Partial       |            6/10 |            8/10 | Strong separate compilation plus limited abstraction; no general modules/functors |
+| Shared mutable state                  | Partial       |            4/10 |            8/10 | Narrow aliased scalar-record model; no general references or heap logic |
+| Other OxCaml mode axes                | Compiler-only |            2/10 |            4/10 | Mostly compiler-enforced rather than represented by VeroCaml semantics |
+| Loops, arrays, references             | Rejected      |            0/10 |            6/10 | No loops, arrays, Bigarrays, or general reference/heap semantics |
+| Exceptions, effects, concurrency      | Rejected      |            0/10 |            6/10 | No exceptions, handlers, continuations, domains, or source parallelism |
+| Objects, classes, advanced modules    | Rejected      |            0/10 |            4/10 | Objects/classes, functors, first-class/local/recursive modules unsupported |
+| Unboxed data, layouts, SIMD           | Rejected      |            0/10 |            4/10 | No unboxed data, layout polymorphism, mixed blocks, small numbers, or SIMD |

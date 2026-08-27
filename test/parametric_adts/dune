@@ -1,0 +1,30 @@
+(executable
+ (name parametric_adts_tool)
+ (modules parametric_adts_tool parametric_adts_prerequisites)
+ (flags
+  (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core compiler-libs.common))
+
+(rule
+ (targets parametric_adts_prerequisites.ml)
+ (deps ../../src/.verocaml_core.objs/byte/symbolic_executor_private.cmi)
+ (action
+  (with-stdout-to
+   %{targets}
+   (echo "let ready = ()"))))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  parametric_adts_tool.exe
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/vero_ghost.cmxa
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi
+  ../../runtime/.vero_ghost.objs/native/vero_ghost.cmx))
+
+(alias
+ (name parametric-adts-check)
+ (deps
+  (alias runtest)))

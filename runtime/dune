@@ -1,0 +1,4 @@
+(library
+ (name vero_ghost)
+ (public_name verocaml.ghost)
+ (wrapped false))

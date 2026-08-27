@@ -1,0 +1,33 @@
+(executable
+ (name owned_recursive_contents_pipeline_tool)
+ (modules
+  owned_recursive_contents_pipeline_tool
+  owned_recursive_contents_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core compiler-libs.common))
+
+(rule
+ (targets owned_recursive_contents_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/recursive_spec_encoding.cmi
+  ../../src/.verocaml_core.objs/byte/sst_validation_private.cmi
+  ../../src/.verocaml_core.objs/byte/solver_backend.cmi
+  ../../src/.verocaml_core.objs/byte/verification_driver_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_session.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  (glob_files support/*.ml)
+  owned_recursive_contents_pipeline_tool.exe
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name owned-recursive-contents-check)
+ (deps (alias runtest)))

@@ -1,0 +1,31 @@
+(executable
+ (name recursive_invariant_transition_pipeline_tool)
+ (modules
+  recursive_invariant_transition_pipeline_tool
+  recursive_invariant_transition_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core))
+
+(rule
+ (targets recursive_invariant_transition_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/symbolic_executor_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_driver_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_pipeline.cmi
+  ../../src/.verocaml_core.objs/byte/verification_session.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  recursive_invariant_transition_pipeline_tool.exe
+  ../../verocaml.install
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name recursive-invariant-transition-check)
+ (deps (alias runtest)))

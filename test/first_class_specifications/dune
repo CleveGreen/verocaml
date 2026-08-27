@@ -1,0 +1,42 @@
+(executable
+ (name first_class_specifications_tool)
+ (modules
+  first_class_specifications_tool
+  first_class_specifications_tool_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core compiler-libs.common))
+
+(rule
+ (targets first_class_specifications_tool_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/broadcast_vc_private.cmi
+  ../../src/.verocaml_core.objs/byte/call_contract_execution_private.cmi
+  ../../src/.verocaml_core.objs/byte/solver_backend.cmi
+  ../../src/.verocaml_core.objs/byte/solver_policy_private.cmi
+  ../../src/.verocaml_core.objs/byte/spec_function_logic_private.cmi
+  ../../src/.verocaml_core.objs/byte/spec_function_type_private.cmi
+  ../../src/.verocaml_core.objs/byte/symbolic_executor_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_pipeline.cmi
+  ../../src/.verocaml_core.objs/byte/verification_solver_private.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(cram
+ (deps
+ (glob_files fixtures/*.ml)
+  architecture_check.py
+  (source_tree ../architecture_authority)
+  ../architecture_authority/live-install-receipt.json
+  ../../src/verocaml.exe
+  first_class_specifications_tool.exe
+  ../parametric_core/architecture_inventory.exe
+  ../../verocaml.install
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name first-class-specifications-check)
+ (deps
+  (alias runtest)))

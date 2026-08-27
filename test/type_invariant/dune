@@ -1,0 +1,17 @@
+(executable
+ (name type_invariant_tool)
+ (libraries verocaml_core compiler-libs.common))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  type_invariant_tool.exe
+  ../../verocaml.install
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name type-invariant-check)
+ (deps
+  (alias runtest)))

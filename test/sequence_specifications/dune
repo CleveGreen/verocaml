@@ -1,0 +1,13 @@
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  ../../library/seq.ml
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name sequence-specifications-check)
+ (deps
+  (alias runtest)))

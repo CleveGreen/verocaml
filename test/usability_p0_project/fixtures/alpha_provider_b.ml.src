@@ -1,0 +1,6 @@
+[@@@verocaml.verify]
+
+type 'element box = Box of 'element
+
+let id item = item
+let make item = Box item

@@ -1,0 +1,35 @@
+(executable
+ (name parametric_interfaces_tool)
+ (modules parametric_interfaces_tool parametric_interfaces_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core compiler-libs.common unix))
+
+(rule
+ (targets parametric_interfaces_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/imported_callable.cmi
+  ../../src/.verocaml_core.objs/byte/interface_specification_environment_private.cmi
+  ../../src/.verocaml_core.objs/byte/interface_specification_loaded_private.cmi
+  ../../src/.verocaml_core.objs/byte/parametric_signature_private.cmi
+  ../../src/.verocaml_core.objs/byte/parametric_type.cmi
+  ../../src/.verocaml_core.objs/byte/solver_backend_counter_private.cmi
+  ../../src/.verocaml_core.objs/byte/solver_policy_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_driver_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_pipeline.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  (glob_files fixtures/*.mli)
+  parametric_interfaces_tool.exe
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name parametric-interfaces-check)
+ (deps (alias runtest)))

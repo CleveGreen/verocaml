@@ -1,0 +1,57 @@
+[@@@verocaml.verify]
+
+type record_result = { value : int; unstated : int }
+type 'a box = { box_value : 'a }
+type 'a tree = Leaf | Node of 'a * 'a tree * 'a tree
+
+let id value =
+  [%verocaml.ensures fun result -> result = value];
+  value
+
+let copy_option (value : 'a option) =
+  match value with None -> None | Some payload -> Some payload
+
+let copy_result (value : ('a, 'b) result) =
+  match value with Ok payload -> Ok payload | Error error -> Error error
+
+let safe_succ value =
+  [%verocaml.requires value >= 0];
+  [%verocaml.ensures fun result -> result >= 0];
+  if value = 4611686018427387903 then value else value + 1
+
+let safe_add left right =
+  [%verocaml.requires left >= 0];
+  [%verocaml.requires right >= 0];
+  [%verocaml.ensures fun result -> result >= 0];
+  if left > 4611686018427387903 - right then 4611686018427387903
+  else left + right
+
+let rec length (values : 'a list) =
+  [%verocaml.ensures fun result -> result >= 0];
+  [%verocaml.decreases values];
+  match values with [] -> 0 | _ :: rest -> safe_succ (length rest)
+
+let rec append (left : 'a list) (right : 'a list) =
+  [%verocaml.decreases left];
+  match left with [] -> right | value :: rest -> value :: append rest right
+
+let rec tree_size (tree : 'a tree) =
+  [%verocaml.ensures fun result -> result >= 0];
+  [%verocaml.decreases tree];
+  match tree with
+  | Leaf -> 0
+  | Node (_, left, right) ->
+      safe_succ (safe_add (tree_size left) (tree_size right))
+
+let make_record value =
+  [%verocaml.ensures fun result -> result.value = value];
+  { value; unstated = 41 }
+
+let make_box box_value = { box_value }
+let pass_box box = box
+let make_tree value = Node (value, Leaf, Leaf)
+let pass_tree tree = tree
+
+let make_unique_record value : record_result @ unique =
+  [%verocaml.ensures fun result -> result.value = value];
+  { value; unstated = 42 }

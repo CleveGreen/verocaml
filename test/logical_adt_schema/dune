@@ -1,0 +1,27 @@
+(executable
+ (name logical_adt_schema_tool)
+ (modules logical_adt_schema_tool logical_adt_schema_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core))
+
+(rule
+ (targets logical_adt_schema_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/logical_adt_schema_private.cmi
+  ../../src/.verocaml_core.objs/byte/logical_adt_encoding_private.cmi
+  ../../src/.verocaml_core.objs/byte/z3_datatype_private.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  logical_adt_schema_tool.exe
+  architecture_check.py
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name logical-adt-schema-check)
+ (deps (alias runtest)))

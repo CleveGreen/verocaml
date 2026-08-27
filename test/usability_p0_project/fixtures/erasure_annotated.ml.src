@@ -1,0 +1,6 @@
+let make captured =
+  let[@ghost] ghost = (captured [@ghost]) in
+  [%verocaml.proof
+    let _ = ghost in
+    ()];
+  fun delta -> captured + delta

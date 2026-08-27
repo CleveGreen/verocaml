@@ -1,0 +1,32 @@
+(executable
+ (name instance_modes_tool)
+ (modules instance_modes_tool instance_modes_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core  compiler-libs.common))
+
+(rule
+ (targets instance_modes_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/instance_mode.cmi
+  ../../src/.verocaml_core.objs/byte/sst_validation_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_driver_private.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(cram
+ (deps
+  (glob_files fixtures/*)
+  generate_authority_matrix.py
+  generate_negative_matrix.py
+  generate_unannotated_authority_matrix.py
+  instance_modes_tool.exe
+  ../../src/verocaml.exe
+  ../../verocaml.install
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+(alias
+ (name instance-mode-erasure-check)
+ (deps
+  (alias runtest)))

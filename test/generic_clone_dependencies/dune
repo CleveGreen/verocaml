@@ -1,0 +1,35 @@
+(executable
+ (name generic_clone_dependencies_tool)
+ (modules
+  generic_clone_dependencies_tool
+  generic_clone_dependencies_prerequisites)
+ (flags
+  (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core compiler-libs.common))
+
+(rule
+ (targets generic_clone_dependencies_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/finite_formal_requirement.cmi
+  ../../src/.verocaml_core.objs/byte/typedtree_adapter_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_identity.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to
+   %{targets}
+   (echo "let ready = ()"))))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  (glob_files fixtures/*.mli)
+  generic_clone_dependencies_tool.exe
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name generic-clone-dependency-check)
+ (deps
+  (alias runtest)))

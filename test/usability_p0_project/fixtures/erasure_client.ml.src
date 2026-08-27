@@ -1,0 +1,3 @@
+let () =
+  let add = Erasure_fixture.make 40 in
+  Printf.printf "erasure: %d %d\n" (add 1) (add 2)

@@ -1,0 +1,33 @@
+(executable
+ (name proof_region_modes_tool)
+ (modules proof_region_modes_tool proof_region_modes_prerequisites)
+ (flags
+  (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core compiler-libs.common))
+
+(rule
+ (targets proof_region_modes_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/typedtree_adapter_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_driver_private.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to
+   %{targets}
+   (echo "let ready = ()"))))
+
+(cram
+ (deps
+  (glob_files fixtures/*.ml)
+  mutate_carrier.py
+  proof_region_modes_tool.exe
+  ../../src/verocaml.exe
+  ../../verocaml.install
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(alias
+ (name proof-region-modes-check)
+ (deps
+  (alias runtest)))

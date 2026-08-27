@@ -1,0 +1,6 @@
+[@@@verocaml.verify]
+
+type 'a box = Box of 'a
+
+let id value = value
+let make value = Box value
