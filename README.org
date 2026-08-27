@@ -83,16 +83,7 @@ being merged because their newly introduced facts are now competing for solver
 resources or changing proof search elsewhere in the module. Lexically scoped
 broadcasts make these dependencies explicit and help preserve a useful property
 for collaborative verification: adding a proof in one place should not
-unexpectedly destabilize an unrelated proof somewhere else.Keeping solver
-context local is especially important when collaborating. Non-local verification
-behavior does not just make individual proofs harder to debug; it makes
-independent changes interfere with one another. Two branches may each verify
-successfully in isolation, yet fail after being merged because their newly
-introduced facts are now competing for solver resources or changing proof search
-elsewhere in the module. Lexically scoped broadcasts make these dependencies
-explicit and help preserve a useful property for collaborative verification:
-adding a proof in one place should not unexpectedly destabilize an unrelated
-proof somewhere else.
+unexpectedly destabilize an unrelated proof somewhere else.
 
 *** Broad Support
 
