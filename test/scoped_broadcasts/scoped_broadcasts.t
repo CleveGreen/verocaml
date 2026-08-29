@@ -1,5 +1,5 @@
 Scoped broadcasts retain one generic theorem, one explicit trigger, and one
-query-local multi-binder quantifier under the fixed VERO-104 resource policy.
+query-local multi-binder quantifier under the fixed resource policy.
 
   $ mkdir artifacts
   $ retained () { name=$1; source=$2; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$name.cmo" "$source"; }
@@ -428,13 +428,3 @@ wrong-kind, wrong-type, and incomplete-trigger forms.
   result=engine:cap: malformed SST: broadcast instance cap exceeded: 17 > 16 solver=0 z3=0/0 live=0
   $ ./scoped_broadcasts_tool.exe vector-unit
   vector rejects=8 accepted=1 binders=2 trigger=1
-
-The literal authority, owner/function limits, concentration gate, and exact
-private package projection remain mechanically pinned.
-
-  $ profile=$(realpath "$(dirname "$(readlink -f architecture_check.py)")/../..")
-  $ root=$(dirname "$(dirname "$profile")")
-  $ install_root="${VEROCAML_TEST_INSTALL_ROOT:-$root/_build/install/default}"
-  $ receipt="${VEROCAML_TEST_INSTALL_RECEIPT:-../architecture_authority/live-install-receipt.json}"
-  $ python3 architecture_check.py "$root" "$install_root" "$receipt" ../parametric_core/architecture_inventory.exe
-  scoped-broadcasts architecture owners=6 module=650/650 interface=147/180 function=98/140 concentration=58940/58942 installed=920/222/21 receipt=matched

@@ -140,7 +140,7 @@ let map_expressions transform program =
       | Sst.Proof_region body -> Sst.Proof_region (recurse body)
       | Sst.Old payload -> Sst.Old (recurse payload)
       | Sst.Callback_call _ | Sst.Callback_requires _ | Sst.Callback_ensures _ ->
-          fail "VERO-103 skeleton: callback rewrite is not implemented"
+          fail "callback rewrite is not implemented"
       | (Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
         | Sst.Variable _ | Sst.Mutable_read _ | Sst.Owned_tree_rebase _) as leaf ->
           leaf

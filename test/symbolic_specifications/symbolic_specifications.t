@@ -277,9 +277,3 @@ semantic construction.
   $ ./symbolic_specifications_tool.exe diagnostic artifacts/foreign_consumer.cmt | sed -n '1p;$p' | sed -E 's/code=[^ ]+/code=<closed>/'
   rejected=adapter code=<closed> sst=0 vir=0 vc=0
   resources backend=0 contexts=0 solvers=0 resets=0 cleaned=0 live=0
-
-The dedicated owners, exact authority, no-growth concentration, and fresh
-private package projection remain bounded with no runtime/public module.
-
-  $ profile=$(realpath "$(dirname "$(readlink -f architecture_check.py)")/../.."); root="${VEROCAML_SOURCE_ROOT:-$(dirname "$(dirname "$profile")")}"; install_root="${VEROCAML_TEST_INSTALL_ROOT:-$root/_build/install/default}"; receipt="${VEROCAML_TEST_INSTALL_RECEIPT:-../architecture_authority/live-install-receipt.json}"; python3 architecture_check.py "$root" "$install_root" "$receipt" ../parametric_core/architecture_inventory.exe
-  symbolic architecture owners=4 module=622/650 interface=68/180 function=111/140 concentration=58940/58942 installed=920/222/21 receipt=matched

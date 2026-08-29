@@ -312,7 +312,7 @@ totality preflight.
 An eligible exact nullary recursive-Spec branch gets one application-specific
 retry only after the ordinary query is inconclusive.  The added result/tag
 fact keeps the integer actual symbolic, retains all recursive and datatype
-axioms, and verifies without invoking VERO-049.
+axioms, and verifies without invoking the counterexample-only fallback.
 
   $ ./proof_body_assertions_tool.exe nullary-positive artifacts/nullary_recursive_symbolic_positive.cmt
   nullary-positive status=verified primary=forced-inconclusive local=verified
@@ -321,7 +321,7 @@ axioms, and verifies without invoking VERO-049.
   retry-fact rendered=true quantifier-free=true exact-application=true constructor=Empty recognizer=Empty native-datatype=true symbolic-int=true scalar-literal=false axioms=A1/A2/A3
 
 Retry Counterexample and Inconclusive outcomes retain the primary
-Inconclusive and then leave VERO-049's counterexample-only fallback unchanged.
+Inconclusive and then leave the counterexample-only fallback unchanged.
 Wrong-result and reachable-false controls never become verified.
 
   $ ./proof_body_assertions_tool.exe nullary-retry-counterexample artifacts/nullary_recursive_symbolic_positive.cmt
@@ -337,13 +337,14 @@ Wrong-result and reachable-false controls never become verified.
   nullary-negative nullary-attempts=2 nullary-queries=2 nullary-facts=2 nullary-verified=0 nullary-counterexamples=0 nullary-inconclusives=2 nullary-abstentions=0
   nullary-negative ground-attempts=2 ground-complete=0 ground-abstentions=2 antecedents-checked=4
 
-Removed, late, sibling, wrong-callee, zero-fuel, proof-entry/default, and
-synthetic-only activations cannot authorize a retry.  Unsupported source,
-result, application, and scalar shapes abstain without constructing one.
+Removed, late, sibling, wrong-callee, zero-fuel, and synthetic-only activations
+cannot authorize a retry. A revealed definition is available from proof entry.
+Unsupported source, result, application, and scalar shapes abstain without
+constructing one.
 
   $ ./proof_body_assertions_tool.exe nullary-no-reveal artifacts/nullary_recursive_symbolic_no_reveal.cmt
-  nullary-no-reveal removed=0 late=0 sibling=0 wrong-callee=0 synthetic-only=0 zero-fuel=0 revealed-default=0 retries=0
-  nullary-no-reveal nullary-attempts=7 nullary-queries=0 nullary-facts=0 nullary-verified=0 nullary-counterexamples=0 nullary-inconclusives=0 nullary-abstentions=7
+  nullary-no-reveal removed=0 late=0 sibling=0 wrong-callee=0 synthetic-only=0 zero-fuel=0 revealed-default=1 retries=1
+  nullary-no-reveal nullary-attempts=7 nullary-queries=1 nullary-facts=1 nullary-verified=1 nullary-counterexamples=0 nullary-inconclusives=0 nullary-abstentions=6
   $ ./proof_body_assertions_tool.exe nullary-synthetic-only artifacts/nullary_recursive_symbolic_positive.cmt
   nullary-synthetic-only final=unknown attempts=1 retries=0 abstentions=1
   $ ./proof_body_assertions_tool.exe nullary-unsupported artifacts/nullary_recursive_symbolic_unsupported.cmt
@@ -469,25 +470,28 @@ the returned summary reaches and fails the same named local VC.
   $ tail -1 artifacts/recursive.solve
   counters static=1 sst=1 reached-issued=1 reached-consumed=1 proof-visits=1 proof-summaries=1 recursive-query=3 solver=0
   $ ./proof_body_assertions_tool.exe negative artifacts/recursive_call_removed.cmt | head -1
-  status=counterexample function=prove_twice_len vc=local-assertion[0] index=0 outcome=counterexample
+  status=inconclusive function=prove_twice_len vc=local-assertion[0] index=0 outcome=unknown
   $ ./proof_body_assertions_tool.exe summary-suppressed artifacts/recursive_summary.cmt
-  suppressed-summary function=prove_twice_len vc=local-assertion[0] index=3 outcome=counterexample
+  suppressed-summary function=prove_twice_len vc=local-assertion[0] index=3 outcome=unknown
   counters static=1 sst=1 reached-issued=1 reached-consumed=1 proof-visits=1 proof-summaries=0 recursive-query=1 solver=0
 
 Wrong and reachable-false branch mutants fail the named VC. Reveal authority
 must precede the assertion on the same path and callable; a later, sibling,
-other-callable, or proof-entry/default activation cannot be used.
+or other-callable explicit activation cannot be used. A definition declared
+revealed is available from proof entry throughout the proof.
 
   $ ./proof_body_assertions_tool.exe negative artifacts/empty_node_wrong.cmt | head -1
   status=inconclusive function=lemma_empty_node_len vc=local-assertion[0] index=0 outcome=unknown
   $ ./proof_body_assertions_tool.exe negative artifacts/empty_node_false.cmt | head -1
   status=counterexample function=lemma_empty_node_len vc=local-assertion[0] index=0 outcome=counterexample
-  $ for name in reveal_removed_negative reveal_after_negative reveal_sibling_negative reveal_other_callable_negative revealed_default_negative; do printf '%s: ' "$name"; ./proof_body_assertions_tool.exe negative "artifacts/$name.cmt" | head -1 | sed -E 's/status=[^ ]+ function=([^ ]+) vc=([^ ]+) index=[0-9]+ outcome=[^ ]+/function=\1 vc=\2 failed/'; done
+  $ for name in reveal_removed_negative reveal_after_negative reveal_sibling_negative reveal_other_callable_negative; do printf '%s: ' "$name"; ./proof_body_assertions_tool.exe negative "artifacts/$name.cmt" | head -1 | sed -E 's/status=[^ ]+ function=([^ ]+) vc=([^ ]+) index=[0-9]+ outcome=[^ ]+/function=\1 vc=\2 failed/'; done
   reveal_removed_negative: function=reveal_removed vc=local-assertion[0] failed
   reveal_after_negative: function=reveal_after vc=local-assertion[0] failed
   reveal_sibling_negative: function=reveal_sibling vc=local-assertion[0] failed
   reveal_other_callable_negative: function=no_activation_here vc=local-assertion[0] failed
-  revealed_default_negative: function=no_reached_activation vc=local-assertion[0] failed
+  $ ./proof_body_assertions_tool.exe solve artifacts/revealed_default_negative.cmt | head -2
+  status=verified functions=1 obligations=4
+  function=no_reached_activation vc=local-assertion[0] index=0 assumptions=4 path=0 goal-in-assumptions=false outcome=verified
 
 Reached local-instance authority is session-affine. Every adversary rejects
 before recursive query construction, backend creation, or direct Z3 work.
@@ -671,7 +675,7 @@ all close immediately, and the proved fact reaches the later normal successor.
   builtin-authority static=11 sst=11 local=11/11 exports=11
   direct-scopes issued=4 closed=4 active=0
   $ ./proof_body_assertions_tool.exe builtin-false artifacts/builtin_assert_false.cmt
-  builtin-false status=counterexample local-vcs=2 outcomes=proof_false[0]:counterexample,exec_false[0]:counterexample
+  builtin-false status=counterexample local-vcs=3 outcomes=proof_false[0]:counterexample,exec_false[0]:counterexample,generic_false_sequence[0]:counterexample
 
 Two source runs and two retained-CMT runs are byte-deterministic.  Their
 per-callable SST and VIR local-assert ordinal sequences also agree exactly.

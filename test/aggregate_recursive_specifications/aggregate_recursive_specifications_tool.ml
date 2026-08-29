@@ -1,5 +1,5 @@
 let () = ignore Aggregate_recursive_specifications_prerequisites.ready
-(* VERO-077 reconstruction is observed through the recursive query consumer. *)
+(* Reconstruction is observed through the recursive query consumer. *)
 
 let fail message = prerr_endline message; exit 3
 

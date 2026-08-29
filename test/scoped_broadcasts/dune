@@ -22,24 +22,9 @@
 
 (cram
  (deps
-  architecture_check.py
-  (source_tree ../architecture_authority)
-  ../architecture_authority/live-install-receipt.json
   mutate_broadcast_carrier.py
   (glob_files fixtures/*.ml)
-  (source_tree ../../ppx)
-  (source_tree ../../src)
-  (source_tree ../../test)
-  (source_tree ../../library)
-  (source_tree ../../runtime)
-  (source_tree ../../examples)
-  (source_tree ../../nix)
-  ../../dune-project
-  ../../flake.lock
-  ../../flake.nix
-  ../../verocaml.opam
   scoped_broadcasts_tool.exe
-  ../parametric_core/architecture_inventory.exe
   ../../verocaml.install
   ../../src/verocaml.exe
   ../../ppx/vero_ppx.exe

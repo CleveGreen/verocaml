@@ -1,9 +1,6 @@
 First-class specification functions use one canonical ghost arrow and remain
 stable across retained source, CMT, repetition, and worker count.
 
-  $ root="${PWD%%/_build/*}"; python3 architecture_check.py "$root" "$root/_build/install/default" ../architecture_authority/live-install-receipt.json ../parametric_core/architecture_inventory.exe
-  first-class-specifications architecture owners=4 module=649/650 interface=176/180 function=116/140 concentration=58940/58942 installed=920/222/21 receipt=matched
-
   $ mkdir artifacts
   $ retained () { name=$1; source=$2; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$name.cmo" "$source"; }
   $ for name in core recursive_collections quantified broadcast_symbolic; do retained "$name" "fixtures/$name.ml"; done

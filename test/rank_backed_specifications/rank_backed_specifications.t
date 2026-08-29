@@ -105,7 +105,7 @@ claim to observe arbitrary filesystem locations outside that isolated scope.
   $ echo "cold installed verification filesystem unchanged"
   cold installed verification filesystem unchanged
 
-Bare Exec, Tracked, and Ghost stack actuals retain the exact VERO-036
+Bare Exec, Tracked, and Ghost stack actuals retain the exact
 one-way-forgetting trace and do not synthesize a mode descriptor.
 
   $ ./rank_backed_specifications_tool.exe modes artifacts/positive.cmt | grep '^forgetting-edge .*caller=verified#4' | sed -E 's/.*incoming=([^ ]+).*formal-mode=([^ ]+).*boundary-result-mode=([^ ]+).*edges=([0-9]+).*synthetic-ghost=([0-9]+).*synthetic-tracked=([0-9]+).*/incoming=\1 formal=\2 result=\3 edges=\4 synthetic-ghost=\5 synthetic-tracked=\6/'

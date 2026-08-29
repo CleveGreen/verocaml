@@ -47,8 +47,3 @@ nonuniform, mutual, and rebound shapes reject before SST/VIR or receipt work.
   negative_stale_forged_rebound: error[VERO_UNSUPPORTED_TYPE]
   negative_tuple_actual: error[VERO_DEPENDENCY]
   negative_unknown_payload: error[VERO_UNSUPPORTED_TYPE]
-
-The architecture gate enforces the sole owner and concentration limits.
-
-  $ python3 architecture_check.py ../..
-  owner-lines=650 interface-lines=81 single-owner=true

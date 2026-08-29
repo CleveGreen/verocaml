@@ -183,8 +183,8 @@ solver work.
   driver-rejected=pipeline
   capture-issued=1 remapped=1 proof-sst=1 forgetting=1 recursive=0 backend=0 z3=0/0
 
-The historically named stale-owned fixture is now the exact completed-result
-positive selected by VERO-044: a local constructor result transfers one sealed
+The historically named stale-owned fixture is now an exact completed-result
+positive: a local constructor result transfers one sealed
 predecessor to a verified local transition, every preservation obligation
 completes, and the separate result receipt exists before the caller proof is
 lowered.  This does not grant entry-formal authority; the dedicated

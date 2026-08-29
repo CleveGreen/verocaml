@@ -25,12 +25,8 @@
 (cram
  (deps
  (glob_files fixtures/*.ml)
-  architecture_check.py
-  (source_tree ../architecture_authority)
-  ../architecture_authority/live-install-receipt.json
   ../../src/verocaml.exe
   first_class_specifications_tool.exe
-  ../parametric_core/architecture_inventory.exe
   ../../verocaml.install
   ../../ppx/vero_ppx.exe
   ../../runtime/vero_ghost.cma

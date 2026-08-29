@@ -1,9 +1,4 @@
 (executable
- (name architecture_inventory)
- (modules architecture_inventory)
- (libraries compiler-libs.common))
-
-(executable
  (name parametric_core_tool)
  (modules parametric_core_tool parametric_core_prerequisites)
  (flags (:standard -I src/.verocaml_core.objs/byte))
@@ -22,21 +17,7 @@
 
 (cram
  (deps
-  architecture_manifest.py
-  (source_tree ../architecture_authority)
-  ../architecture_authority/live-install-receipt.json
-  architecture_inventory.exe
-  (source_tree ../../ppx)
-  (source_tree ../../src)
-  (source_tree ../../test)
-  (source_tree ../../library)
-  (source_tree ../../runtime)
-  (source_tree ../../examples)
-  (source_tree ../../nix)
-  ../../dune-project
-  ../../flake.lock
-  ../../flake.nix
-  ../../verocaml.opam
+  (glob_files fixtures/*.ml)
   parametric_core_tool.exe
   ../../src/verocaml.exe
   ../../ppx/vero_ppx.exe

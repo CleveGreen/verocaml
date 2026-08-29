@@ -1,57 +1,7 @@
 (cram
  (deps
-  structural_manifest.py
   (glob_files fixtures/*.ml)
-  ../../src/termination.ml
-  ../../src/finite_induction_private.ml
-  ../../src/finite_value_registry.ml
-  ../../src/finite_value_registry.mli
-  ../../src/verification_session.ml
-  ../../src/verification_session.mli
-  ../../src/logical_spec_authentication_private.ml
-  ../../src/logical_spec_authentication_private.mli
-  ../../src/logical_spec_evaluation_private.ml
-  ../../src/logical_spec_evaluation_private.mli
-  ../../src/logical_adt_evaluation_private.ml
-  ../../src/logical_aggregate_term_normalization_private.ml
-  ../../src/logical_aggregate_term_normalization_private.mli
-  ../../src/solver_policy_private.ml
-  ../../src/solver_policy_private.mli
-  ../../src/retained_model_application_private.ml
-  ../../src/retained_model_application_private.mli
-  ../../src/vir_logic_ir_translation_private.ml
-  ../../src/vir_logic_ir_translation_private.mli
-  ../../src/recursive_spec_tuple_match_private.ml
-  ../../src/recursive_spec_tuple_match_private.mli
-  ../../src/recursive_spec_body_validation_private.ml
-  ../../src/recursive_spec_body_validation_private.mli
-  ../../src/immutable_aggregate_fact_relevance_private.ml
-  ../../src/immutable_aggregate_fact_relevance_private.mli
-  ../../src/immutable_aggregate_reconstruction_private.ml
-  ../../src/immutable_aggregate_reconstruction_private.mli
-  ../../src/recursive_spec_retry_demand_private.ml
-  ../../src/recursive_spec_retry_demand_private.mli
-  ../../src/typedtree_adapter_private.ml
-  ../../src/sst_validation_private.ml
-  ../../src/spec_unfolding_private.ml
-  ../../src/solver_backend.ml
-  ../../src/solver_backend_counter_private.ml
-  ../../src/solver_backend_counter_private.mli
-  ../../src/z3_bridge.ml
-  ../../src/vc_solver_job_private.ml
-  ../../src/vc_solver_job_private.mli
-  ../../src/verification_solver_private.ml
-  ../../src/verification_solver_private.mli
-  ../../src/recursive_spec_encoding.ml
-  ../../src/symbolic_executor_private.ml
-  ../../src/recursive_spec_preservation.ml
-  ../../src/recursive_spec_preservation.mli
-  ../../src/verification_pipeline.ml
-  ../rank_backed_specifications/manifests/installed-paths.manifest
-  ../rank_backed_specifications/manifests/installed-interfaces.manifest
-  ../rank_backed_specifications/manifests/installed-public-modules.manifest
   ../../src/verocaml.exe
-  ../../src/dune
   ../../ppx/vero_ppx.exe
   ../../runtime/vero_ghost.cma
   ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))

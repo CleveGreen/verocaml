@@ -3,6 +3,18 @@ frozen-spine PFC stays on its legacy adapter.
 
   $ mkdir artifacts
   $ retained () { name=$1; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$name.cmo" "fixtures/$name.ml"; }
+
+The polymorphic example exercises a direct tuple match in a recursive Proof,
+finite child transfer for both matched components, and an instantiated generic
+Proof-call precondition.  Source and retained-CMT routes are deterministic.
+
+  $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/needs_fix.cmo ../../examples/needs_fix.ml 2>artifacts/needs_fix.compile.err
+  $ normalize_sst () { sed -E 's#cmt=/tmp/verocaml-source-[^/ ]+/source.cmt#cmt=<temporary-source-cmt>#' "$1" > "$2"; }
+  $ for route in source cmt; do if test "$route" = source; then input=../../examples/needs_fix.ml; else input=artifacts/needs_fix.cmt; fi; for threads in 1 2; do for repeat in 1 2; do prefix="artifacts/needs_fix.$route.$threads.$repeat"; OCAML_COLOR=never ../../src/verocaml.exe verify "$input" --threads "$threads" --timeout-ms 20000 --dump-sst "$prefix.sst" --dump-vir "$prefix.vir" >"$prefix.out" 2>&1; grep -q '^verocaml: verified-with-trusted-axioms ' "$prefix.out"; normalize_sst "$prefix.sst" "$prefix.norm.sst"; done; cmp "artifacts/needs_fix.$route.$threads.1.out" "artifacts/needs_fix.$route.$threads.2.out"; cmp "artifacts/needs_fix.$route.$threads.1.norm.sst" "artifacts/needs_fix.$route.$threads.2.norm.sst"; cmp "artifacts/needs_fix.$route.$threads.1.vir" "artifacts/needs_fix.$route.$threads.2.vir"; done; cmp "artifacts/needs_fix.$route.1.1.out" "artifacts/needs_fix.$route.2.1.out"; cmp "artifacts/needs_fix.$route.1.1.norm.sst" "artifacts/needs_fix.$route.2.1.norm.sst"; cmp "artifacts/needs_fix.$route.1.1.vir" "artifacts/needs_fix.$route.2.1.vir"; done; echo 'needs-fix source+cmt threads=1/2 repeats=stable verified'
+  needs-fix source+cmt threads=1/2 repeats=stable verified
+  $ sst=artifacts/needs_fix.cmt.1.1.sst; vir=artifacts/needs_fix.cmt.1.1.vir; printf 'recursive-proof tuple-values=%s recursive-calls=%s obligations=%s\n' "$(awk '/^function node_eq_symm#/{inside=1; next} inside && /^function /{exit} inside && /^        tuple : \(node/{count++} END{print count+0}' "$sst")" "$(awk '/^function node_eq_symm#/{inside=1; next} inside && /^function /{exit} inside && /proof-call node_eq_symm#.*recursive=true/{count++} END{print count+0}' "$sst")" "$(awk '/^function node_eq_symm#/{inside=1; next} inside && /^  vc /{count++} inside && /^function /{exit} END{print count+0}' "$vir")"
+  recursive-proof tuple-values=1 recursive-calls=1 obligations=6
+
   $ for name in exact_helper exact_inline human_pfc variant_result pass_through_result rank_free_integer_result rank_free_structural_result immutable_pattern_reconstruction_recursive nondecreasing; do retained "$name"; done
   $ for name in exact_helper exact_inline human_pfc variant_result pass_through_result rank_free_integer_result rank_free_structural_result; do ./aggregate_recursive_specifications_tool.exe "artifacts/$name.cmt"; done
   status=verified functions=1 obligations=8 recursive-spec=1/2 lifecycle=0/0/0

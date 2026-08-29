@@ -1,5 +1,5 @@
 let () = ignore Owned_recursive_scalar_model_prerequisites.ready
-(* Keep VERO-045's matrix linked to the scoped private executor/session ABI. *)
+(* Keep this matrix linked to the scoped private executor/session ABI. *)
 
 let fail format =
   Printf.ksprintf

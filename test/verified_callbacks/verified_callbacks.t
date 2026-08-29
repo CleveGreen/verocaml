@@ -171,16 +171,10 @@ those public records but cannot name either private authority module.
   > let callback_name (binding : Sst.callback_binding) = binding.callback_name
   > let reached_name (call : Vir.reached_callback_call) = call.application.callback.callback_name
   > EOF
-  $ profile=$(realpath "$(dirname "$(readlink -f architecture_check.py)")/../.."); root=$(dirname "$(dirname "$profile")"); install_root="${VEROCAML_TEST_INSTALL_ROOT:-$root/_build/install/default}"; ocamlc -w -A -I "$install_root/lib/verocaml/core" -c -o artifacts/package_public.cmo artifacts/package_public.ml
+  $ root="${PWD%%/_build/*}"; install_root="${VEROCAML_TEST_INSTALL_ROOT:-$root/_build/install/default}"; ocamlc -w -A -I "$install_root/lib/verocaml/core" -c -o artifacts/package_public.cmo artifacts/package_public.ml
   $ cat > artifacts/package_private.ml <<'EOF'
   > let cannot_name_shape (_ : Callback_shape_private.t) = ()
   > let cannot_name_certificate (_ : Callback_certificate_private.t) = ()
   > EOF
   $ root="${PWD%%/_build/*}"; ocamlc -w -A -I "$root/_build/install/default/lib/verocaml/core" -c artifacts/package_private.ml > artifacts/package-private.err 2>&1; test $? = 2; grep -q 'Unbound module.*Callback_shape_private' artifacts/package-private.err; echo package=public-sst/vir-private-authority-hidden
   package=public-sst/vir-private-authority-hidden
-
-The focused architecture policy binds the exact ticket path union, private
-owner limits, concentration no-growth rule, and package/public surface.
-
-  $ profile=$(realpath "$(dirname "$(readlink -f architecture_check.py)")/../.."); root=$(dirname "$(dirname "$profile")"); install_root="${VEROCAML_TEST_INSTALL_ROOT:-$root/_build/install/default}"; receipt="${VEROCAML_TEST_INSTALL_RECEIPT:-../architecture_authority/live-install-receipt.json}"; python3 architecture_check.py "$root" "$install_root" "$receipt" ../parametric_core/architecture_inventory.exe
-  verified-callbacks architecture owners=12 module=649/650 interface=180/180 function=106/140 concentration=48949/49186 installed=920/222/21 receipt=matched

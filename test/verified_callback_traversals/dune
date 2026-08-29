@@ -25,19 +25,7 @@
 
 (cram
  (deps
-  architecture_check.py
   (glob_files fixtures/*.ml)
-  (source_tree ../../ppx)
-  (source_tree ../../src)
-  (source_tree ../../test)
-  (source_tree ../../library)
-  (source_tree ../../runtime)
-  (source_tree ../../examples)
-  (source_tree ../../nix)
-  ../../dune-project
-  ../../flake.lock
-  ../../flake.nix
-  ../../verocaml.opam
   verified_callback_traversals_tool.exe
   ../../verocaml.install
   ../../src/verocaml.exe

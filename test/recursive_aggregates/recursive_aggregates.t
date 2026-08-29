@@ -9,7 +9,7 @@ selector applications remain namespaced uninterpreted functions in QF_UFLIA.
   Ty_app probe: pinned Z3 mapping rejects unsupported theory app
 
 Compile a real annotated recursive node/stack implementation through the PPX
-and consume its CMT. Mutable declarations are admitted, but this ticket adds no
+and consume its CMT. Mutable declarations are admitted, but this feature adds no
 field-write semantics.
 
   $ mkdir artifacts

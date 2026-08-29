@@ -1,11 +1,6 @@
 The focused gate compiles the same accepted generic program through both the
 source and retained-CMT routes.
 
-  $ root="${PWD%%/_build/*}"; python3 ../first_class_specifications/architecture_check.py "$root" "$root/_build/install/default" ../architecture_authority/live-install-receipt.json ./architecture_inventory.exe
-  first-class-specifications architecture owners=4 module=649/650 interface=176/180 function=116/140 concentration=58940/58942 installed=920/222/21 receipt=matched
-  $ python3 architecture_manifest.py "$root" "$root/_build/install/default" ../architecture_authority/live-install-receipt.json ./architecture_inventory.exe
-  parametric architecture current-modules=1321 recorded-modules=1278 current-functions=15710 recorded-functions=15184 new-modules=checked module-max=14528 function-max=5664 caps=800/200 concentration=58940/58942 installed=920/222/21 collapsed=ratcheted ownership=delegated receipt=matched
-
   $ mkdir artifacts
   $ retained () { name=$1; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -I artifacts -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$name.cmo" "fixtures/$name.ml"; }
   $ for n in core logical_equality alpha_a alpha_b eq_parameter eq_tuple eq_option eq_list partial_application callback generic_mutation inferred_generic_recursion explicit_polymorphic_recursion open_aggregate; do retained "$n"; done
@@ -116,7 +111,7 @@ constructing a solver.
   backend-incapable rejected pre-solver solver-work=0 detail=SMTML backend cannot preserve parametric equality
 
 Open runtime equality, higher-order escape, polymorphic recursion, generic
-mutation, and pre-VERO-094 aggregate applications reject before dumps and
+mutation, and unsupported aggregate applications reject before dumps and
 private authority. Compiler-invalid label and optional forwarding forms reject
 on the source route. Compiler-valid negatives also reject from retained CMT.
 

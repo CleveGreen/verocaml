@@ -107,7 +107,7 @@ only and reject before consumer SST/VIR.
   $ ./verified_interfaces_tool.exe retained-generic-adapter-matrix
   retained-generic-adapter textual-exact=rejected open=rejected wrong=rejected stale=rejected mixed-family=rejected
 
-The VERO-033 clone/rank-era provider is outside the schema-first first tranche:
+The legacy clone/rank-era provider is outside the schema-first first tranche:
 its mutable recursive model requires excluded rank authority. Providers and
 consumers reject before SST/VIR, independent of declaration order.
 

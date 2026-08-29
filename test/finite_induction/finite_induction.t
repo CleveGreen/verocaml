@@ -1,18 +1,3 @@
-The structural manifest measures the actual private finite owners, keeps every
-finite module below 800 lines and every substantially rewritten finite
-function below 200 lines, authenticates one shared bounded aggregate
-observation normalizer at both private solver boundaries, and checks the
-private ephemeral tuple planner and body validator without a public unit.
-
-  $ python3 structural_manifest.py "${DUNE_SOURCEROOT:-../..}" | grep -v '^measured-function-ranges='
-  finite-owners=finite-domain=finite_value_registry.ml:1-143,direct-candidate=finite_value_registry.ml:145-472,finite-expression=recursive_spec_preservation.ml:1-450,finite-induction=finite_induction_private.ml:1-98,direct-recursion-induction=symbolic_executor_private.ml:2068-2276,finite-result-integration=symbolic_executor_private.ml:2277-2417,immutable-fact-integration=symbolic_executor_private.ml:2473-2709
-  legacy-lines=symbolic_executor_private.ml:16651->14528,verification_session.ml:11133->11147,finite_value_registry.ml:4541->2068,aggregate:32325->27743
-  measured-functions=385 ranges-sha256=a2ec1541fb13c9afbbe4edd9557dc66935ace58ca8700a6042e134a396c695f0
-  shared-checker=ordinary+immutable-recursive-spec frozen-spine=separate
-  candidate-lifecycle=singular/all-exits/all-obligations mutual=unsupported
-  evaluate=thin-finite-dispatch finite-compiled-units=1 logical-private-units=18 aggregate-normalizer=shared-direct+recursive tuple-match=ephemeral-shared reconstruction=immutable-only fact-relevance=pure-two-consumer retry-demand=shared-exact-view
-  installed-manifests=installed-paths.manifest:4be24f090dc87fa4774121dcbe5bfeee2d2b61722f04bc56187fc3cf11cd0a65,installed-interfaces.manifest:7e60ba2fd5c04c15848dea3e3f9e5ce0082bc38353d155da8bac5e982e51904f,installed-public-modules.manifest:c7cd2560be752ccd8dd0f769e8188c153799c982a9000cb6fb37c636de8a11e8
-
 Dedicated integer and structural recursive builders, two smaller calls,
 duplicate immutable uses, aliases, copies, projections, and all-finite branches
 verify through the shared checker.

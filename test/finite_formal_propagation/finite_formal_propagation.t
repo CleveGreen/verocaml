@@ -266,7 +266,7 @@ result, local-function, and nested type positions before CMT production.
   $ for n in duplicate payload result local_function nested_field; do OCAML_COLOR=never ocamlc -w -A -alert -all -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c "fixtures/$n.ml" 2>&1 | grep '^Error:'; done
   Error: exactly one [@finite] annotation is allowed on a formal
   Error: [@finite] does not accept a payload
-  Error: finite result contracts are not supported by VERO-040
+  Error: finite result contracts are not supported
   Error: mode-bearing and finite formals are supported only on a top-level
   Error: [@finite] is supported only on an outer top-level callable formal
 

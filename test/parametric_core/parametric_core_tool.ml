@@ -162,7 +162,7 @@ let rec map_expression transform (expression : Sst.expression) =
         Option.get
           (Sst.map_symbolic_application_arguments recurse application)
     | Sst.Callback_call _ | Sst.Callback_requires _ | Sst.Callback_ensures _ ->
-        invalid_arg "VERO-103 skeleton: callback rewrite is not implemented"
+        invalid_arg "callback rewrite is not implemented"
     | Sst.Optional_present payload -> Sst.Optional_present (recurse payload)
     | Sst.Optional_forward carrier -> Sst.Optional_forward (recurse carrier)
     | Sst.Use_type_invariant value ->

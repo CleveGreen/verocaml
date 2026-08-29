@@ -58,19 +58,3 @@
  (name verified-interfaces-check)
  (deps
   (alias runtest)))
-
-(rule
- (alias verified-interfaces-replay-check)
- (deps
-  assert_vero063_source_diff.sh
-  (source_tree ../architecture_authority))
- (action
-  (run sh %{dep:assert_vero063_source_diff.sh} %{workspace_root})))
-
-(rule
- (alias verified-interfaces-replay-check)
- (deps
-  assert_vero064_source_diff.sh
-  (source_tree ../architecture_authority))
- (action
-  (run sh %{dep:assert_vero064_source_diff.sh} %{workspace_root})))

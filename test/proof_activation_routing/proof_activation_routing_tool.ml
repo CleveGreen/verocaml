@@ -1,5 +1,5 @@
 let () = ignore Proof_activation_routing_prerequisites.ready
-(* VERO-077 keeps ordinary matches outside ground-witness routing. *)
+(* Ordinary matches stay outside ground-witness routing. *)
 
 let fail format =
   Printf.ksprintf

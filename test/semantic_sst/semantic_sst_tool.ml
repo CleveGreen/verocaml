@@ -889,7 +889,7 @@ let structural () =
     | Sst.Authenticated_same_cmt_abstraction _ ->
         assert false
   in
-  expect_error "pre-VERO-019 authenticated abstract evidence"
+  expect_error "authenticated abstract evidence"
     (function Sst_validation.Forged_abstract_evidence _ -> true | _ -> false)
     (program
        ~types:

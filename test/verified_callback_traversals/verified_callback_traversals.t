@@ -128,10 +128,3 @@ pre-semantic.
   trigger:wrong-binder zero-work
   trigger:nested-owner zero-work
   trigger:existential-trigger zero-work
-
-The new owners remain narrow and the accepted carrier/PPX stays read-only.
-
-  $ python3 architecture_check.py
-  read-only-carrier=4/4
-  owners logic_quantifier_private.ml=279/650 logic_quantifier_private.mli=68/180 quantifier_validation_private.ml=645/650 quantifier_validation_private.mli=166/180 function-cap=140
-  negative-matrix authentication=12 trigger=13

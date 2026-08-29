@@ -1,4 +1,4 @@
-Invariant metadata remains authenticated and opaque, but VERO-035 no longer
+Invariant metadata remains authenticated and opaque, but verification does not
 turns type membership, entry parameters, or call results into instance authority.
 
   $ mkdir artifacts
@@ -45,7 +45,7 @@ The compiler still protects the hidden representation.
   adapter rejected: VERO_UNSUPPORTED_STRUCTURE_ITEM
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/representation_leak.cmo fixtures/representation_leak.ml >/dev/null 2>&1; test $? -ne 0
 
-VERO-032 call-result and transition receipts remain unresolved. The old transition
+Call-result and transition receipts remain unresolved. The old transition
 fixtures therefore fail on the missing exact predecessor fact rather than
 manufacturing call-result or entry authority.
 

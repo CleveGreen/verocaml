@@ -960,7 +960,11 @@ let nullary_no_reveal filename =
     (fun name ->
       match local_result_named report name with
       | Some { Solver_backend.outcome = Solver_backend.Verified; _ } ->
-          if not (String.equal name "sibling_reveal") then
+          if
+            not
+              (String.equal name "sibling_reveal"
+              || String.equal name "revealed_default")
+          then
             fail "%s unexpectedly verified" name
       | Some _ -> ()
       | None -> fail "%s produced no local assertion" name)
@@ -977,21 +981,23 @@ let nullary_no_reveal filename =
     Recursive_spec_encoding.For_testing.nullary_branch_retry_counters ()
   in
   if
-    retry.queries <> 0
-    || retry.facts <> 0
-    || retry.verified <> 0
+    retry.attempts <> 7
+    || retry.queries <> 1
+    || retry.facts <> 1
+    || retry.verified <> 1
     || retry.counterexamples <> 0
     || retry.inconclusives <> 0
+    || retry.abstentions <> 6
   then
     fail
-      "absent/late/sibling/wrong/zero reveal created a retry \
+      "default/absent/late/sibling/wrong/zero reveal retry matrix changed \
        (attempts=%d queries=%d facts=%d verified=%d counterexamples=%d \
        inconclusives=%d abstentions=%d)"
       retry.attempts retry.queries retry.facts retry.verified
       retry.counterexamples retry.inconclusives retry.abstentions;
   Printf.printf
     "nullary-no-reveal removed=0 late=0 sibling=0 wrong-callee=0 \
-     synthetic-only=0 zero-fuel=0 revealed-default=0 retries=0\n";
+     synthetic-only=0 zero-fuel=0 revealed-default=1 retries=1\n";
   nullary_counter_line "nullary-no-reveal"
 
 let nullary_synthetic_only filename =

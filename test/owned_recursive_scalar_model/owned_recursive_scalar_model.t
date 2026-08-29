@@ -5,7 +5,7 @@ carrier and verify through the production CLI.
   $ retained () { n=$1; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$n.cmo" "fixtures/$n.ml"; }
   $ positives='scalar_model_baseline successor_freshness nonvacuous_cut opaque_local_client constant_head_no_value_path cross_template_demand_isolation uncontracted_mutation_no_demand direct_root_reconstruction_control nested_noop_reconstruction_control'
   $ for n in $positives; do retained "$n"; done
-  $ if grep -E 'type_invariant|use_type_invariant|closed.valid|VERO-044|invariant receipt' $(for n in $positives; do printf 'fixtures/%s.ml ' "$n"; done); then false; else echo 'positive invariant/capability carriers absent'; fi
+  $ if grep -E 'type_invariant|use_type_invariant|closed.valid|invariant receipt' $(for n in $positives; do printf 'fixtures/%s.ml ' "$n"; done); then false; else echo 'positive invariant/capability carriers absent'; fi
   positive invariant/capability carriers absent
   $ for n in $positives; do OCAML_COLOR=never ../../src/verocaml.exe verify "fixtures/$n.ml" --timeout-ms 5000 | sed -E 's@file=fixtures/[^ ]+@file=FIXTURE@; s/functions=[0-9]+ obligations=[0-9]+/verified-shape/'; done
   verocaml: verified file=FIXTURE verified-shape

@@ -160,7 +160,7 @@ happens before source/CMT consumption or dump creation and preserves content.
   $ reject_preserving dumps-symlink-prefix-parent artifacts/real/protected.dump verify fixtures/verified.ml --dump-sst artifacts/real/protected.dump --dump-vir artifacts/spelling/via-link/../protected.dump
   dumps-symlink-prefix-parent: rejected and preserved
 
-The immutable direct-source route carries VERO-016's accepted trusted external
+The immutable direct-source route carries accepted trusted external
 specification disclosure into the public CLI.
 
   $ OCAML_COLOR=never ../../src/verocaml.exe verify fixtures/external_specification.ml | grep -E 'trusted external specification|verified-with-trusted-axioms'

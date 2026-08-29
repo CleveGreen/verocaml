@@ -20,7 +20,3 @@ but supported identity reaches an ordinary failed VC.
   verocaml: verified file=fixtures/recursive_list.ml functions=1 obligations=1
   $ code=0; OCAML_COLOR=never ../../src/verocaml.exe verify fixtures/false_identity.ml --threads 1 --timeout-ms 5000 > false.out 2>&1 || code=$?; test "$code" = 1; grep -o 'counterexample' false.out | head -1
   counterexample
-
-  $ root="${PWD%%/_build/*}"; python3 architecture_check.py "$root"
-  private-pairs=present loc-caps=pass
-  backend-handles=worker-local

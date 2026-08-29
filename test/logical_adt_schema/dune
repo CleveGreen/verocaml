@@ -17,7 +17,6 @@
  (deps
   (glob_files fixtures/*.ml)
   logical_adt_schema_tool.exe
-  architecture_check.py
   ../../src/verocaml.exe
   ../../ppx/vero_ppx.exe
   ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))

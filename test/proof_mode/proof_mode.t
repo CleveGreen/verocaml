@@ -88,8 +88,9 @@ own.
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/nonunit.cmo fixtures/nonunit.ml
   $ ./proof_mode_tool.exe sst artifacts/nonunit.cmt | grep '^function bad'
   function bad#0 mode=proof recursive=false result=int policy=default-linear/default-z3 @ nonunit.ml:1:0-1:36
-  $ retained aggregate
-  semantic validation rejected before VIR
+  $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/aggregate.cmo fixtures/aggregate.ml
+  $ ./proof_mode_tool.exe solve artifacts/aggregate.cmt
+  bad: verified (0 obligations)
   $ retained higher_order
   adapter rejected: VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION
   $ retained loop

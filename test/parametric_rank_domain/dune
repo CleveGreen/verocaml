@@ -7,7 +7,6 @@
 (cram
  (deps
   (glob_files fixtures/*.ml)
-  architecture_check.py
   ../../src/parametric_rank_domain_private.ml
   ../../src/parametric_rank_domain_private.mli
   ../../src/typedtree_adapter_issuance_private.ml

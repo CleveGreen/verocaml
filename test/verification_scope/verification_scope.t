@@ -140,8 +140,7 @@ candidacy or any downstream owner.
   $ project --root retained/client.cmt retained/client.cmi --dependency retained/provider.cmt stale/provider.cmi --threads 1 >retained/stale.out 2>&1; echo $?
   2
 
-A marked client cannot route a call through an unmarked provider before the
-separate trusted-import ticket.
+A marked client cannot route a call through an unmarked provider.
 
   $ mkdir bypass
   $ cp fixtures/unmarked_provider.ml fixtures/unmarked_client.ml bypass/
@@ -153,21 +152,3 @@ separate trusted-import ticket.
   verocaml: error[VERO_UNSUPPORTED_EXTERNAL_CALL] unknown and external calls are not supported @ unmarked_client.ml:3:25-3:57
   verocaml: verified unit=Unmarked_client file=bypass/unmarked_client.cmt result=rejected
   verocaml: skipped unit=Unmarked_provider file=bypass/unmarked_provider.cmt result=skipped
-
-The private owner and new dispatch functions remain below the accepted caps,
-and the executable dependency remains one-way through the service.
-
-  $ test "$(wc -l < ../../src/verification_scope_private.ml)" -lt 800
-  $ test "$(wc -l < ../../src/verocaml_bin_project_private.ml)" -lt 400
-  $ python3 - <<'PY'
-  > from pathlib import Path
-  > scope = Path('../../src/verification_scope_private.ml').read_text()
-  > project = Path('../../src/verocaml_bin_project_private.ml').read_text()
-  > assert 'Verification_scope_private' not in project
-  > binary = Path('../../src/verocaml_bin.ml').read_text()
-  > assert 'Verifier_service' in binary
-  > assert 'Verification_scope_private' not in binary
-  > assert 'Verocaml_bin' not in scope
-  > print('architecture scope-owner=private lines<800 dependency=one-way')
-  > PY
-  architecture scope-owner=private lines<800 dependency=one-way

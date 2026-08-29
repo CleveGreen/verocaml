@@ -140,7 +140,7 @@ Repeated, copied, alpha-renamed, and serial/threaded artifacts are stable.
   $ cmp artifacts/alpha_a.norm.sst artifacts/alpha_b.norm.sst
   $ cmp artifacts/alpha_a.norm.vir artifacts/alpha_b.norm.vir
 
-The VERO-083 project path selects the retained root without changing its API.
+The project path selects the retained root without changing its API.
 
   $ OCAML_COLOR=never ../../src/verocaml.exe verify-project --root artifacts/structures.cmt artifacts/structures.cmi --threads 2 --timeout-ms 10000
   verocaml: verified unit=Structures file=artifacts/structures.cmt result=verified functions=12 obligations=40

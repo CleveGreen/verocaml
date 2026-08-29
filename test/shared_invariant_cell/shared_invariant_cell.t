@@ -69,7 +69,7 @@ checked RHS overflow remain independent obligations.
   $ grep -o 'vc=invariant-constructor-establishment\[[^]]*\]' artifacts/constructor.out | head -1
   vc=invariant-constructor-establishment[invariant:Cell.t:1:Cell.invariant:2]
 
-Unique mutation and plain VERO-059 shared mutation coexist in the same CMT
+Unique mutation and plain shared mutation coexist in the same CMT
 without invariant-cell issuance on those functions.
 
   $ ./shared_invariant_cell_tool.exe verify artifacts/mixed_unique_shared.cmt
