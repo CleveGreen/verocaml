@@ -1,8 +1,10 @@
 type provenance =
   | Local of { compiler_uid : string }
-  | Pinned_option of { compiler_uid : string }
-  | Pinned_list of { compiler_uid : string }
-  | Pinned_result of { compiler_uid : string }
+  | External of {
+      compiler_uid : string;
+      proxy_uid : string;
+      prelude : bool;
+    }
 
 type field = {
   field_index : int;

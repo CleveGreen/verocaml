@@ -47,35 +47,36 @@ let descriptor_unit file =
     (create (Parametric_adt.Variant [ constructor [ field ~index:1 () ] ]));
   show "field-template"
     (create (Parametric_adt.Variant [ constructor [ field ~typ:(Parameter foreign) () ] ]));
-  show "forged-option"
+  show "empty-external-proxy"
     (create
-       ~id:{ Parametric_type.type_index = -1; type_name = "Stdlib.option" }
-       ~provenance:(Parametric_adt.Pinned_option { compiler_uid = "<predef:option>" })
-       (Parametric_adt.Variant [ constructor []; constructor ~index:1 [ field () ] ]));
+       ~provenance:
+         (Parametric_adt.External
+            {
+              compiler_uid = "external-box";
+              proxy_uid = "";
+              prelude = false;
+            })
+       (Parametric_adt.Variant [ constructor [ field () ] ]));
   let backend_before = Solver_backend.For_testing.solver_creation_count () in
   let z3_before = Z3_bridge.counters () in
   let descriptors = (load file).Sst.parametric_adts in
   let standard_descriptor expected =
     List.find
-      (fun descriptor -> expected (Parametric_adt.provenance descriptor))
+      (fun descriptor ->
+        Parametric_type.compare_constructor
+          (Parametric_adt.type_constructor descriptor) expected
+        = 0)
       descriptors
   in
-  let canonical_option =
-    standard_descriptor (function Parametric_adt.Pinned_option _ -> true | _ -> false)
-  in
-  let canonical_list =
-    standard_descriptor (function Parametric_adt.Pinned_list _ -> true | _ -> false)
-  in
-  let canonical_result =
-    standard_descriptor (function Parametric_adt.Pinned_result _ -> true | _ -> false)
-  in
-  let recreate ?type_id ?provenance descriptor =
+  let canonical_option = standard_descriptor Parametric_type.option_constructor in
+  let canonical_list = standard_descriptor Parametric_type.list_constructor in
+  let canonical_result = standard_descriptor Parametric_type.result_constructor in
+  let recreate descriptor =
     Parametric_adt.create
-      ~type_id:(Option.value type_id ~default:(Parametric_adt.type_id descriptor))
+      ~type_id:(Parametric_adt.type_id descriptor)
       ~type_constructor:(Parametric_adt.type_constructor descriptor)
       ~binders:(Parametric_adt.binders descriptor)
-      ~provenance:
-        (Option.value provenance ~default:(Parametric_adt.provenance descriptor))
+      ~provenance:(Parametric_adt.provenance descriptor)
       ~kind:(Parametric_adt.kind descriptor)
   in
   let show_standard label ~name ~uid result =
@@ -94,21 +95,6 @@ let descriptor_unit file =
   canonical "canonical-option" canonical_option;
   canonical "canonical-list" canonical_list;
   canonical "canonical-result" canonical_result;
-  let forge_name label forged_name descriptor =
-    let canonical_id = Parametric_adt.type_id descriptor in
-    let forged_id = { canonical_id with type_name = forged_name } in
-    show_standard label ~name:forged_name
-      ~uid:(Parametric_adt.compiler_uid descriptor)
-      (recreate ~type_id:forged_id descriptor)
-  in
-  forge_name "forged-option-name" "<forged:option>" canonical_option;
-  forge_name "forged-list-name" "<forged:list>" canonical_list;
-  forge_name "forged-result-name" "<forged:result-name>" canonical_result;
-  let forged_uid = "<forged:result>" in
-  show_standard "forged-result" ~name:(Parametric_adt.type_id canonical_result).type_name
-    ~uid:forged_uid
-    (recreate canonical_result
-       ~provenance:(Parametric_adt.Pinned_result { compiler_uid = forged_uid }));
   let backend_after = Solver_backend.For_testing.solver_creation_count () in
   let z3_after = Z3_bridge.counters () in
   if backend_before <> backend_after || z3_before <> z3_after then

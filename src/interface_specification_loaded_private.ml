@@ -332,9 +332,7 @@ let verified_snapshot ~unit_name ~candidate validated =
       let local_parametric_types =
         (Sst_validation.program validated).Sst.parametric_adts
         |> List.filter (fun descriptor ->
-               match Parametric_adt.provenance descriptor with
-               | Parametric_adt.Local _ -> true
-               | Pinned_option _ | Pinned_list _ | Pinned_result _ -> false)
+               not (Parametric_adt.is_standard descriptor))
       in
       let canonical_public_type descriptor =
         let type_id = Sst_validation.type_id descriptor in

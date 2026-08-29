@@ -125,6 +125,8 @@ let lower ?(allow_public_parametric_signatures = false) ?external_specifications
       ~allow_imported_opens:true ~imported:imported_environment
       ~proof_capture_artifact
       ~compilation_identity
+      ~load_path_visible:implementation.load_path_visible
+      ~load_path_hidden:implementation.load_path_hidden
       ?authenticated_source_text:
         (match implementation.source_digest with
         | None -> None

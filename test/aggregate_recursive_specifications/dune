@@ -21,7 +21,6 @@
 (cram
  (deps
  (glob_files fixtures/*.ml)
-  ../../examples/needs_fix.ml
   aggregate_recursive_specifications_tool.exe
   ../../src/verocaml.exe
   ../../ppx/vero_ppx.exe

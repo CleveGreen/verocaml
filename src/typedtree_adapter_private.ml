@@ -1571,6 +1571,32 @@ module Public = struct
     type_id : Sst.type_id;
     declaration : type_declaration;
   }
+  type external_type_specification =
+    | Ordinary_type
+    | Authenticated_external_type
+    | Malformed_external_type
+
+  let external_type_specification declaration =
+    let public_name = "verocaml.external_type_specification" in
+    let retained_name =
+      "verocaml.internal.external_type_specification.v1"
+    in
+    let relevant =
+      List.filter
+        (fun attribute ->
+          String.equal attribute.Parsetree.attr_name.txt public_name
+          || String.equal attribute.attr_name.txt retained_name)
+        declaration.typ_attributes
+    in
+    match relevant with
+    | [] -> Ordinary_type
+    | [ attribute ]
+      when String.equal attribute.attr_name.txt retained_name
+           && attribute.attr_loc.loc_ghost
+           && attribute.attr_name.loc.loc_ghost
+           && attribute.attr_payload = Parsetree.PStr [] ->
+        Authenticated_external_type
+    | _ -> Malformed_external_type
   type constrained_module = {
     module_name : string;
     module_id : Ident.t;
@@ -2858,19 +2884,98 @@ module Public = struct
     | None -> None
   let binding_source_type context binding =
     List.assoc_opt binding.Sst.id context.binding_types
-  let shadow_type_matches context location source_type expected =
-    match Types.get_desc source_type with
-    | Types.Tvar _ | Types.Tunivar _ -> Ok ()
-    | _ -> (
-        match normalized_type context location source_type with
-        | Ok actual
-          when Parametric_type.equal actual expected
-               || Parametric_type.alpha_equal actual expected ->
-            Ok ()
-        | Ok _ ->
-            unsupported context location Diagnostic.Malformed_ghost_call
-        | Error _ ->
-            unsupported context location Diagnostic.Malformed_ghost_call)
+  let shadow_type_matches context location ~source_type ~expected_source
+      expected =
+    let rec exact seen left right =
+      let left_id = Types.get_id left and right_id = Types.get_id right in
+      if List.mem (left_id, right_id) seen then true
+      else
+        let seen = (left_id, right_id) :: seen in
+        match (Types.get_desc left, Types.get_desc right) with
+        | ( (Types.Tlink left | Types.Tsubst (left, _) | Types.Tpoly (left, [])),
+            _ ) ->
+            exact seen left right
+        | ( _,
+            (Types.Tlink right | Types.Tsubst (right, _)
+            | Types.Tpoly (right, [])) ) ->
+            exact seen left right
+        | (Types.Tvar _, Types.Tvar _) | (Types.Tunivar _, Types.Tunivar _) ->
+            left_id = right_id
+        | Types.Tconstr (left, left_arguments, _), Types.Tconstr (right, right_arguments, _) ->
+            Path.same left right
+            && List.length left_arguments = List.length right_arguments
+            && List.for_all2 (exact seen) left_arguments right_arguments
+        | Types.Ttuple left, Types.Ttuple right ->
+            List.length left = List.length right
+            && List.for_all2
+                 (fun (left_label, left) (right_label, right) ->
+                   left_label = right_label && exact seen left right)
+                 left right
+        | ( Types.Tarrow (left_label, left_domain, left_range, _),
+            Types.Tarrow (right_label, right_domain, right_range, _) ) ->
+            left_label = right_label
+            && exact seen left_domain right_domain
+            && exact seen left_range right_range
+        | _ -> false
+    in
+    let rec compatible seen substitutions source target =
+      let source_id = Types.get_id source and target_id = Types.get_id target in
+      if List.mem (source_id, target_id) seen then Some substitutions
+      else
+        let seen = (source_id, target_id) :: seen in
+        match (Types.get_desc source, Types.get_desc target) with
+        | ( (Types.Tlink source | Types.Tsubst (source, _)
+            | Types.Tpoly (source, [])),
+            _ ) ->
+            compatible seen substitutions source target
+        | ( _,
+            (Types.Tlink target | Types.Tsubst (target, _)
+            | Types.Tpoly (target, [])) ) ->
+            compatible seen substitutions source target
+        | (Types.Tvar _ | Types.Tunivar _), _ -> (
+            match List.assoc_opt source_id substitutions with
+            | None -> Some ((source_id, target) :: substitutions)
+            | Some previous ->
+                if exact [] previous target then Some substitutions else None)
+        | _, (Types.Tvar _ | Types.Tunivar _) -> None
+        | Types.Tconstr (source, source_arguments, _), Types.Tconstr (target, target_arguments, _)
+          when Path.same source target
+               && List.length source_arguments = List.length target_arguments ->
+            List.fold_left2
+              (fun result source target ->
+                Option.bind result (fun substitutions ->
+                    compatible seen substitutions source target))
+              (Some substitutions) source_arguments target_arguments
+        | Types.Ttuple source, Types.Ttuple target
+          when List.length source = List.length target ->
+            List.fold_left2
+              (fun result (source_label, source) (target_label, target) ->
+                if source_label <> target_label then None
+                else
+                  Option.bind result (fun substitutions ->
+                      compatible seen substitutions source target))
+              (Some substitutions) source target
+        | ( Types.Tarrow (source_label, source_domain, source_range, _),
+            Types.Tarrow (target_label, target_domain, target_range, _) )
+          when source_label = target_label ->
+            Option.bind
+              (compatible seen substitutions source_domain target_domain)
+              (fun substitutions ->
+                compatible seen substitutions source_range target_range)
+        | _ -> None
+    in
+    let compiler_match =
+      Option.is_some (compatible [] [] source_type expected_source)
+    in
+    if compiler_match then Ok ()
+    else
+      match normalized_type context location source_type with
+      | Ok actual
+        when Parametric_type.equal actual expected
+             || Parametric_type.alpha_equal actual expected ->
+          Ok ()
+      | Ok _ | Error _ ->
+          unsupported context location Diagnostic.Malformed_ghost_call
   let exact_retained_family attributes =
     let prefix = "verocaml.internal.artifact_family." in
     attributes
@@ -3137,10 +3242,11 @@ module Public = struct
                 else
                   match binding_source_type context live_binding with
                   | None -> malformed pattern.pat_loc
-                  | Some _ -> (
+                  | Some live_type -> (
                       match
                         shadow_type_matches context pattern.pat_loc
-                          pattern.pat_type live_binding.typ
+                          ~source_type:pattern.pat_type
+                          ~expected_source:live_type live_binding.typ
                       with
                       | Error _ as error -> error
                       | Ok () -> Ok (ident, live_binding)))
@@ -5312,10 +5418,11 @@ module Public = struct
                         Ok (`Value (ident, live_binding))
                     | [ (_, live_binding) ], [] -> (
                         match binding_source_type context live_binding with
-                        | Some _live_type -> (
+                        | Some live_type -> (
                             match
                               shadow_type_matches context pattern.pat_loc
-                                pattern.pat_type live_binding.typ
+                                ~source_type:pattern.pat_type
+                                ~expected_source:live_type live_binding.typ
                             with
                             | Ok () -> Ok (`Value (ident, live_binding))
                             | Error _ as error -> error)
@@ -5437,7 +5544,9 @@ module Public = struct
                           | Ok function_type -> (
                               match
                                 shadow_type_matches context
-                                  result_pattern.pat_loc result_pattern.pat_type
+                                  result_pattern.pat_loc
+                                  ~source_type:result_pattern.pat_type
+                                  ~expected_source:function_result_type
                                   function_type
                               with
                               | Error _ as error -> error
@@ -9324,7 +9433,8 @@ module Public = struct
             local_types
         in
         analyze_rank_profiles source_file structure local_types
-  let lower_type_registry source_file imports env ~standard_paths local_types =
+  let lower_type_registry source_file imports env ~standard_paths
+      ~load_path_visible ~load_path_hidden ~proof_capture_artifact local_types =
     let base_context =
       {
         source_file;
@@ -9396,6 +9506,59 @@ module Public = struct
       let* linearity_modality = linearity_modality in
       Ok { Sst.uniqueness_modality; linearity_modality }
     in
+    let* external_types, ordinary_types =
+      let rec classify specifications ordinary = function
+        | [] -> Ok (List.rev specifications, List.rev ordinary)
+        | local :: rest -> (
+            match external_type_specification local.declaration with
+            | Ordinary_type ->
+                classify specifications (local :: ordinary) rest
+            | Authenticated_external_type -> (
+                match proof_capture_artifact with
+                | Some artifact
+                  when Typedtree_adapter_issuance_private
+                       .authenticate_logical_builtin_artifact artifact
+                         ~source_file ->
+                    classify (local :: specifications) ordinary rest
+                | Some _ | None ->
+                    unsupported base_context local.declaration.typ_loc
+                      Diagnostic.Malformed_ghost_call)
+            | Malformed_external_type ->
+                unsupported base_context local.declaration.typ_loc
+                  Diagnostic.Malformed_ghost_call)
+      in
+      classify [] [] local_types
+    in
+    let* external_sources =
+      let rec lower sources = function
+        | [] -> Ok (List.rev sources)
+        | (local : local_type) :: rest -> (
+            match
+              Parametric_adt_lowering_private.external_source
+                ~paths:local.resolved_paths ~type_id:local.type_id
+                ~load_path_visible ~load_path_hidden env local.declaration
+            with
+            | Ok source -> lower (source :: sources) rest
+            | Error message ->
+                let diagnostic =
+                  Diagnostic.make
+                    (Diagnostic.Unsupported_construct Diagnostic.Aggregate)
+                    (span base_context local.declaration.typ_loc)
+                in
+                Error { diagnostic with Diagnostic.message })
+      in
+      lower [] external_types
+    in
+    let standard_paths =
+      List.filter
+        (fun path ->
+          not
+            (List.exists
+               (fun source ->
+                 Parametric_adt_lowering_private.covers_path source path)
+               external_sources))
+        standard_paths
+    in
     let* standard_sources =
       match
         Parametric_adt_lowering_private.standard_sources
@@ -9406,7 +9569,7 @@ module Public = struct
           unsupported base_context Location.none Diagnostic.Unsupported_type
     in
     let parametric_sources =
-      standard_sources
+      standard_sources @ external_sources
       @ List.filter_map
           (fun (local : local_type) ->
             if local.declaration.typ_params = [] then None
@@ -9415,10 +9578,10 @@ module Public = struct
                 (Parametric_adt_lowering_private.local_source
                    ~paths:local.resolved_paths ~type_id:local.type_id
                    local.declaration))
-          local_types
+          ordinary_types
     in
     let aggregate path =
-      match find_local_type_by_path path local_types with
+      match find_local_type_by_path path ordinary_types with
       | Some local when local.declaration.typ_params = [] -> Some local.type_id
       | Some _ | None -> None
     in
@@ -9635,7 +9798,7 @@ module Public = struct
           if local.declaration.typ_params = [] then
             Some (local, local.type_id, [])
           else None)
-        local_types
+        ordinary_types
     in
     lower_types [] [] [] targets
   let rec terminal_returns_unique_parameter function_id parameter_index
@@ -12283,8 +12446,9 @@ module Public = struct
   let lower_with_imports ?(allow_imported_opens = false)
       ?(explicit_interface = false) ?(interface_value_paths = [])
       ?(imported = empty_imported_environment) ?proof_capture_artifact
-      ?compilation_identity ?authenticated_source_text ~source_file ~imports
-    structure =
+      ?compilation_identity ?authenticated_source_text
+      ?(load_path_visible = [ Config.standard_library ])
+      ?(load_path_hidden = []) ~source_file ~imports structure =
     let* symbolic_scan =
       match
         Typedtree_symbolic_private.authenticate ~source_file
@@ -12357,7 +12521,9 @@ module Public = struct
         let rank_analysis_types =
           List.filter
             (fun local ->
-              (not (List.mem local.type_id constrained_type_ids))
+              external_type_specification local.declaration
+                <> Authenticated_external_type
+              && (not (List.mem local.type_id constrained_type_ids))
               && not
                    (List.exists
                       (fun candidate ->
@@ -12396,7 +12562,8 @@ module Public = struct
         in
         match
           lower_type_registry source_file imports structure.str_final_env
-            ~standard_paths:!standard_paths local_types
+            ~standard_paths:!standard_paths ~load_path_visible
+            ~load_path_hidden ~proof_capture_artifact local_types
         with
         | Error _ as error -> error
         | Ok aggregates ->

@@ -41,9 +41,9 @@ Build one real retained provider and concrete and open consumers.
   $ grep -c 'optional-forward' artifacts/consumer.sst
   2
   $ grep '^adt ' artifacts/consumer.sst | sed -E 's/ uid=[^ ]+/ uid=<uid>/; s/#[0-9]+/#<id>/g'
-  adt Stdlib.option<'0@Stdlib.option#-1> uid=<uid> provenance=pinned-option binders=1 variant[0:None()|1:Some(0:$0:'0@Stdlib.option#-1)] recursive-fields=0
-  adt Stdlib.list<'0@Stdlib.list#-2> uid=<uid> provenance=pinned-list binders=1 variant[0:[]()|1:::(0:$0:'0@Stdlib.list#-2,1:$1:Stdlib.list<'0@Stdlib.list#-2>)] recursive-fields=1
-  adt Stdlib.result<'0@Stdlib.result#-3, '1@Stdlib.result#-3> uid=<uid> provenance=pinned-result binders=2 variant[0:Ok(0:$0:'0@Stdlib.result#-3)|1:Error(0:$0:'1@Stdlib.result#-3)] recursive-fields=0
+  adt Stdlib.option<'0@Stdlib.option#-1> uid=<uid> provenance=external-type-specification binders=1 variant[0:None()|1:Some(0:$0:'0@Stdlib.option#-1)] recursive-fields=0
+  adt Stdlib.list<'0@Stdlib.list#-2> uid=<uid> provenance=external-type-specification binders=1 variant[0:[]()|1:::(0:$0:'0@Stdlib.list#-2,1:$1:Stdlib.list<'0@Stdlib.list#-2>)] recursive-fields=1
+  adt Stdlib.result<'0@Stdlib.result#-3, '1@Stdlib.result#-3> uid=<uid> provenance=external-type-specification binders=2 variant[0:Ok(0:$0:'0@Stdlib.result#-3)|1:Error(0:$0:'1@Stdlib.result#-3)] recursive-fields=0
   adt box<'0@Provider.box#<id>> uid=<uid> provenance=local binders=1 record{0:value:'0@Provider.box#<id>} recursive-fields=0
   adt tree<'0@Provider.tree#<id>> uid=<uid> provenance=local binders=1 variant[0:Leaf()|1:Node(0:$0:'0@Provider.tree#<id>,1:$1:tree<'0@Provider.tree#<id>>,2:$2:tree<'0@Provider.tree#<id>>)] recursive-fields=2
   $ grep -E '^function (relay|relay_tree)#.*binders' artifacts/open.sst

@@ -17,6 +17,17 @@ type lowered = {
   constructors : (Types.Uid.t * Sst.type_id * Sst.constructor_id) list;
 }
 
+let is_stdlib_result_path = function
+  | Path.Pdot (Path.Pident root, "result") ->
+      Ident.same root (Ident.create_persistent "Stdlib")
+  | Path.Pident _ | Path.Pdot _ | Path.Papply _ | Path.Pextra_ty _ -> false
+
+let standard_of_path path =
+  if Path.same path Predef.path_option then Some Option
+  else if Path.same path Predef.path_list then Some List
+  else if is_stdlib_result_path path then Some Result
+  else None
+
 let ( let* ) result continuation =
   match result with Ok value -> continuation value | Error _ as error -> error
 
@@ -33,16 +44,178 @@ let local_source ~paths ~type_id declaration =
     standard = None;
   }
 
-let standard_source env standard type_id path name constructor =
+let direct_type_parameters parameters arguments =
+  List.length parameters = List.length arguments
+  && List.for_all2
+       (fun (parameter, _) argument ->
+         match Types.get_desc argument.Typedtree.ctyp_type with
+         | Types.Tvar _ | Types.Tunivar _ ->
+             Types.get_id parameter.Typedtree.ctyp_type
+             = Types.get_id argument.ctyp_type
+         | Types.Tpoly _ | Types.Tlink _ | Types.Tsubst _ | Types.Tconstr _
+         | Types.Tarrow _ | Types.Ttuple _ | Types.Tunboxed_tuple _
+         | Types.Tobject _ | Types.Tfield _ | Types.Tnil | Types.Tvariant _
+         | Types.Tpackage _ | Types.Tquote _ | Types.Tsplice _
+         | Types.Tof_kind _ ->
+             false)
+       parameters arguments
+
+let direct_compiler_parameters parameters arguments =
+  List.length parameters = List.length arguments
+  && List.for_all2
+       (fun parameter argument ->
+         match Types.get_desc argument with
+         | Types.Tvar _ | Types.Tunivar _ ->
+             Types.get_id parameter = Types.get_id argument
+         | Types.Tpoly _ | Types.Tlink _ | Types.Tsubst _ | Types.Tconstr _
+         | Types.Tarrow _ | Types.Ttuple _ | Types.Tunboxed_tuple _
+         | Types.Tobject _ | Types.Tfield _ | Types.Tnil | Types.Tvariant _
+         | Types.Tpackage _ | Types.Tquote _ | Types.Tsplice _
+         | Types.Tof_kind _ ->
+             false)
+       parameters arguments
+
+let load_path_mutex = Mutex.create ()
+
+let with_load_path ~visible ~hidden action =
+  Mutex.lock load_path_mutex;
+  Fun.protect
+    ~finally:(fun () -> Mutex.unlock load_path_mutex)
+    (fun () ->
+      let saved = Load_path.get_paths () in
+      let restore () =
+        Load_path.init ~auto_include:Load_path.no_auto_include
+          ~visible:saved.visible ~hidden:saved.hidden;
+        Envaux.reset_cache ~preserve_persistent_env:false
+      in
+      Fun.protect ~finally:restore (fun () ->
+          let visible =
+            Config.standard_library :: visible |> List.sort_uniq String.compare
+          in
+          Load_path.init ~auto_include:Load_path.no_auto_include ~visible
+            ~hidden;
+          Envaux.reset_cache ~preserve_persistent_env:false;
+          action ()))
+
+let external_source ~paths ~type_id ~load_path_visible ~load_path_hidden _env
+    declaration =
+  if
+    declaration.Typedtree.typ_cstrs <> []
+    || declaration.typ_private <> Asttypes.Public
+    || declaration.typ_kind <> Typedtree.Ttype_abstract
+  then Error "external type specification proxy is not a transparent alias"
+  else
+    match declaration.typ_manifest with
+    | Some
+        ({ ctyp_desc = Typedtree.Ttyp_constr (target_path, _, arguments); _ } as
+         manifest)
+      when direct_type_parameters declaration.typ_params arguments -> (
+        let target =
+          with_load_path ~visible:load_path_visible ~hidden:load_path_hidden
+            (fun () ->
+              try
+                let hydrated =
+                  Envaux.env_of_only_summary ~allow_missing_modules:false
+                    manifest.ctyp_env
+                in
+                let canonical_path =
+                  Env.normalize_type_path (Some manifest.ctyp_loc) hydrated
+                    target_path
+                in
+                let target = Env.find_type canonical_path hydrated in
+                let rec representation seen paths path declaration =
+                  if List.exists (Path.same path) seen then
+                    (path, declaration, List.rev paths)
+                  else
+                    match declaration.Types.type_manifest with
+                    | Some manifest_type -> (
+                        match Types.get_desc manifest_type with
+                        | Types.Tconstr (next, arguments, _)
+                          when direct_compiler_parameters
+                                 declaration.type_params arguments -> (
+                            let next =
+                              try
+                                Env.normalize_type_path
+                                  (Some manifest.ctyp_loc) hydrated next
+                              with Env.Error _ -> next
+                            in
+                            if Path.same path next then
+                              (path, declaration, List.rev paths)
+                            else
+                              try
+                                representation (path :: seen) (next :: paths)
+                                  next (Env.find_type next hydrated)
+                              with Not_found | Env.Error _ ->
+                                (path, declaration, List.rev paths))
+                        | Types.Tconstr _ | Types.Tvar _ | Types.Tunivar _
+                        | Types.Tpoly _
+                        | Types.Tlink _ | Types.Tsubst _ | Types.Tarrow _
+                        | Types.Ttuple _ | Types.Tunboxed_tuple _
+                        | Types.Tobject _ | Types.Tfield _ | Types.Tnil
+                        | Types.Tvariant _ | Types.Tpackage _ | Types.Tquote _
+                        | Types.Tsplice _ | Types.Tof_kind _ ->
+                            (path, declaration, List.rev paths))
+                    | None -> (path, declaration, List.rev paths)
+                in
+                let canonical_path, target, representation_paths =
+                  representation [] [ canonical_path ] canonical_path target
+                in
+                Ok (canonical_path, target, representation_paths)
+              with Not_found | Env.Error _ | Envaux.Error _ ->
+                Error
+                  "external type specification target cannot be resolved")
+        in
+        match target with
+        | Error _ as error -> error
+        | Ok (canonical_path, target, representation_paths)
+          when target.Types.type_private = Asttypes.Public
+               && List.length target.Types.type_params
+               = List.length declaration.typ_params ->
+            let target_uid = compiler_uid target.type_uid in
+            let proxy_uid = compiler_uid declaration.typ_type.type_uid in
+            let paths =
+              canonical_path :: target_path :: representation_paths @ paths
+              |> List.sort_uniq Path.compare
+            in
+            Ok
+              {
+                paths;
+                type_id;
+                name = Path.name canonical_path;
+                declaration = target;
+                provenance =
+                  Parametric_adt.External
+                    { compiler_uid = target_uid; proxy_uid; prelude = false };
+                standard = standard_of_path canonical_path;
+              }
+        | Ok (_, target, _)
+          when target.Types.type_private <> Asttypes.Public ->
+            Error "external type specification target is private"
+        | Ok _ ->
+            Error
+              "external type specification target arity differs from its proxy")
+    | Some _ | None ->
+        Error "external type specification proxy is not a direct type alias"
+
+let covers_path (source : source) path =
+  List.exists (fun candidate -> Path.same candidate path) source.paths
+
+let standard_proxy_uid = function
+  | Option -> "verocaml-pervasive:option_specification"
+  | List -> "verocaml-pervasive:list_specification"
+  | Result -> "verocaml-pervasive:result_specification"
+
+let standard_source env standard type_id path name =
   let declaration = Env.find_type path env in
   let compiler_uid = compiler_uid declaration.Types.type_uid in
   let provenance =
-    match standard with
-    | Option -> Parametric_adt.Pinned_option { compiler_uid }
-    | List -> Parametric_adt.Pinned_list { compiler_uid }
-    | Result -> Parametric_adt.Pinned_result { compiler_uid }
+    Parametric_adt.External
+      {
+        compiler_uid;
+        proxy_uid = standard_proxy_uid standard;
+        prelude = true;
+      }
   in
-  let _ = constructor in
   { paths = [ path ]; type_id; name; declaration; provenance; standard = Some standard }
 
 let standard_sources ?(observed_paths = []) env =
@@ -55,24 +228,20 @@ let standard_sources ?(observed_paths = []) env =
   let option =
     standard_source predef_env Option
       { Sst.type_index = -1; type_name = "Stdlib.option" }
-      Predef.path_option "Stdlib.option" Parametric_type.option_constructor
+      Predef.path_option "Stdlib.option"
       |> fun source -> { source with declaration = Env.find_type Predef.path_option predef_env }
   in
   let list =
     standard_source predef_env List
       { Sst.type_index = -2; type_name = "Stdlib.list" }
-      Predef.path_list "Stdlib.list" Parametric_type.list_constructor
+      Predef.path_list "Stdlib.list"
       |> fun source -> { source with declaration = Env.find_type Predef.path_list predef_env }
   in
   let observed path = List.exists (Path.same path) observed_paths in
   let result =
     match
       List.find_opt
-        (function
-          | Path.Pdot (Path.Pident root, "result") ->
-              Ident.same root (Ident.create_persistent "Stdlib")
-          | Path.Pident _ | Path.Pdot _ | Path.Papply _ | Path.Pextra_ty _ ->
-              false)
+        is_stdlib_result_path
         observed_paths
     with
     | None -> []
@@ -104,7 +273,13 @@ let standard_sources ?(observed_paths = []) env =
             type_id = { Sst.type_index = -3; type_name = "Stdlib.result" };
             name = "Stdlib.result";
             declaration;
-            provenance = Parametric_adt.Pinned_result { compiler_uid };
+            provenance =
+              Parametric_adt.External
+                {
+                  compiler_uid;
+                  proxy_uid = standard_proxy_uid Result;
+                  prelude = true;
+                };
             standard = Some Result;
           };
         ]

@@ -14,6 +14,17 @@ val local_source :
   Typedtree.type_declaration ->
   source
 
+val external_source :
+  paths:Path.t list ->
+  type_id:Sst.type_id ->
+  load_path_visible:string list ->
+  load_path_hidden:string list ->
+  Env.t ->
+  Typedtree.type_declaration ->
+  (source, string) result
+
+val covers_path : source -> Path.t -> bool
+
 val standard_sources :
   ?observed_paths:Path.t list -> Env.t -> (source list, string) result
 

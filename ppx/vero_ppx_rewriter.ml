@@ -9,6 +9,8 @@ let proof_attribute = "verocaml.proof"
 let axiom_attribute = "verocaml.axiom"
 let type_invariant_attribute = "verocaml.type_invariant"
 let external_specification_attribute = "verocaml.external_specification"
+let external_type_specification_attribute =
+  "verocaml.external_type_specification"
 let external_body_attribute = "verocaml.external_body"
 let opaque_attribute = "verocaml.opaque"
 let revealed_attribute = "verocaml.revealed"
@@ -22,6 +24,8 @@ let internal_finite_formal_prefix = internal_prefix ^ "finite_formal."
 let family_prefix = internal_prefix ^ "artifact_family."
 let verification_scope_prefix = internal_prefix ^ "verification_scope."
 let explicit_compiler_mode_marker = internal_prefix ^ "compiler_mode_syntax"
+let external_type_specification_marker =
+  internal_prefix ^ "external_type_specification.v1"
 
 type declaration_role = {
   attribute_name : string;
@@ -139,6 +143,9 @@ let verification_scope_marker ~loc =
 
 let explicit_compiler_mode_attribute ~loc =
   internal_attribute ~loc explicit_compiler_mode_marker
+
+let retained_external_type_specification_attribute ~loc =
+  internal_attribute ~loc external_type_specification_marker
 
 let public_verification_scope attribute =
   String.equal attribute.attr_name.txt verification_scope_attribute
@@ -1725,6 +1732,52 @@ let instance_mode_mapper ~keep_ghost =
 
   and rewrite_type_declaration self ~keep_ghost declaration =
     List.iter reject_reserved_attribute declaration.ptype_attributes;
+    let external_type_specifications, declaration_attributes =
+      List.partition
+        (fun attribute ->
+          String.equal attribute.attr_name.txt
+            external_type_specification_attribute)
+        declaration.ptype_attributes
+    in
+    List.iter validate_empty_attribute external_type_specifications;
+    let external_type_specification =
+      match external_type_specifications with
+      | [] -> false
+      | [ _ ] -> true
+      | duplicate :: _ ->
+          Location.raise_errorf ~loc:duplicate.attr_loc
+            "duplicate [@@%s] attribute"
+            external_type_specification_attribute
+    in
+    let () =
+      if external_type_specification then
+        let direct_parameter argument =
+          match argument.ptyp_desc with
+          | Ptyp_var (name, _) -> Some name
+          | _ -> None
+        in
+        let declared_parameters =
+          List.map (fun (parameter, _) -> direct_parameter parameter)
+            declaration.ptype_params
+        in
+        let target_parameters =
+          match declaration.ptype_manifest with
+          | Some { ptyp_desc = Ptyp_constr (_, arguments); _ } ->
+              List.map direct_parameter arguments
+          | Some _ | None -> []
+        in
+        if
+          declaration.ptype_kind <> Ptype_abstract
+          || declaration.ptype_private <> Public
+          || declaration.ptype_cstrs <> []
+          || List.exists Option.is_none declared_parameters
+          || declared_parameters <> target_parameters
+        then
+          Location.raise_errorf ~loc:declaration.ptype_loc
+            "[@@%s] requires a public transparent type alias whose target uses \
+             each declared type parameter once in declaration order"
+            external_type_specification_attribute
+    in
     let rewrite_label label =
       List.iter reject_reserved_attribute label.pld_attributes;
       let mode, attributes =
@@ -1805,8 +1858,13 @@ let instance_mode_mapper ~keep_ghost =
             ::
             (if keep_ghost then
                type_mode_signature_attribute declaration
-               :: declaration.ptype_attributes
-             else declaration.ptype_attributes);
+               ::
+               (if external_type_specification then
+                  retained_external_type_specification_attribute
+                    ~loc:declaration.ptype_loc
+                  :: self.attributes self declaration_attributes
+                else self.attributes self declaration_attributes)
+             else self.attributes self declaration_attributes);
         })
       kind
 

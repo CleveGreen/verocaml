@@ -237,11 +237,7 @@ let seal_local_schemas ~implementation ~program =
           !capabilities;
       let program_snapshot = Sst.to_string program in
       program.parametric_adts
-      |> List.filter (fun descriptor ->
-             match Parametric_adt.provenance descriptor with
-             | Parametric_adt.Local _ | Pinned_list _ ->
-                 supported_schema descriptor
-             | Pinned_option _ | Pinned_result _ -> false)
+      |> List.filter supported_schema
       |> List.iter (fun descriptor ->
              let schema_digest =
                digest

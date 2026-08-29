@@ -3,7 +3,7 @@ option/list/result and user generic variants, records, and branching trees.
 
   $ mkdir artifacts
   $ retained () { name=$1; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -I artifacts -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$name.cmo" "fixtures/$name.ml"; }
-  $ for n in structures equality proof_matrix descriptor_laws wrong_constructor_result swapped_record open_equality recursive_equality unit_payload_equality function_payload_equality ref_payload_equality array_payload_equality unauthenticated_descent changed_recursive_arguments generic_mutual mutable_generic alpha_a alpha_b; do retained "$n"; done
+  $ for n in structures equality proof_matrix generic_option_spec_contract generic_option_spec_binder_mismatch generic_repeated_binder_mismatch descriptor_laws wrong_constructor_result swapped_record open_equality recursive_equality unit_payload_equality function_payload_equality ref_payload_equality array_payload_equality unauthenticated_descent changed_recursive_arguments generic_mutual mutable_generic alpha_a alpha_b; do retained "$n"; done
 
 A type-changing callback relation over option payloads keeps distinct input and
 output binders and verifies identically from source and retained CMT.
@@ -25,14 +25,32 @@ output binders and verifies identically from source and retained CMT.
   $ cmp artifacts/structures-source.semantic artifacts/structures-cmt.semantic
   $ cmp artifacts/structures-source.vir artifacts/structures-cmt.vir
 
-The compiler-pinned descriptors and local descriptors share one UID-backed
-registry.  The tree has two authenticated recursive fields and no clone
-function is emitted for multiple payload instantiations.
+Generic option and result predicates may constrain an inferred ensures binder.
+The PPX-side binder is intentionally more general than the callable's concrete
+result, so the retained carrier must authenticate the compiler-compatible
+instance before lowering it as the exact result type.
+
+  $ OCAML_COLOR=never ../../src/verocaml.exe verify fixtures/generic_option_spec_contract.ml --threads 1 --timeout-ms 10000
+  verocaml: verified file=fixtures/generic_option_spec_contract.ml functions=2 obligations=4
+  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/generic_option_spec_contract.cmt --threads 2 --timeout-ms 10000
+  verocaml: verified file=artifacts/generic_option_spec_contract.cmt functions=2 obligations=4
+
+A concrete mismatch and an inconsistent repeated inferred variable are rejected
+while authenticating the result binder; neither can relabel the callable's
+actual result type.
+
+  $ for name in generic_option_spec_binder_mismatch generic_repeated_binder_mismatch; do code=0; OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$name.cmt" --threads 1 --timeout-ms 10000 >"artifacts/$name.out" 2>&1 || code=$?; test "$code" = 2; printf '%s: ' "$name"; grep -o 'error\[VERO_[A-Z_]*\]' "artifacts/$name.out"; done
+  generic_option_spec_binder_mismatch: error[VERO_MALFORMED_GHOST_CALL]
+  generic_repeated_binder_mismatch: error[VERO_MALFORMED_GHOST_CALL]
+
+The standard external specifications and local descriptors share one
+UID-backed registry.  The tree has two authenticated recursive fields and no
+clone function is emitted for multiple payload instantiations.
 
   $ ./parametric_adts_tool.exe descriptors artifacts/structures.cmt | sed -E 's/uid=[^ ]+/uid=<uid>/'
-  adt Stdlib.option<'0@Stdlib.option#-1> uid=<uid> provenance=pinned-option binders=1 variant[0:None()|1:Some(0:$0:'0@Stdlib.option#-1)] recursive-fields=0
-  adt Stdlib.list<'0@Stdlib.list#-2> uid=<uid> provenance=pinned-list binders=1 variant[0:[]()|1:::(0:$0:'0@Stdlib.list#-2,1:$1:Stdlib.list<'0@Stdlib.list#-2>)] recursive-fields=1
-  adt Stdlib.result<'0@Stdlib.result#-3, '1@Stdlib.result#-3> uid=<uid> provenance=pinned-result binders=2 variant[0:Ok(0:$0:'0@Stdlib.result#-3)|1:Error(0:$0:'1@Stdlib.result#-3)] recursive-fields=0
+  adt Stdlib.option<'0@Stdlib.option#-1> uid=<uid> provenance=external-type-specification binders=1 variant[0:None()|1:Some(0:$0:'0@Stdlib.option#-1)] recursive-fields=0
+  adt Stdlib.list<'0@Stdlib.list#-2> uid=<uid> provenance=external-type-specification binders=1 variant[0:[]()|1:::(0:$0:'0@Stdlib.list#-2,1:$1:Stdlib.list<'0@Stdlib.list#-2>)] recursive-fields=1
+  adt Stdlib.result<'0@Stdlib.result#-3, '1@Stdlib.result#-3> uid=<uid> provenance=external-type-specification binders=2 variant[0:Ok(0:$0:'0@Stdlib.result#-3)|1:Error(0:$0:'1@Stdlib.result#-3)] recursive-fields=0
   adt box<'0@box#0> uid=<uid> provenance=local binders=1 variant[0:Box(0:$0:'0@box#0)] recursive-fields=0
   adt pair<'0@pair#1> uid=<uid> provenance=local binders=1 record{0:left:'0@pair#1;1:right:'0@pair#1} recursive-fields=0
   adt tree<'0@tree#2> uid=<uid> provenance=local binders=1 variant[0:Leaf()|1:Node(0:$0:'0@tree#2,1:$1:tree<'0@tree#2>,2:$2:tree<'0@tree#2>)] recursive-fields=2
@@ -48,8 +66,9 @@ function is emitted for multiple payload instantiations.
   function tree_height#11 binders=['0@tree_height#11] mode=exec recursive=true result=int
   $ test "$(grep -c '^function [^#]*<parameter' artifacts/structures-source.sst)" = 0
 
-Closed local and exact pinned Stdlib int-option equality, inequality, aliases,
-conditionals, matches, selectors, and the complete bool/int scalar layout verify.
+Closed local and externally specified Stdlib int-option equality, inequality,
+aliases, conditionals, matches, selectors, and the complete bool/int scalar
+layout verify.
 
   $ OCAML_COLOR=never ../../src/verocaml.exe verify fixtures/equality.ml --threads 1 --timeout-ms 10000 --dump-sst artifacts/equality-source.sst --dump-vir artifacts/equality-source.vir
   verocaml: verified file=fixtures/equality.ml functions=7 obligations=25
@@ -105,8 +124,8 @@ generic recursion/mutation reject before solver/private-receipt work.
   mutable_generic: error[VERO_UNSUPPORTED_MUTATION]
 
 Pure descriptor construction rejects malformed binder, constructor, field, and
-forged pinned-standard identity directly at [Parametric_adt.create], before the
-forgery can reach SST, VIR, VC, backend, solver, or Z3 work.
+external proxy identity directly at [Parametric_adt.create], before malformed
+state can reach SST, VIR, VC, backend, solver, or Z3 work.
 
   $ ./parametric_adts_tool.exe descriptor-unit artifacts/structures.cmt
   canonical-local accepted
@@ -115,14 +134,10 @@ forgery can reach SST, VIR, VC, backend, solver, or Z3 work.
   constructor-order rejected: constructors must have dense zero-based indices
   field-order rejected: constructor Box fields must have dense zero-based indices
   field-template rejected: constructor Box field template escapes descriptor binders
-  forged-option rejected: binders must belong to the descriptor type identity
+  empty-external-proxy rejected: external proxy compiler identity is empty
   canonical-option name=Stdlib.option uid=<predef:option> accepted
   canonical-list name=Stdlib.list uid=<predef:list> accepted
   canonical-result name=Stdlib.result uid=[intf]Stdlib.214 accepted
-  forged-option-name name=<forged:option> uid=<predef:option> rejected: pinned standard descriptor shape or identity mismatch
-  forged-list-name name=<forged:list> uid=<predef:list> rejected: pinned standard descriptor shape or identity mismatch
-  forged-result-name name=<forged:result-name> uid=[intf]Stdlib.214 rejected: pinned standard descriptor shape or identity mismatch
-  forged-result name=Stdlib.result uid=<forged:result> rejected: pinned standard descriptor shape or identity mismatch
   descriptor-boundary=Parametric_adt.create downstream=none backend-delta=0 z3-delta=0
 
 Repeated, copied, alpha-renamed, and serial/threaded artifacts are stable.

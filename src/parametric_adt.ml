@@ -1,8 +1,10 @@
 type provenance =
   | Local of { compiler_uid : string }
-  | Pinned_option of { compiler_uid : string }
-  | Pinned_list of { compiler_uid : string }
-  | Pinned_result of { compiler_uid : string }
+  | External of {
+      compiler_uid : string;
+      proxy_uid : string;
+      prelude : bool;
+    }
 
 type field = {
   field_index : int;
@@ -57,14 +59,12 @@ let authenticates_recursive_field descriptor ~constructor_index ~field_index =
 
 let compiler_uid descriptor =
   match descriptor.provenance with
-  | Local { compiler_uid }
-  | Pinned_option { compiler_uid }
-  | Pinned_list { compiler_uid }
-  | Pinned_result { compiler_uid } ->
-      compiler_uid
+  | Local { compiler_uid } | External { compiler_uid; _ } -> compiler_uid
 
 let is_standard descriptor =
-  match descriptor.provenance with Local _ -> false | _ -> true
+  match descriptor.provenance with
+  | Local _ | External { prelude = false; _ } -> false
+  | External { prelude = true; _ } -> true
 
 let error type_constructor message =
   Error { descriptor = type_constructor.Parametric_type.constructor_path; message }
@@ -113,84 +113,17 @@ let binder_matches_type type_id binder =
   binder.Parametric_type.owner.owner_index = type_id.Parametric_type.type_index
   && String.equal binder.owner.owner_name type_id.type_name
 
-let immutable_field field = not field.field_mutable
-
-let parameter_field binder = function
-  | { field_index = 0; field_type = Parametric_type.Parameter candidate; _ } as field ->
-      immutable_field field
-      && Parametric_type.compare_binder binder candidate = 0
-  | _ -> false
-
-let self_field type_constructor binder = function
-  | { field_index = 1;
-      field_type = Parametric_type.Application (constructor, [ Parameter candidate ]);
-      _ } as field ->
-      immutable_field field
-      && Parametric_type.compare_constructor type_constructor constructor = 0
-      && Parametric_type.compare_binder binder candidate = 0
-  | _ -> false
-
-let standard_type_id_coherent provenance type_id =
-  let matches ~index constructor =
-    type_id.Parametric_type.type_index = index
-    && String.equal type_id.type_name constructor.Parametric_type.constructor_path
-  in
-  match provenance with
-  | Local _ -> true
-  | Pinned_option _ -> matches ~index:(-1) Parametric_type.option_constructor
-  | Pinned_list _ -> matches ~index:(-2) Parametric_type.list_constructor
-  | Pinned_result _ -> matches ~index:(-3) Parametric_type.result_constructor
-
-let validate_standard_shape descriptor =
-  let matches constructor expected =
-    Parametric_type.compare_constructor constructor expected = 0
-  in
-  let valid =
-    match
-      ( descriptor.provenance,
-        descriptor.type_constructor,
-        descriptor.binders,
-        descriptor.kind )
-    with
-    | ( Pinned_option { compiler_uid }, constructor, [ binder ],
-        Variant
-          [ { constructor_index = 0; constructor_fields = []; _ };
-            { constructor_index = 1; constructor_fields = [ payload ]; _ } ] ) ->
-        String.equal compiler_uid "<predef:option>"
-        && matches constructor Parametric_type.option_constructor
-        && parameter_field binder payload
-    | ( Pinned_list { compiler_uid }, constructor, [ binder ],
-        Variant
-          [ { constructor_index = 0; constructor_fields = []; _ };
-            { constructor_index = 1;
-              constructor_fields = [ payload; rest ]; _ } ] ) ->
-        String.equal compiler_uid "<predef:list>"
-        && matches constructor Parametric_type.list_constructor
-        && parameter_field binder payload
-        && self_field constructor binder rest
-    | ( Pinned_result { compiler_uid }, constructor,
-        [ ok_binder; error_binder ],
-        Variant
-          [ { constructor_index = 0; constructor_fields = [ ok ]; _ };
-            { constructor_index = 1; constructor_fields = [ error ]; _ } ] ) ->
-        String.equal compiler_uid Trusted_imports.stdlib_result_uid
-        && matches constructor Parametric_type.result_constructor
-        && parameter_field ok_binder ok
-        && parameter_field error_binder error
-    | Local _, _, _, _ -> true
-    | (Pinned_option _ | Pinned_list _ | Pinned_result _), _, _, _ -> false
-  in
-  if valid then Ok ()
-  else error descriptor.type_constructor "pinned standard descriptor shape or identity mismatch"
-
 let create ~type_id ~type_constructor ~binders ~provenance ~kind =
   let descriptor_name = type_constructor.Parametric_type.constructor_path in
   let fail message = error type_constructor message in
   if type_constructor.constructor_identity = "" then fail "type constructor identity is empty"
   else if compiler_uid { type_id; type_constructor; binders; provenance; kind; recursive_fields = [] } = "" then
     fail "compiler type UID is empty"
-  else if not (standard_type_id_coherent provenance type_id) then
-    fail "pinned standard descriptor shape or identity mismatch"
+  else if
+    match provenance with
+    | External { proxy_uid; _ } -> String.equal proxy_uid ""
+    | Local _ -> false
+  then fail "external proxy compiler identity is empty"
   else if
     List.mapi (fun ordinal binder -> ordinal = binder.Parametric_type.ordinal) binders
     |> List.exists not
@@ -239,9 +172,7 @@ let create ~type_id ~type_constructor ~binders ~provenance ~kind =
           { type_id; type_constructor; binders; provenance; kind; recursive_fields }
         in
         let _ = descriptor_name in
-        (match validate_standard_shape descriptor with
-        | Ok () -> Ok descriptor
-        | Error _ as error -> error)
+        Ok descriptor
 
 let find descriptors constructor =
   List.find_opt
@@ -253,8 +184,7 @@ let option_instance descriptors = function
   | Parametric_type.Application (constructor, arguments) -> (
       match find descriptors constructor with
       | Some
-          ({ provenance = Pinned_option _;
-             binders = [ binder ];
+          ({ binders = [ binder ];
              kind =
                Variant
                  [ ({ constructor_index = 0; constructor_fields = []; _ } as absent);
@@ -263,7 +193,11 @@ let option_instance descriptors = function
                         [ { field_index = 0; field_type; field_mutable = false; _ } ];
                       _ } as present) ];
              _ } as descriptor)
-        when Parametric_type.equal field_type (Parametric_type.Parameter binder)
+        when Parametric_type.compare_constructor constructor
+               Parametric_type.option_constructor
+             = 0
+             && Parametric_type.equal field_type
+                  (Parametric_type.Parameter binder)
              && List.length arguments = 1 -> (
           match Parametric_type.instantiate descriptor.binders arguments
                   (List.hd present.constructor_fields).field_type with
@@ -375,9 +309,7 @@ let exec_scalar_layout descriptors typ =
              && deeply_immutable_instance descriptors typ -> (
           let eligible_provenance =
             match descriptor.provenance with
-            | Local _ -> true
-            | Pinned_option _ -> Option.is_some (option_instance descriptors typ)
-            | Pinned_list _ | Pinned_result _ -> false
+            | Local _ | External _ -> true
           in
           match (eligible_provenance, descriptor.kind) with
           | true, Variant constructors ->
@@ -408,9 +340,7 @@ let exec_scalar_equality descriptors typ =
 
 let provenance_name = function
   | Local _ -> "local"
-  | Pinned_option _ -> "pinned-option"
-  | Pinned_list _ -> "pinned-list"
-  | Pinned_result _ -> "pinned-result"
+  | External _ -> "external-type-specification"
 
 let to_string descriptor =
   let field field =
