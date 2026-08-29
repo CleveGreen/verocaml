@@ -3215,9 +3215,9 @@ let rec evaluate context expression state =
                          "unique returned parameter has a non-record result")
                 | None, _, _ -> Ok state
               in
-              (* VERO-035 deliberately does not turn a verified callee result
-                 into instance authority.  That receipt protocol remains the
-                 unresolved VERO-032 boundary. *)
+              (* A verified callee result does not confer instance authority;
+                 call-result and transition evidence require their own
+                 authenticated protocol. *)
               let result_boundary, state = ([], state) in
               let actual_entry = actual_environment in
               let rec assume_posts states = function

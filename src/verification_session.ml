@@ -8999,7 +8999,7 @@ let counters session : counters =
     finite_parent_issuances = finite.parent_issuances;
     finite_child_derivations = finite.child_derivations;
     finite_result_promotions = finite.result_promotions;
-    (* Retain the pre-VERO-046 source-witness observation for existing
+    (* Retain the source-witness observation for existing
        private gates; path-level promotion has its own counter below. *)
     finite_result_witness_records = session.counters.finite_result_manifests;
     finite_result_path_records = lifecycle.exits_recorded;

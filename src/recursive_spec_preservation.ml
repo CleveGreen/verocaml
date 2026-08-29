@@ -1,4 +1,3 @@
-(* VERO-065 finite-expression module: begin *)
 module Finite_expression = struct
   type origin =
     | Exact_formal
@@ -447,7 +446,6 @@ module Finite_expression = struct
   let immutable_recursive_spec_checker_entry =
     "Recursive_spec_preservation.Finite_expression.check_immutable_recursive_spec"
 end
-(* VERO-065 finite-expression module: end *)
 
 type capability = {
   issuer : unit ref;

@@ -2065,7 +2065,6 @@ let authorize_finite_formal_call context ~callee_definition ~arguments
         consume batches
       in
       Ok paths
-(* VERO-065 direct-recursion-induction module: begin *)
 module Direct_recursion_induction = struct
   type prepared = {
     context : Finite_induction.context option;
@@ -2273,8 +2272,6 @@ module Direct_recursion_induction = struct
               (Malformed_sst
                  "finite induction result lacks private session identity"))
 end
-(* VERO-065 direct-recursion-induction module: end *)
-(* VERO-065 finite-result-integration module: begin *)
 module Finite_result_integration = struct
   let consume_published context ~demanded ~recursive
       ~(callee_definition : Sst.function_definition) ~call_span result state =
@@ -2414,7 +2411,6 @@ module Finite_result_integration = struct
           | Aggregate_value _ | Parametric_value _ | Function_value _ ) ) ->
           Ok state
 end
-(* VERO-065 finite-result-integration module: end *)
 let current_shared_epoch state =
   match state.shared_scalar_heap with
   | Some heap -> Shared_scalar_heap_private.current_epoch heap
@@ -2470,7 +2466,6 @@ let authorize_frozen_formal_call context
             (Malformed_sst
                "frozen-spine call requires the private verification session")
         else Ok ()
-(* VERO-065 immutable-fact-integration module: begin *)
 module Immutable_fact_integration = struct
   let rec ranked_children typ value =
     match (typ, value) with
@@ -2705,8 +2700,32 @@ module Immutable_fact_integration = struct
         _ ) ->
         error context.function_ref.function_name span
           (Malformed_sst "finite successful-pattern value mismatch")
+  let rec derive_finite_ephemeral_pattern context span state
+      (expression : Sst.expression) (pattern : Sst.pattern) value =
+    match
+      (expression.expression_desc, pattern.pattern_desc, value)
+    with
+    | Sst.Tuple_value expressions, Sst.Tuple_pattern patterns,
+      Tuple_value values
+      when List.length expressions = List.length patterns
+           && List.length patterns = List.length values ->
+        List.fold_left2
+          (fun result ((_, expression), (_, pattern)) value ->
+            let* state = result in
+            derive_finite_ephemeral_pattern context span state expression
+              pattern value)
+          (Ok state) (List.combine expressions patterns) values
+    | _, _, Aggregate_value parent ->
+        let* mode = expression_instance_mode context expression in
+        derive_finite_pattern context span state ~parent ~mode pattern value
+    | Sst.Tuple_value _, Sst.Tuple_pattern _, Tuple_value _ ->
+        error context.function_ref.function_name span
+          (Malformed_sst "finite ephemeral tuple pattern arity mismatch")
+    | _, _,
+      ( Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _
+      | Parametric_value _ | Function_value _ ) ->
+        Ok state
 end
-(* VERO-065 immutable-fact-integration module: end *)
 let path_condition_has_direct_contradiction conditions =
   List.exists
     (function
@@ -6152,8 +6171,13 @@ let rec evaluate context expression state =
                         Immutable_fact_integration.derive_finite_pattern context
                           case.case_span matched ~parent:aggregate ~mode
                           case.case_pattern scrutinee_value
+                    | Tuple_value _ ->
+                        Immutable_fact_integration
+                        .derive_finite_ephemeral_pattern context case.case_span
+                          matched scrutinee_expression case.case_pattern
+                          scrutinee_value
                     | Unit_value | Integer_value _ | Boolean_value _
-                    | Tuple_value _ | Parametric_value _ | Function_value _ ->
+                    | Parametric_value _ | Function_value _ ->
                         Ok matched
                   in
                   let matched = add_pattern_bindings matched bindings in
@@ -10217,12 +10241,7 @@ and evaluate_local_assertion context expression assertion_ordinal predicate
             error function_name expression.span (Malformed_sst message)
       in
       let proof_activations = evaluated.state.proof_activations in
-      let local_state =
-        {
-          evaluated.state with
-          proof_activations = evaluated.state.reached_proof_activations;
-        }
-      in
+      let local_state = evaluated.state in
       let obligation, state =
         emit_goal context.function_ref
           (Vir.Local_assertion { local_assertion_ordinal = assertion_ordinal })
@@ -10284,12 +10303,21 @@ and evaluate_local_assertion context expression assertion_ordinal predicate
         obligations = append evaluated.obligations emitted.obligations;
         paths = emitted.paths;
       }
-and evaluate_formula_root context identity (expression : Sst.expression) state =
+and evaluate_formula_root ?(strict = true) context identity
+    (expression : Sst.expression) state =
   match List.find_opt (fun (entry : Logical_spec_admission_private.registry_entry) -> entry.identity = identity) context.formula_registry with
   | None -> error context.function_ref.function_name expression.span (Malformed_sst "formula root has no exact authenticated registry token")
   | Some ({ disposition = Logical_spec_admission_private.Abstain reason; _ } : Logical_spec_admission_private.registry_entry) ->
       Logical_spec_capability_private.For_testing.trace_abstention identity ~reason
         ~authority_snapshot:(Option.fold ~none:"none" ~some:Verification_session.render_counters context.verification_session);
+      evaluate context expression state
+  | Some ({ disposition = Logical_spec_admission_private.Eligible _; _ } : Logical_spec_admission_private.registry_entry)
+    when not strict ->
+      Logical_spec_capability_private.For_testing.trace_abstention identity
+        ~reason:"instantiated-generic-contract"
+        ~authority_snapshot:
+          (Option.fold ~none:"none" ~some:Verification_session.render_counters
+             context.verification_session);
       evaluate context expression state
   | Some ({ root = formula_root; disposition = Logical_spec_admission_private.Eligible permit; _ } : Logical_spec_admission_private.registry_entry) ->
       evaluate_permitted_formula context identity state formula_root permit
@@ -10304,7 +10332,19 @@ and evaluate_permitted_formula context identity state formula_root permit =
   if before <> after then error function_name formula_root.span (Malformed_sst "permitted invariant-contract formula changed authority state")
   else (Logical_spec_capability_private.For_testing.trace_evaluation identity ~function_name ~authority_unchanged:true; Ok { obligations = []; paths = [ { value; state } ] })
 and evaluate_contract_formula_root context definition clause_kind ordinal expression state =
-  evaluate_formula_root context (Logical_spec_admission_private.contract_identity definition clause_kind ordinal) expression state
+  let identity =
+    Logical_spec_admission_private.contract_identity definition clause_kind
+      ordinal
+  in
+  let exact_root =
+    List.exists
+      (fun (entry : Logical_spec_admission_private.registry_entry) ->
+        entry.identity = identity && entry.root == expression)
+      context.formula_registry
+  in
+  evaluate_formula_root
+    ~strict:(definition.type_binders = [] || exact_root)
+    context identity expression state
 and evaluate_invariant_predicate context handle value state =
   let function_name = context.function_ref.function_name in
   let predicate = Type_invariant.predicate_definition handle in
@@ -13581,8 +13621,8 @@ let prepare_program ~imports ~session ~validated ~invariants
       collect [] finite_demand_rows
     in
     let finite_dependencies =
-      (* An invariant-bearing result was already a finite-result transfer
-         demand before VERO-046.  Keep that established edge when the callee
+      (* An invariant-bearing result is already a finite-result transfer
+         demand.  Keep that established edge when the callee
          also satisfies the stricter finite-result eligibility predicate;
          invariant and finite completion remain independently authorized. *)
       List.fold_left

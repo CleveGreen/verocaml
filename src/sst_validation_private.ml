@@ -3725,15 +3725,18 @@ let validate_spec_graph functions =
       definition expression =
   let function_id = definition.Sst.function_id in
   let ranked_shape_domain = ref None in
-  let admitted_value_type typ =
+  let rec admitted_value_type typ =
     if Parametric_adt.deeply_immutable_instance parametric_adts typ then true
     else if definition.recursive then
       locally_ranked_type rank_domains typ
       ||
       match typ with
+      | Sst.Tuple components ->
+          List.for_all
+            (fun (_, component) -> admitted_value_type component)
+            components
       | Sst.Aggregate _ -> is_logical_type types typ
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
-      | Sst.Application _ ->
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Parameter _ | Sst.Application _ ->
           false
     else
       admit_rank_backed_logical_shape ~rank_domains ~parametric_adts types
@@ -3835,6 +3838,8 @@ let validate_spec_graph functions =
             invalid_sst = (fun _ -> reject ());
           }
           ~function_id expression quantifier
+    | Sst.Tuple_value components when admitted_value_type expression.typ ->
+        iter_result (fun (_, component) -> loop component) components
     | Sst.Constructor_value { arguments; _ }
       when admitted_value_type expression.typ ->
         iter_result loop arguments

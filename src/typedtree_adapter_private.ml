@@ -1155,7 +1155,7 @@ module Public = struct
               List.exists contains_helper_call
                 (recursive_helper_expression_children expression)
         in
-        (* Preserve the exact pre-VERO-047 body when there is nothing to expand. *)
+        (* Preserve the exact body when there is nothing to expand. *)
         if not (contains_helper_call root_body) then (
           certificate.helper_expanded_body <- Some root_body;
           Ok root_body)
@@ -4000,6 +4000,7 @@ module Public = struct
     | None -> (
         let normalized =
           match expression.exp_desc with
+          | Texp_assert _ -> Ok Sst.Unit
           | Texp_apply (callee, arguments, _, _, _) -> (
               match ghost_call context "old" expression with
               | Some (_, _, argument) ->

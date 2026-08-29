@@ -291,7 +291,7 @@ let rec rewrite_signature_result self ~keep_ghost ~stage typ =
       let mode, finite, typ = signature_on_type typ in
       if finite then
         Location.raise_errorf ~loc:typ.ptyp_loc
-          "finite result contracts are not supported by VERO-040";
+          "finite result contracts are not supported";
       validate_signature_mode ~stage ~loc:typ.ptyp_loc mode;
       let typ = Ast_mapper.default_mapper.typ self typ in
       ([ mode ], [], typ)
@@ -1961,7 +1961,7 @@ let instance_mode_mapper ~keep_ghost =
                   let result_mode, finite, typ = signature_on_type typ in
                   if finite then
                     Location.raise_errorf ~loc:typ.ptyp_loc
-                      "finite result contracts are not supported by VERO-040";
+                      "finite result contracts are not supported";
                   (result_mode, { constraint_ with ret_type_constraint =
                     Some (Pconstraint (self.typ self typ)) })
               | Some (Pcoerce (source, target)) ->

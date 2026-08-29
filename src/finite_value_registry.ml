@@ -1,4 +1,3 @@
-(* VERO-065 finite-domain module: begin *)
 module Finite_domain = struct
   type program_identity = {
     unit_identity : string;
@@ -140,9 +139,7 @@ module Finite_domain = struct
   let origin fact = fact.origin
   let same_fact left right = left.token == right.token
 end
-(* VERO-065 finite-domain module: end *)
 
-(* VERO-065 direct-candidate module: begin *)
 module Direct_candidate = struct
   type candidate = {
     issuer : unit ref;
@@ -469,7 +466,6 @@ module Direct_candidate = struct
       consumptions = lifecycle.counters.consumptions;
     }
 end
-(* VERO-065 direct-candidate module: end *)
 
 
 type program_identity = Finite_domain.program_identity = {

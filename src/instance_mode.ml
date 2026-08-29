@@ -1344,7 +1344,7 @@ let validate program =
                     | _ -> owner)
             then
               fail definition expression.span
-                "invariant-bearing erased-field update awaits VERO-032"
+                "invariant-bearing erased-field updates are not supported"
             else pure_erased value
       | Sst.Let (bindings, body) ->
           let rec bindings_loop = function

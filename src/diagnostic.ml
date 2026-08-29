@@ -221,7 +221,7 @@ let code_and_message = function
           )
       | Unsupported_logical_quantifier ->
           ( "VERO_UNSUPPORTED_LOGICAL_QUANTIFIER",
-            "forall and exists are authenticated but require VERO-104" ))
+            "forall and exists are authenticated but unavailable here" ))
 
 let make classification span =
   let code, message = code_and_message classification in
