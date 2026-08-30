@@ -424,20 +424,22 @@ module For_testing = struct
 
   let trace_profile identity outcome =
     if tracing () then
-      Printf.eprintf "formula-profile %s %s\n"
-        (root_identity_to_string identity) outcome
+      [%log.info "formula profile"
+        ~root:(Delator.Field.string (root_identity_to_string identity))
+        ~outcome:(Delator.Field.string outcome)]
 
   let trace_registry ~unchanged ~entries =
     registry_unchanged := unchanged;
     if tracing () then
-      Printf.eprintf
-        "formula-registry construction authority-delta=%s entries=%d\n"
-        (if unchanged then "zero" else "nonzero") entries
+      [%log.info "formula registry constructed"
+        ~authority_unchanged:(Delator.Field.bool unchanged)
+        ~entries:(Delator.Field.int entries)]
 
   let trace_authority function_name =
     if tracing () then
-      Printf.eprintf "formula-authority function=%s registry-zero=%b\n"
-        function_name !registry_unchanged
+      [%log.info "formula authority observed"
+        ~function_name:(Delator.Field.string function_name)
+        ~registry_unchanged:(Delator.Field.bool !registry_unchanged)]
 
   let trace_abstention identity ~reason ~authority_snapshot =
     if tracing () then
@@ -448,21 +450,25 @@ module For_testing = struct
             = root_identity_to_string identity)
           !formula_observations
       in
-      Printf.eprintf
-        "formula-abstention root=%s reason=%s formula-events-before=%d \
-         formula-events-before-fallback=%d authority-before=%S \
-         authority-before-fallback=%S authority-equal=%b fallback=unchanged\n"
-        (root_identity_to_string identity) reason before.events_before
-        (event_count identity) before.authority_before authority_snapshot
-        (String.equal before.authority_before authority_snapshot)
+      [%log.info "formula abstention"
+        ~root:(Delator.Field.string (root_identity_to_string identity))
+        ~reason:(Delator.Field.string reason)
+        ~formula_events_before:(Delator.Field.int before.events_before)
+        ~formula_events_before_fallback:(Delator.Field.int (event_count identity))
+        ~authority_before:(Delator.Field.string before.authority_before)
+        ~authority_before_fallback:(Delator.Field.string authority_snapshot)
+        ~authority_equal:
+          (Delator.Field.bool
+             (String.equal before.authority_before authority_snapshot))
+        ~fallback_unchanged:(Delator.Field.bool true)]
 
   let trace_evaluation identity ~function_name ~authority_unchanged =
     if tracing () then
-      Printf.eprintf
-        "formula-evaluation root=%s function=%s formula-events=%d \
-         authority-delta=%s\n"
-        (root_identity_to_string identity) function_name (event_count identity)
-        (if authority_unchanged then "zero" else "nonzero")
+      [%log.info "formula evaluation"
+        ~root:(Delator.Field.string (root_identity_to_string identity))
+        ~function_name:(Delator.Field.string function_name)
+        ~formula_events:(Delator.Field.int (event_count identity))
+        ~authority_unchanged:(Delator.Field.bool authority_unchanged)]
 
   let has_model_capability permit =
     List.exists (fun (_, fields) -> fields <> []) permit.model_capabilities
@@ -480,15 +486,26 @@ module For_testing = struct
               };
           }
         in
+        let reason, rejected =
+          match validate_model_capture validated stale with
+          | Error reason -> (reason, true)
+          | Ok () -> ("accepted", false)
+        in
+        [%log.info "formula validator control"
+          ~candidate:(Delator.Field.string "stale-model")
+          ~reason:(Delator.Field.string reason)
+          ~rejected:(Delator.Field.bool rejected)];
         Some
-          (match validate_model_capture validated stale with
-          | Error reason -> "formula-validator candidate=stale-model reason=" ^ reason
-          | Ok () -> "formula-validator candidate=stale-model reason=accepted")
+          (Printf.sprintf "formula-validator candidate=stale-model reason=%s"
+             reason)
     | [] -> None
 
   let rejected = function Error _ -> true | Ok _ -> false
 
   let row name rejected =
+    [%log.info "capability negative control"
+      ~control:(Delator.Field.string name)
+      ~rejected:(Delator.Field.bool rejected)];
     Printf.sprintf "capability-negative %s=%s" name
       (if rejected then "rejected" else "accepted")
 

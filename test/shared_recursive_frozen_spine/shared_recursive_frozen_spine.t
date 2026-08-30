@@ -88,21 +88,24 @@ binding, or replaying one sealed permit, rejects identically from source and
 retained CMT while concrete instance/discharge/observation/descent counters
 stay zero.
 
-  $ attack () { route=$1; input=$2; kind=$3; out="artifacts/observation-$route-$kind.out"; VEROCAML_TEST_FROZEN_OBSERVATION_ATTACK="$kind" VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify "$input" --timeout-ms 10000 >"$out" 2>&1; test $? -eq 2; printf '%s-%s: ' "$route" "$kind"; grep -o 'frozen-spine observation permit call/path mismatch\|frozen-spine observation permit was replayed' "$out"; grep 'private-receipt destroy' "$out" | sed -E 's#.*frozen-template=([0-9]+/[0-9]+) frozen-conditional=([0-9]+/[0-9]+) frozen-instance=([0-9]+/[0-9]+) frozen-discharge=([0-9]+/[0-9]+/[0-9]+) frozen-witness=([0-9]+/[0-9]+/[0-9]+) frozen-observation=([0-9]+/[0-9]+).*#  authority template=\1 conditional=\2 instance=\3 discharge=\4 witness=\5 observation=\6#'; }
+  $ authority () { awk '/Verification_session: private receipt event_kind=destroy / { delete f; for (i = 1; i <= NF; i++) { split($i, pair, "="); if (length(pair[1]) < length($i)) f[pair[1]] = substr($i, length(pair[1]) + 2) } printf "frozen-template=%s/%s frozen-conditional=%s/%s frozen-instance=%s/%s frozen-discharge=%s/%s/%s frozen-witness=%s/%s/%s frozen-observation=%s/%s\n", f["frozen_constructor_template_issuances"], f["frozen_constructor_template_teardowns"], f["frozen_conditional_scope_issuances"], f["frozen_conditional_scope_teardowns"], f["frozen_result_instance_issuances"], f["frozen_result_instance_teardowns"], f["frozen_call_discharge_issuances"], f["frozen_call_discharge_consumptions"], f["frozen_call_discharge_teardowns"], f["frozen_descent_witness_issuances"], f["frozen_descent_witness_consumptions"], f["frozen_descent_witness_teardowns"], f["frozen_observation_consumptions"], f["frozen_observation_teardowns"] }' "$1"; }
+  $ frozen_instances () { awk '/Verification_session: frozen origin instance / { delete f; for (i = 1; i <= NF; i++) { split($i, pair, "="); if (length(pair[1]) < length($i)) f[pair[1]] = substr($i, length(pair[1]) + 2) } printf "frozen origin instance caller=%s callee=%s root=%s epoch=%s\n", f["caller_name"], f["callee_name"], f["root"], f["epoch"] }' "$1"; }
+  $ frozen_discharges () { awk '/Verification_session: frozen origin discharge / { delete f; for (i = 1; i <= NF; i++) { split($i, pair, "="); if (length(pair[1]) < length($i)) f[pair[1]] = substr($i, length(pair[1]) + 2) } printf "frozen origin discharge caller=%s callee=%s formal=%s ordinal=%s root=%s epoch=%s\n", f["caller_name"], f["callee_name"], f["formal_name"], f["formal_ordinal"], f["root"], f["epoch"] }' "$1"; }
+  $ attack () { route=$1; input=$2; kind=$3; out="artifacts/observation-$route-$kind.out"; VEROCAML_TEST_FROZEN_OBSERVATION_ATTACK="$kind" VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify "$input" --timeout-ms 10000 >"$out" 2>&1; test $? -eq 2; printf '%s-%s: ' "$route" "$kind"; grep -o 'frozen-spine observation permit call/path mismatch\|frozen-spine observation permit was replayed' "$out"; authority "$out" | sed 's/^/  authority /'; }
   $ for kind in call path replay; do attack source fixtures/exact_pfc.ml "$kind"; done
   source-call: frozen-spine observation permit call/path mismatch
-    authority template=1/1 conditional=2/2 instance=0/0 discharge=0/0/0 witness=0/0/0 observation=0/0
+    authority frozen-template=1/1 frozen-conditional=2/2 frozen-instance=0/0 frozen-discharge=0/0/0 frozen-witness=0/0/0 frozen-observation=0/0
   source-path: frozen-spine observation permit call/path mismatch
-    authority template=1/1 conditional=2/2 instance=0/0 discharge=0/0/0 witness=0/0/0 observation=0/0
+    authority frozen-template=1/1 frozen-conditional=2/2 frozen-instance=0/0 frozen-discharge=0/0/0 frozen-witness=0/0/0 frozen-observation=0/0
   source-replay: frozen-spine observation permit was replayed
-    authority template=1/1 conditional=2/2 instance=0/0 discharge=0/0/0 witness=0/0/0 observation=0/0
+    authority frozen-template=1/1 frozen-conditional=2/2 frozen-instance=0/0 frozen-discharge=0/0/0 frozen-witness=0/0/0 frozen-observation=0/0
   $ for kind in call path replay; do attack cmt artifacts/exact_pfc.cmt "$kind"; done
   cmt-call: frozen-spine observation permit call/path mismatch
-    authority template=1/1 conditional=2/2 instance=0/0 discharge=0/0/0 witness=0/0/0 observation=0/0
+    authority frozen-template=1/1 frozen-conditional=2/2 frozen-instance=0/0 frozen-discharge=0/0/0 frozen-witness=0/0/0 frozen-observation=0/0
   cmt-path: frozen-spine observation permit call/path mismatch
-    authority template=1/1 conditional=2/2 instance=0/0 discharge=0/0/0 witness=0/0/0 observation=0/0
+    authority frozen-template=1/1 frozen-conditional=2/2 frozen-instance=0/0 frozen-discharge=0/0/0 frozen-witness=0/0/0 frozen-observation=0/0
   cmt-replay: frozen-spine observation permit was replayed
-    authority template=1/1 conditional=2/2 instance=0/0 discharge=0/0/0 witness=0/0/0 observation=0/0
+    authority frozen-template=1/1 frozen-conditional=2/2 frozen-instance=0/0 frozen-discharge=0/0/0 frozen-witness=0/0/0 frozen-observation=0/0
 
 The constructor proof is a template, not value authority.  The bare-formal
 PFC above has zero concrete instances and discharges.  A closed client creates
@@ -111,17 +114,17 @@ root through an exact alias chain, from both source and retained CMT.
 
   $ cat fixtures/exact_pfc.ml > artifacts/closed_origin.ml
   $ printf '%s\n' '' 'let closed_origin value : int =' '  [%verocaml.requires value <> 1];' '  [%verocaml.ensures fun result -> result = value];' '  let xs = List.make_two 1 2 in' '  let alias = xs in' '  let peer = alias in' '  replace_head_and_read peer value' >> artifacts/closed_origin.ml
-  $ VEROCAML_TEST_FROZEN_ORIGIN_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/closed_origin.ml --timeout-ms 10000 > artifacts/closed_origin.source.out 2>&1
-  $ grep '^frozen-origin instance caller=closed_origin' artifacts/closed_origin.source.out | sed -E 's/#[0-9]+/#N/'
-  frozen-origin instance caller=closed_origin callee=List.make_two root=List.make_two.result#N epoch=0
-  $ grep '^frozen-origin discharge caller=closed_origin callee=replace_head_and_read' artifacts/closed_origin.source.out | sed -E 's/#[0-9]+/#N/' | sort -u
-  frozen-origin discharge caller=closed_origin callee=replace_head_and_read formal=xs ordinal=0 root=List.make_two.result#N epoch=0
+  $ VEROCAML_TEST_FROZEN_ORIGIN_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/closed_origin.ml --timeout-ms 10000 > artifacts/closed_origin.source.out 2>&1
+  $ frozen_instances artifacts/closed_origin.source.out | grep 'caller=closed_origin' | sed -E 's/#[0-9]+/#N/'
+  frozen origin instance caller=closed_origin callee=List.make_two root=List.make_two.result#N epoch=0
+  $ frozen_discharges artifacts/closed_origin.source.out | grep 'caller=closed_origin callee=replace_head_and_read' | sed -E 's/#[0-9]+/#N/' | sort -u
+  frozen origin discharge caller=closed_origin callee=replace_head_and_read formal=xs ordinal=0 root=List.make_two.result#N epoch=0
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/closed_origin.cmo artifacts/closed_origin.ml
-  $ VEROCAML_TEST_FROZEN_ORIGIN_TRACE=1 ./shared_recursive_frozen_spine_tool.exe verify artifacts/closed_origin.cmt > artifacts/closed_origin.cmt.out 2>&1
+  $ VEROCAML_TEST_FROZEN_ORIGIN_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never ./shared_recursive_frozen_spine_tool.exe verify artifacts/closed_origin.cmt > artifacts/closed_origin.cmt.out 2>&1
   $ grep '^status=' artifacts/closed_origin.cmt.out
   status=verified functions=5 obligations=24 shared=2/2/2/2 invariant=2/2/2/1/3 recursive-results=16/0 generic-finite=0/0/0 frozen-template=1/1 frozen-conditional=3/3 frozen-instance=1/1 frozen-discharge=8/8/8 frozen-witness=3/3/3 frozen-observation=3/3
-  $ grep '^frozen-origin discharge caller=closed_origin callee=replace_head_and_read' artifacts/closed_origin.cmt.out | sed -E 's/#[0-9]+/#N/' | sort -u
-  frozen-origin discharge caller=closed_origin callee=replace_head_and_read formal=xs ordinal=0 root=List.make_two.result#N epoch=0
+  $ frozen_discharges artifacts/closed_origin.cmt.out | grep 'caller=closed_origin callee=replace_head_and_read' | sed -E 's/#[0-9]+/#N/' | sort -u
+  frozen origin discharge caller=closed_origin callee=replace_head_and_read formal=xs ordinal=0 root=List.make_two.result#N epoch=0
 
 One persistent structural instance survives supported scalar writes.  The two
 direct mutator calls consume distinct current-epoch discharges while the exact
@@ -129,40 +132,40 @@ alias and terminal read retain the same aggregate root.
 
   $ cat fixtures/exact_pfc.ml > artifacts/closed_sequential.ml
   $ printf '%s\n' '' 'let closed_sequential first second : int =' '  [%verocaml.requires first <> 1 && second <> first];' '  [%verocaml.ensures fun result -> result = second];' '  let xs = List.make_two 1 2 in' '  let alias = xs in' '  List.set_head alias first;' '  List.set_head xs second;' '  List.head alias' >> artifacts/closed_sequential.ml
-  $ VEROCAML_TEST_FROZEN_ORIGIN_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/closed_sequential.ml --timeout-ms 10000 > artifacts/closed_sequential.source.out 2>&1
-  $ test "$(grep -c '^frozen-origin instance caller=closed_sequential' artifacts/closed_sequential.source.out)" -eq 1; echo source-result-instances=1
+  $ VEROCAML_TEST_FROZEN_ORIGIN_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/closed_sequential.ml --timeout-ms 10000 > artifacts/closed_sequential.source.out 2>&1
+  $ test "$(frozen_instances artifacts/closed_sequential.source.out | grep -c 'caller=closed_sequential')" -eq 1; echo source-result-instances=1
   source-result-instances=1
-  $ grep '^frozen-origin discharge caller=closed_sequential callee=List.set_head' artifacts/closed_sequential.source.out | sed -E 's/#[0-9]+/#N/' | sort -u
-  frozen-origin discharge caller=closed_sequential callee=List.set_head formal=node ordinal=0 root=List.make_two.result#N epoch=0
-  frozen-origin discharge caller=closed_sequential callee=List.set_head formal=node ordinal=0 root=List.make_two.result#N epoch=1
+  $ frozen_discharges artifacts/closed_sequential.source.out | grep 'caller=closed_sequential callee=List.set_head' | sed -E 's/#[0-9]+/#N/' | sort -u
+  frozen origin discharge caller=closed_sequential callee=List.set_head formal=node ordinal=0 root=List.make_two.result#N epoch=0
+  frozen origin discharge caller=closed_sequential callee=List.set_head formal=node ordinal=0 root=List.make_two.result#N epoch=1
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/closed_sequential.cmo artifacts/closed_sequential.ml
-  $ VEROCAML_TEST_FROZEN_ORIGIN_TRACE=1 ./shared_recursive_frozen_spine_tool.exe verify artifacts/closed_sequential.cmt > artifacts/closed_sequential.cmt.out 2>&1
+  $ VEROCAML_TEST_FROZEN_ORIGIN_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never ./shared_recursive_frozen_spine_tool.exe verify artifacts/closed_sequential.cmt > artifacts/closed_sequential.cmt.out 2>&1
   $ grep '^status=' artifacts/closed_sequential.cmt.out
   status=verified functions=5 obligations=22 shared=3/4/4/3 invariant=4/4/4/3/3 recursive-results=18/0 generic-finite=0/0/0 frozen-template=1/1 frozen-conditional=3/3 frozen-instance=1/1 frozen-discharge=13/13/13 frozen-witness=5/5/5 frozen-observation=5/5
-  $ test "$(grep -c '^frozen-origin instance caller=closed_sequential' artifacts/closed_sequential.cmt.out)" -eq 1; echo cmt-result-instances=1
+  $ test "$(frozen_instances artifacts/closed_sequential.cmt.out | grep -c 'caller=closed_sequential')" -eq 1; echo cmt-result-instances=1
   cmt-result-instances=1
-  $ grep '^frozen-origin discharge caller=closed_sequential callee=List.set_head' artifacts/closed_sequential.cmt.out | sed -E 's/#[0-9]+/#N/' | sort -u
-  frozen-origin discharge caller=closed_sequential callee=List.set_head formal=node ordinal=0 root=List.make_two.result#N epoch=0
-  frozen-origin discharge caller=closed_sequential callee=List.set_head formal=node ordinal=0 root=List.make_two.result#N epoch=1
+  $ frozen_discharges artifacts/closed_sequential.cmt.out | grep 'caller=closed_sequential callee=List.set_head' | sed -E 's/#[0-9]+/#N/' | sort -u
+  frozen origin discharge caller=closed_sequential callee=List.set_head formal=node ordinal=0 root=List.make_two.result#N epoch=0
+  frozen origin discharge caller=closed_sequential callee=List.set_head formal=node ordinal=0 root=List.make_two.result#N epoch=1
 
 Two constructor calls issue distinct root instances.  Only the selected first
 root discharges the mutator call.
 
   $ cat fixtures/exact_pfc.ml > artifacts/distinct_results.ml
   $ printf '%s\n' '' 'let select_first value : unit =' '  let first = List.make_two 1 2 in' '  let _second = List.make_two 3 4 in' '  List.set_head first value' >> artifacts/distinct_results.ml
-  $ VEROCAML_TEST_FROZEN_ORIGIN_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/distinct_results.ml --timeout-ms 10000 > artifacts/distinct_results.source.out 2>&1
-  $ grep '^frozen-origin instance caller=select_first' artifacts/distinct_results.source.out | sed -E 's/#[0-9]+/#N/'
-  frozen-origin instance caller=select_first callee=List.make_two root=List.make_two.result#N epoch=0
-  frozen-origin instance caller=select_first callee=List.make_two root=List.make_two.result#N epoch=0
-  $ test "$(grep '^frozen-origin instance caller=select_first' artifacts/distinct_results.source.out | sed -E 's/.*result#([0-9]+).*/\1/' | sort -u | wc -l)" -eq 2; echo distinct-source-roots=2
+  $ VEROCAML_TEST_FROZEN_ORIGIN_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/distinct_results.ml --timeout-ms 10000 > artifacts/distinct_results.source.out 2>&1
+  $ frozen_instances artifacts/distinct_results.source.out | grep 'caller=select_first' | sed -E 's/#[0-9]+/#N/'
+  frozen origin instance caller=select_first callee=List.make_two root=List.make_two.result#N epoch=0
+  frozen origin instance caller=select_first callee=List.make_two root=List.make_two.result#N epoch=0
+  $ test "$(frozen_instances artifacts/distinct_results.source.out | grep 'caller=select_first' | sed -E 's/.*result#([0-9]+).*/\1/' | sort -u | wc -l)" -eq 2; echo distinct-source-roots=2
   distinct-source-roots=2
-  $ grep '^frozen-origin discharge caller=select_first callee=List.set_head' artifacts/distinct_results.source.out | sed -E 's/#[0-9]+/#N/' | sort -u
-  frozen-origin discharge caller=select_first callee=List.set_head formal=node ordinal=0 root=List.make_two.result#N epoch=0
+  $ frozen_discharges artifacts/distinct_results.source.out | grep 'caller=select_first callee=List.set_head' | sed -E 's/#[0-9]+/#N/' | sort -u
+  frozen origin discharge caller=select_first callee=List.set_head formal=node ordinal=0 root=List.make_two.result#N epoch=0
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/distinct_results.cmo artifacts/distinct_results.ml
-  $ VEROCAML_TEST_FROZEN_ORIGIN_TRACE=1 ./shared_recursive_frozen_spine_tool.exe verify artifacts/distinct_results.cmt > artifacts/distinct_results.cmt.out 2>&1
+  $ VEROCAML_TEST_FROZEN_ORIGIN_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never ./shared_recursive_frozen_spine_tool.exe verify artifacts/distinct_results.cmt > artifacts/distinct_results.cmt.out 2>&1
   $ grep '^status=' artifacts/distinct_results.cmt.out
   status=verified functions=5 obligations=22 shared=3/3/3/3 invariant=3/3/3/2/2 recursive-results=17/0 generic-finite=0/0/0 frozen-template=1/1 frozen-conditional=3/3 frozen-instance=2/2 frozen-discharge=9/9/9 frozen-witness=4/4/4 frozen-observation=4/4
-  $ test "$(grep '^frozen-origin instance caller=select_first' artifacts/distinct_results.cmt.out | sed -E 's/.*result#([0-9]+).*/\1/' | sort -u | wc -l)" -eq 2; echo distinct-cmt-roots=2
+  $ test "$(frozen_instances artifacts/distinct_results.cmt.out | grep 'caller=select_first' | sed -E 's/.*result#([0-9]+).*/\1/' | sort -u | wc -l)" -eq 2; echo distinct-cmt-roots=2
   distinct-cmt-roots=2
 
 An unannotated, unconnected aggregate formal cannot complete the concrete
@@ -171,14 +174,13 @@ or descent authority on either production route.
 
   $ cat fixtures/exact_pfc.ml > artifacts/unconnected.ml
   $ printf '%s\n' '' 'let invoke_unconnected (xs : List.t @ aliased) value : int =' '  [%verocaml.requires value <> List.head xs];' '  replace_head_and_read xs value' >> artifacts/unconnected.ml
-  $ authority () { grep 'private-receipt destroy' "$1" | grep -oE 'frozen-(template|conditional|instance|discharge|witness|observation)=[0-9/]+' | paste -sd' ' -; }
-  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/unconnected.ml --timeout-ms 10000 > artifacts/unconnected.source.out 2>&1; test $? -eq 2
+  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/unconnected.ml --timeout-ms 10000 > artifacts/unconnected.source.out 2>&1; test $? -eq 2
   $ grep -o 'frozen-spine call has no exact constructor-result instance' artifacts/unconnected.source.out
   frozen-spine call has no exact constructor-result instance
   $ authority artifacts/unconnected.source.out
   frozen-template=1/1 frozen-conditional=3/3 frozen-instance=0/0 frozen-discharge=0/0/0 frozen-witness=0/0/0 frozen-observation=0/0
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/unconnected.cmo artifacts/unconnected.ml
-  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/unconnected.cmt --timeout-ms 10000 > artifacts/unconnected.cmt.out 2>&1; test $? -eq 2
+  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/unconnected.cmt --timeout-ms 10000 > artifacts/unconnected.cmt.out 2>&1; test $? -eq 2
   $ grep -o 'frozen-spine call has no exact constructor-result instance' artifacts/unconnected.cmt.out
   frozen-spine call has no exact constructor-result instance
   $ authority artifacts/unconnected.cmt.out
@@ -190,7 +192,7 @@ ambiguous origin, and copied/replayed permit from source and retained CMT.
 Pre-discharge attacks add no discharge/effect/backend/solver work beyond the
 constructor-call baseline; permit copy/replay adds no downstream work.
 
-  $ origin_attack () { route=$1; input=$2; kind=$3; discharge=$4; out="artifacts/origin-$route-$kind.out"; VEROCAML_TEST_FROZEN_ORIGIN_ATTACK="$kind" VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify "$input" --timeout-ms 10000 >"$out" 2>&1; test $? -eq 2; grep -q 'frozen-spine' "$out"; grep 'private-receipt destroy' "$out" | grep -q "dependent-lowerings=1 dependent-backends=0 dependent-solver-attempts=0.*shared-heap=2/2/18/2/2.*frozen-template=1/1 frozen-conditional=3/3 frozen-instance=1/1 frozen-discharge=$discharge frozen-witness=1/1/1 frozen-observation=1/1"; }
+  $ origin_attack () { route=$1; input=$2; kind=$3; discharge=$4; out="artifacts/origin-$route-$kind.out"; VEROCAML_TEST_FROZEN_ORIGIN_ATTACK="$kind" VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify "$input" --timeout-ms 10000 >"$out" 2>&1; test $? -eq 2; grep -q 'frozen-spine' "$out"; grep 'Verification_session: private receipt event_kind=destroy ' "$out" | grep -q 'dependent_lowerings=1 dependent_backend_contexts=0 dependent_solver_attempts=0.*shared_heap_issuances=2 shared_heap_writes=2 shared_heap_read_logs=18 shared_heap_epoch_advances=2 shared_heap_teardowns=2'; test "$(authority "$out")" = "frozen-template=1/1 frozen-conditional=3/3 frozen-instance=1/1 frozen-discharge=$discharge frozen-witness=1/1/1 frozen-observation=1/1"; }
   $ field_attacks='actual formal ordinal caller callee call span path path-condition epoch body cmt session wrong-root unrelated-producer wrong-constructor instance-copy instance-stale'
   $ for kind in $field_attacks instance-replay ambiguous-origin; do origin_attack source artifacts/closed_origin.ml "$kind" 2/2/2; done; echo source-pre-discharge-attacks=20
   source-pre-discharge-attacks=20
@@ -216,13 +218,13 @@ retained CMT.
 
   $ cat fixtures/exact_pfc.ml > artifacts/forwarded.ml
   $ printf '%s\n' '' 'let forward_make a b = List.make_two a b' '' 'let consume_forwarded value : int =' '  [%verocaml.requires value <> 1];' '  let xs = forward_make 1 2 in' '  replace_head_and_read xs value' >> artifacts/forwarded.ml
-  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/forwarded.ml --timeout-ms 10000 > artifacts/forwarded.source.out 2>&1; test $? -eq 2
+  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/forwarded.ml --timeout-ms 10000 > artifacts/forwarded.source.out 2>&1; test $? -eq 2
   $ grep -o 'frozen-spine call has no exact constructor-result instance' artifacts/forwarded.source.out
   frozen-spine call has no exact constructor-result instance
   $ authority artifacts/forwarded.source.out
   frozen-template=1/1 frozen-conditional=3/3 frozen-instance=1/1 frozen-discharge=2/2/2 frozen-witness=1/1/1 frozen-observation=1/1
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/forwarded.cmo artifacts/forwarded.ml
-  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/forwarded.cmt --timeout-ms 10000 > artifacts/forwarded.cmt.out 2>&1; test $? -eq 2
+  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/forwarded.cmt --timeout-ms 10000 > artifacts/forwarded.cmt.out 2>&1; test $? -eq 2
   $ grep -o 'frozen-spine call has no exact constructor-result instance' artifacts/forwarded.cmt.out
   frozen-spine call has no exact constructor-result instance
   $ authority artifacts/forwarded.cmt.out
@@ -230,7 +232,7 @@ retained CMT.
 
   $ cat fixtures/exact_pfc.ml > artifacts/stored.ml
   $ printf '%s\n' '' 'type holder = { root : List.t }' '' 'let consume_stored value : int =' '  [%verocaml.requires value <> 1];' '  let box = { root = List.make_two 1 2 } in' '  replace_head_and_read box.root value' >> artifacts/stored.ml
-  $ for route in source cmt; do if test "$route" = cmt; then ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/stored.cmo artifacts/stored.ml; input=artifacts/stored.cmt; else input=artifacts/stored.ml; fi; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify "$input" --timeout-ms 10000 > "artifacts/stored.$route.out" 2>&1; test $? -eq 2; grep -q 'frozen-spine call has no exact constructor-result instance' "artifacts/stored.$route.out"; done; echo stored-source-cmt=rejected
+  $ for route in source cmt; do if test "$route" = cmt; then ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/stored.cmo artifacts/stored.ml; input=artifacts/stored.cmt; else input=artifacts/stored.ml; fi; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify "$input" --timeout-ms 10000 > "artifacts/stored.$route.out" 2>&1; test $? -eq 2; grep -q 'frozen-spine call has no exact constructor-result instance' "artifacts/stored.$route.out"; done; echo stored-source-cmt=rejected
   stored-source-cmt=rejected
 
   $ cat fixtures/exact_pfc.ml > artifacts/external_producer.ml

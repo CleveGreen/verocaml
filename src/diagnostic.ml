@@ -3,6 +3,12 @@ type position = {
   column : int;
 }
 
+let () =
+  Delator.init ();
+  match Sys.getenv_opt "DELATOR_LOG" with
+  | None | Some "" -> Delator.set_default_level Delator.Warn
+  | Some _ -> ()
+
 type span = {
   file : string;
   start_pos : position;
@@ -340,6 +346,13 @@ let default_submessages = function
 
 let make classification span =
   let code, message = code_and_message classification in
+  [%log.info "diagnostic created"
+    ~code:(Delator.Field.string code)
+    ~file:(Delator.Field.string span.file)
+    ~start_line:(Delator.Field.int span.start_pos.line)
+    ~start_column:(Delator.Field.int span.start_pos.column)
+    ~end_line:(Delator.Field.int span.end_pos.line)
+    ~end_column:(Delator.Field.int span.end_pos.column)];
   {
     classification;
     code;

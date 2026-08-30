@@ -34,6 +34,23 @@
         "type": "github"
       }
     },
+    "delator-source": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1788072376,
+        "narHash": "sha256-3BdjwLlxXY7xR1Pq0dpR/RkEQWQZUtnAyjZCNv6cCgk=",
+        "owner": "CleveGreen",
+        "repo": "delator",
+        "rev": "c6d9de5092eabbcb5711f4d5b7b1231f509294e8",
+        "type": "github"
+      },
+      "original": {
+        "owner": "CleveGreen",
+        "repo": "delator",
+        "rev": "c6d9de5092eabbcb5711f4d5b7b1231f509294e8",
+        "type": "github"
+      }
+    },
     "flake-compat": {
       "flake": false,
       "locked": {
@@ -330,6 +347,7 @@
       "inputs": {
         "await-source": "await-source",
         "concurrent-source": "concurrent-source",
+        "delator-source": "delator-source",
         "nixpkgs": [
           "oxcaml",
           "nixpkgs"

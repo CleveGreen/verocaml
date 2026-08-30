@@ -1537,6 +1537,7 @@ let seal_provider ~provider_completion ~implementation ~program
                 description;
                 snapshot;
               })
+[@@delator.instrument] [@@delator.level debug]
 
 let provider_matches provider ~implementation ~program =
   require_provider provider;
@@ -1762,6 +1763,7 @@ let create_unchecked providers =
 let create providers =
   try create_unchecked providers
   with Import_mapping_error message -> Error message
+[@@delator.instrument] [@@delator.level debug]
 
 let empty =
   {
@@ -2040,6 +2042,7 @@ let seal_calls environment ~implementation ~program =
             active_session = None;
             invalidated = false;
           }
+[@@delator.instrument] [@@delator.level debug]
 
 let require_registration (registration : registration) =
   ignore registration.implementation;

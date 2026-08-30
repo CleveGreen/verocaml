@@ -8758,9 +8758,35 @@ let rec evaluate context expression state =
                                 Sys.getenv_opt "VEROCAML_TEST_PROOF_CALL_TRACE"
                               with
                               | Some "1" ->
-                                  Printf.eprintf "proof-call visit %s\n"
-                                    (Finite_value_registry
-                                     .render_proof_call_visit visit)
+                                  [%log.debug "proof call visit"
+                                    ~callable_digest:
+                                      (Delator.Field.string
+                                         (Digest.string callable
+                                         |> Digest.to_hex))
+                                    ~selector_owner:
+                                      (Delator.Field.string
+                                         selector.Vir.selector_namespace)
+                                    ~selector_ordinal:
+                                      (Delator.Field.int
+                                         selector.selector_index)
+                                    ~selector_name:
+                                      (Delator.Field.string
+                                         selector.selector_name)
+                                    ~branch_digest:
+                                      (Delator.Field.string
+                                         (Finite_value_registry
+                                          .result_path_digest
+                                            caller_state.path_condition))
+                                    ~call_file:
+                                      (Delator.Field.string
+                                         (Filename.basename
+                                            expression.span.file))
+                                    ~call_line:
+                                      (Delator.Field.int
+                                         expression.span.start_pos.line)
+                                    ~call_column:
+                                      (Delator.Field.int
+                                         expression.span.start_pos.column)]
                               | Some _ | None -> ()
                             in
                             incr observed_proof_call_spent_visits;

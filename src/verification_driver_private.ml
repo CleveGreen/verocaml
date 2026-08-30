@@ -228,6 +228,7 @@ let run_with_policy ~solver_policy ~allow_imported_opens
                 External_target_specification_private.invalidate
                 (Typedtree_lowering_private.external_registration lowered))
             execute)
+[@@delator.instrument] [@@delator.level debug]
 
 
 let run_with_policy_threaded ~threads ~solver_policy ~allow_imported_opens
@@ -417,6 +418,7 @@ let run_with_policy_threaded ~threads ~solver_policy ~allow_imported_opens
                 External_target_specification_private.invalidate
                 (Typedtree_lowering_private.external_registration lowered))
             execute)
+[@@delator.instrument] [@@delator.level debug]
 
 
 let run_with_policy_and_threads ~threads ~solver_policy ~allow_imported_opens
@@ -432,6 +434,7 @@ let run_with_policy_and_threads ~threads ~solver_policy ~allow_imported_opens
         run_with_policy_threaded ~threads ~solver_policy ~allow_imported_opens
           ~allow_public_parametric_signatures ?external_specifications ?imported
           implementation
+[@@delator.instrument] [@@delator.level debug]
 
 let run ?rlimit ~timeout_ms ~allow_imported_opens ?external_specifications ?imported
     implementation =
@@ -451,6 +454,7 @@ let run ?rlimit ~timeout_ms ~allow_imported_opens ?external_specifications ?impo
   | Ok solver_policy ->
       run_with_policy ~solver_policy ~allow_imported_opens ?external_specifications ?imported
         implementation
+[@@delator.instrument] [@@delator.level debug]
 
 let run_with_threads ~threads ?rlimit ~timeout_ms ~allow_imported_opens
     ?external_specifications ?imported implementation =
@@ -474,6 +478,7 @@ let run_with_threads ~threads ?rlimit ~timeout_ms ~allow_imported_opens
     | Ok solver_policy ->
         run_with_policy_and_threads ~threads ~solver_policy
           ~allow_imported_opens ?external_specifications ?imported implementation
+[@@delator.instrument] [@@delator.level debug]
 
 let status report = report.status
 let semantic_sst report = Lazy.force report.semantic_sst

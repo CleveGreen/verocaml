@@ -1,3 +1,5 @@
+[@@@verocaml.verify]
+
 let implies premise conclusion = (not premise) || conclusion
 [@@verocaml.spec]
 

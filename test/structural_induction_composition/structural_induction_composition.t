@@ -60,13 +60,13 @@ Private visit traces bind the exact selector identity.  Logical short-circuit
 paths may repeat the right visit record, but the distinct selector set is
 exactly list tail and tree left/right.
 
-  $ visit_trace () { VEROCAML_TEST_PROOF_CALL_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$1.cmt" --timeout-ms 5000 2>&1 | grep '^proof-call visit' | sed -E 's/.*selector-owner=([^ ]+).*selector-ordinal=([0-9]+).*selector-name=([^ ]+).*call=([^ ]+).*/visit owner=\1 ordinal=\2 name=\3 call=\4/' | sort -u; }
+  $ visit_trace () { VEROCAML_TEST_PROOF_CALL_TRACE=1 DELATOR_LOG=Symbolic_executor_private=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$1.cmt" --timeout-ms 5000 2>&1 | grep '^DEBUG Symbolic_executor_private: proof call visit ' | sed -E 's/.*selector_owner=([^ ]+).*selector_ordinal=([0-9]+).*selector_name=([^ ]+).*call_file=([^ ]+) call_line=([0-9]+) call_column=([0-9]+).*/visit owner=\1 ordinal=\2 name=\3 call=\4:\5:\6/' | sort -u; }
   $ visit_trace list_positive
   visit owner=t0_int_list_c1_Cons ordinal=1 name=$arg1 call=list_positive.ml:29:32
   $ visit_trace tree_positive
   visit owner=t0_tree_c1_Branch ordinal=0 name=$arg0 call=tree_positive.ml:25:6
   visit owner=t0_tree_c1_Branch ordinal=1 name=$arg1 call=tree_positive.ml:26:6
-  $ receipt_trace () { VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$1.cmt" --timeout-ms 5000 2>&1 | grep 'private-receipt destroy' | sed -E 's/.*proof-call-visits=([0-9]+) proof-call-summaries=([0-9]+).*/authority visits=\1 summaries=\2/'; }
+  $ receipt_trace () { VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$1.cmt" --timeout-ms 5000 2>&1 | grep 'Verification_session: private receipt event_kind=destroy ' | sed -E 's/.*proof_call_visits=([0-9]+) proof_call_summaries=([0-9]+).*/authority visits=\1 summaries=\2/'; }
   $ receipt_trace list_positive
   authority visits=1 summaries=1
   $ receipt_trace tree_positive
@@ -85,7 +85,7 @@ postcondition through the ordinary solver.  No successful summary is issued.
 Duplicate selectors reject before a second visit or summary.  Same-node and
 constructed non-child actuals issue no visit/summary authority.
 
-  $ reject_message () { VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$1.cmt" --timeout-ms 5000 2>&1 | grep -o "$2"; }
+  $ reject_message () { VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$1.cmt" --timeout-ms 5000 2>&1 | grep -o "$2"; }
   $ reject_message tree_duplicate_left 'recursive proof child was already visited on this path'
   recursive proof child was already visited on this path
   $ reject_message tree_duplicate_right 'recursive proof child was already visited on this path'

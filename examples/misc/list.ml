@@ -1,3 +1,5 @@
+[@@@verocaml.verify]
+
 type 'a vlist = Nil | Cons of 'a * 'a vlist
 
 let rec equal (left : 'a vlist) (right : 'a vlist) : bool =

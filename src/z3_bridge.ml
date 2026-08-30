@@ -1181,6 +1181,7 @@ let with_solver accounting ?policy config translate use =
       Z3.Solver.set_parameters created (parameters ?policy context config);
       Z3.Solver.add created translated.assertions;
       use created translated)
+[@@delator.instrument] [@@delator.level trace]
 
 let protect f =
   try f () with
@@ -1220,6 +1221,7 @@ let solve_translated @ portable = fun controlled solver ->
       | UNKNOWN ->
           let reason = Z3.Solver.get_reason_unknown solver in
           Ok (Inconclusive (classify_unknown_reason reason)))
+[@@delator.instrument] [@@delator.level trace]
 
 let solve_query ?(controlled = Real) ?rlimit config query =
   match resolve_policy ?rlimit config with
@@ -1233,6 +1235,7 @@ let solve_query ?(controlled = Real) ?rlimit config query =
               with_solver Global ~policy config
                 (fun context -> translate_logic_query context query)
                 (fun solver _ -> solve_translated controlled solver)))
+[@@delator.instrument] [@@delator.level trace]
 
 let solve_query_with accounting ~controlled ~rlimit config query =
   match resolve_policy ~rlimit config with
@@ -1253,6 +1256,7 @@ let solve_query_local ~controlled ~rlimit config query =
     solve_query_with (Local local) ~controlled ~rlimit config query
   in
   { result; telemetry = local_snapshot local }
+[@@delator.instrument] [@@delator.level trace]
 
 let detached_parameters context ~timeout_ms ~rlimit ~model =
   let parameters = Z3.Params.mk_params context in
@@ -1321,12 +1325,23 @@ let detached_feature_supported @ portable = function
 
 let solve_detached_query_local ~controlled ~timeout_ms ~rlimit ~model
     (Detached_query encoded) =
+  [%log.trace "begin detached solver query"
+    ~timeout_ms:(Delator.Field.int timeout_ms)
+    ~rlimit:(Delator.Field.int rlimit)
+    ~model:(Delator.Field.bool model)
+    ~encoded_bytes:(Delator.Field.int (String.length encoded))];
   let local = fresh_local_counters () in
   detached_note_capability_resolution local;
   detached_note_translation local;
   let detached_result =
     try
       let plan : detached_plan = Marshal.from_string encoded 0 in
+      [%log.trace "decoded detached solver plan"
+        ~requirements:(Delator.Field.int (List.length plan.detached_requirements))
+        ~declarations:(Delator.Field.int (List.length plan.detached_declarations))
+        ~axioms:(Delator.Field.int (List.length plan.detached_axioms))
+        ~assertions:(Delator.Field.int (List.length plan.detached_assertions))
+        ~projections:(Delator.Field.int (List.length plan.detached_projections))];
       let unsupported =
         List.filter (fun feature -> not (detached_feature_supported feature))
           plan.detached_requirements
@@ -1342,6 +1357,7 @@ let solve_detached_query_local ~controlled ~timeout_ms ~rlimit ~model
           [ ("model", string_of_bool model); ("auto_config", "false") ]
       in
       detached_note_context_created local;
+      [%log.trace "created detached Z3 context"];
       let solver = ref None in
       Fun.protect
         ~finally:(fun () ->
@@ -1361,6 +1377,14 @@ let solve_detached_query_local ~controlled ~timeout_ms ~rlimit ~model
           Z3.Solver.set_parameters created
             (detached_parameters context ~timeout_ms ~rlimit ~model);
           Z3.Solver.add created translated.detached_assertions_backend;
+          [%log.trace "initialized detached Z3 solver"
+            ~logic:(Delator.Field.string solver_logic)
+            ~assertions:
+              (Delator.Field.int
+                 (List.length translated.detached_assertions_backend))
+            ~projections:
+              (Delator.Field.int
+                 (List.length translated.detached_projected_backend))];
           match solve_translated controlled created with
           | Error _ -> Error "direct-Z3 solver check failed"
           | Ok Verified -> Ok Detached_verified
@@ -1391,7 +1415,21 @@ let solve_detached_query_local ~controlled ~timeout_ms ~rlimit ~model
         Error
           ("direct-Z3 backend failure: " ^ Printexc.to_string exn)
   in
-  { detached_result; detached_telemetry = local_snapshot local }
+  let detached_telemetry = local_snapshot local in
+  [%log.trace "completed detached solver query"
+    ~outcome:
+      (Delator.Field.string
+         (match detached_result with
+         | Ok Detached_verified -> "verified"
+         | Ok (Detached_counterexample _) -> "counterexample"
+         | Ok (Detached_inconclusive _) -> "inconclusive"
+         | Error _ -> "error"))
+    ~contexts_created:(Delator.Field.int detached_telemetry.contexts_created)
+    ~solvers_created:(Delator.Field.int detached_telemetry.solvers_created)
+    ~solver_resets:(Delator.Field.int detached_telemetry.solver_resets)
+    ~contexts_cleaned:(Delator.Field.int detached_telemetry.contexts_cleaned)];
+  { detached_result; detached_telemetry }
+[@@delator.instrument] [@@delator.level trace]
 [@@unsafe_allow_any_mode_crossing
   "The portable closure captures only Z3 datatype operations; every native \
    handle is created, used, and released inside the invoking worker."]
@@ -1520,6 +1558,7 @@ let solve_vir ?(controlled = Real) ?rlimit ?(requires = []) config obligation =
                                   translated_logic.projected
                               in
                               Ok (Counterexample bindings))))))
+[@@delator.instrument] [@@delator.level trace]
 
 let solve_vir_with accounting ~controlled ~rlimit ?(requires = []) config
     obligation =
@@ -1578,6 +1617,7 @@ let solve_vir_with accounting ~controlled ~rlimit ?(requires = []) config
                               translated_logic.projected
                           in
                           Ok (Counterexample bindings)))))
+[@@delator.instrument] [@@delator.level trace]
 
 let solve_vir_local ~controlled ~rlimit ?(requires = []) config obligation =
   let local = fresh_local_counters () in
@@ -1585,6 +1625,7 @@ let solve_vir_local ~controlled ~rlimit ?(requires = []) config obligation =
     solve_vir_with (Local local) ~controlled ~rlimit ~requires config obligation
   in
   { result; telemetry = local_snapshot local }
+[@@delator.instrument] [@@delator.level trace]
 
 let render_vir ?(requires = []) config obligation =
   match

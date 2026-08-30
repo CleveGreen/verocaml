@@ -149,7 +149,7 @@ remain distinct from counterexamples and supported-path internal failures.
   $ test ! -e artifacts/one.sst && test ! -e artifacts/two.sst
   $ test ! -e artifacts/one.vir && test ! -e artifacts/two.vir
   $ OCAML_COLOR=never ../../src/verocaml.exe 2>&1
-  verocaml: error[VERO_CLI] usage: verocaml verify FILE.ml|FILE.cmt [--solver z3] [--timeout-ms N] [--rlimit N] [--threads N] [--dependency FILE.cmt]... [--dump-sst FILE] [--dump-vir FILE]
+  verocaml: error[VERO_CLI] usage: verocaml verify FILE.ml|FILE.cmt|DIRECTORY [--solver z3] [--timeout-ms N] [--rlimit N] [--threads N] [--dependency FILE.cmt]... [--dump-sst FILE] [--dump-vir FILE]
          verocaml verify-project --root FILE.cmt FILE.cmi [--root FILE.cmt FILE.cmi]... [--dependency FILE.cmt FILE.cmi]... [--solver z3] [--timeout-ms N] [--rlimit N] [--threads N]
   [2]
 

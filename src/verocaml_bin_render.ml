@@ -10,7 +10,7 @@ let styled code text =
 let error_label () = styled "1;31" "error"
 
 let usage =
-  "usage: verocaml verify FILE.ml|FILE.cmt [--solver z3] [--timeout-ms N] \
+  "usage: verocaml verify FILE.ml|FILE.cmt|DIRECTORY [--solver z3] [--timeout-ms N] \
    [--rlimit N] [--threads N] [--dependency FILE.cmt]... [--dump-sst FILE] \
    [--dump-vir FILE]\n\
   \       verocaml verify-project --root FILE.cmt FILE.cmi [--root FILE.cmt \

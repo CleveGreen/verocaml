@@ -2142,14 +2142,6 @@ let frozen_origin_root_label (root : Vir.aggregate_term) =
   | Vir.Aggregate_recursive_spec_application _ -> "recursive-application"
   | Vir.Aggregate_symbolic_application _ -> "symbolic-application"
 
-let trace_frozen_origin format =
-  Printf.ksprintf
-    (fun message ->
-      match Sys.getenv_opt "VEROCAML_TEST_FROZEN_ORIGIN_TRACE" with
-      | Some "1" -> Printf.eprintf "frozen-origin %s\n" message
-      | Some _ | None -> ())
-    format
-
 let frozen_instance_digest (template : frozen_constructor_template)
     (definition : Sst.function_definition)
     (caller : Sst.function_definition) (callee : Sst.function_definition)
@@ -2284,9 +2276,20 @@ let issue_frozen_constructor_result_instance (session : t)
           instance :: session.frozen_constructor_result_instances;
         session.counters.frozen_result_instance_issuances <-
           session.counters.frozen_result_instance_issuances + 1;
-        trace_frozen_origin "instance caller=%s callee=%s root=%s epoch=%d"
-          caller.function_id.function_name callee.function_id.function_name
-          (frozen_origin_root_label root) epoch;
+        (match Sys.getenv_opt "VEROCAML_TEST_FROZEN_ORIGIN_TRACE" with
+        | Some "1" ->
+            [%log.debug "frozen origin instance"
+              ~caller_name:
+                (Delator.Field.string caller.function_id.function_name)
+              ~caller_index:
+                (Delator.Field.int caller.function_id.function_index)
+              ~callee_name:
+                (Delator.Field.string callee.function_id.function_name)
+              ~callee_index:
+                (Delator.Field.int callee.function_id.function_index)
+              ~root:(Delator.Field.string (frozen_origin_root_label root))
+              ~epoch:(Delator.Field.int epoch)]
+        | Some _ | None -> ());
         Ok ()
 
 let live_frozen_conditional_scope ?(require_verified = false) (session : t)
@@ -2714,14 +2717,30 @@ let consume_frozen_call_discharge (session : t) discharge =
     discharge.frozen_discharge_consumed <- true;
     session.counters.frozen_call_discharge_consumptions <-
       session.counters.frozen_call_discharge_consumptions + 1;
-    trace_frozen_origin
-      "discharge caller=%s callee=%s formal=%s ordinal=%d root=%s epoch=%d"
-      discharge.frozen_discharge_caller.function_id.function_name
-      discharge.frozen_discharge_callee.function_id.function_name
-      discharge.frozen_discharge_formal.name
-      discharge.frozen_discharge_ordinal
-      (frozen_origin_root_label discharge.frozen_discharge_root)
-      discharge.frozen_discharge_epoch;
+    (match Sys.getenv_opt "VEROCAML_TEST_FROZEN_ORIGIN_TRACE" with
+    | Some "1" ->
+        [%log.debug "frozen origin discharge"
+          ~caller_name:
+            (Delator.Field.string
+               discharge.frozen_discharge_caller.function_id.function_name)
+          ~caller_index:
+            (Delator.Field.int
+               discharge.frozen_discharge_caller.function_id.function_index)
+          ~callee_name:
+            (Delator.Field.string
+               discharge.frozen_discharge_callee.function_id.function_name)
+          ~callee_index:
+            (Delator.Field.int
+               discharge.frozen_discharge_callee.function_id.function_index)
+          ~formal_name:
+            (Delator.Field.string discharge.frozen_discharge_formal.name)
+          ~formal_ordinal:
+            (Delator.Field.int discharge.frozen_discharge_ordinal)
+          ~root:
+            (Delator.Field.string
+               (frozen_origin_root_label discharge.frozen_discharge_root))
+          ~epoch:(Delator.Field.int discharge.frozen_discharge_epoch)]
+    | Some _ | None -> ());
     Ok ())
 
 let authorize_frozen_formal_call (session : t)
@@ -9211,11 +9230,232 @@ let render_counters session =
       counters.frozen_observation_consumptions counters.frozen_observation_teardowns
   else with_shared_heap
 
+type blocked_reason =
+  | Blocked_frozen_constructor
+  | Blocked_frozen_formal
+  | Blocked_invariant_cell
+  | Blocked_dependent
+
+type trace_event =
+  | Blocked of {
+      reason : blocked_reason;
+      function_id : Sst.function_id;
+    }
+  | Lowering of {
+      function_id : Sst.function_id;
+      source : bool;
+      dependent : bool;
+    }
+  | Issued
+  | Destroy
+
+exception Private_receipt_trace_disabled
+
 let trace session event =
-  match Sys.getenv_opt "VEROCAML_TEST_PRIVATE_RECEIPT_TRACE" with
-  | Some "1" ->
-      Printf.eprintf "private-receipt %s %s\n" event (render_counters session)
-  | Some _ | None -> ()
+  try
+    [%log.debug "private receipt"
+        ~event_kind:
+          (Delator.Field.string
+             (* Keeping the opt-in gate in the first field makes static
+                Delator elision remove the gate check with the event. *)
+             (match Sys.getenv_opt "VEROCAML_TEST_PRIVATE_RECEIPT_TRACE" with
+             | Some "1" -> (
+                 match event with
+                 | Blocked { reason; _ } -> (
+                     match reason with
+                     | Blocked_frozen_constructor ->
+                         "blocked-frozen-constructor"
+                     | Blocked_frozen_formal -> "blocked-frozen-formal"
+                     | Blocked_invariant_cell -> "blocked-invariant-cell"
+                     | Blocked_dependent -> "blocked-dependent")
+                 | Lowering _ -> "lower"
+                 | Issued -> "issued"
+                 | Destroy -> "destroy")
+             | Some _ | None ->
+                 raise_notrace Private_receipt_trace_disabled))
+        ~has_blocked_reason:
+          (Delator.Field.bool
+             (match event with Blocked _ -> true | Lowering _ | Issued | Destroy -> false))
+        ~blocked_reason:
+          (Delator.Field.string
+             (match event with
+             | Blocked { reason; _ } -> (
+                 match reason with
+                 | Blocked_frozen_constructor -> "frozen-constructor"
+                 | Blocked_frozen_formal -> "frozen-formal"
+                 | Blocked_invariant_cell -> "invariant-cell"
+                 | Blocked_dependent -> "dependent")
+             | Lowering _ | Issued | Destroy -> ""))
+        ~has_function:
+          (Delator.Field.bool
+             (match event with Blocked _ | Lowering _ -> true | Issued | Destroy -> false))
+        ~function_name:
+          (Delator.Field.string
+             (match event with
+             | Blocked { function_id; _ } | Lowering { function_id; _ } ->
+                 function_id.Sst.function_name
+             | Issued | Destroy -> ""))
+        ~function_index:
+          (Delator.Field.int
+             (match event with
+             | Blocked { function_id; _ } | Lowering { function_id; _ } ->
+                 function_id.Sst.function_index
+             | Issued | Destroy -> -1))
+        ~has_schedule:
+          (Delator.Field.bool
+             (match event with Lowering _ -> true | Blocked _ | Issued | Destroy -> false))
+        ~source:
+          (Delator.Field.bool
+             (match event with
+             | Lowering { source; _ } -> source
+             | Blocked _ | Issued | Destroy -> false))
+        ~dependent:
+          (Delator.Field.bool
+             (match event with
+             | Lowering { dependent; _ } -> dependent
+             | Blocked _ | Issued | Destroy -> false))
+        ~callee_solver_attempts:
+          (Delator.Field.int (counters session).callee_solver_attempts)
+        ~callee_verified_results:
+          (Delator.Field.int (counters session).callee_verified_results)
+        ~callee_failed_results:
+          (Delator.Field.int (counters session).callee_failed_results)
+        ~dependent_lowerings:(Delator.Field.int (counters session).dependent_lowerings)
+        ~dependent_backend_contexts:
+          (Delator.Field.int (counters session).dependent_backend_contexts)
+        ~dependent_solver_attempts:
+          (Delator.Field.int (counters session).dependent_solver_attempts)
+        ~receipts_issued:(Delator.Field.int (counters session).receipts_issued)
+        ~receipts_consumed:(Delator.Field.int (counters session).receipts_consumed)
+        ~finite_witness_issuances:
+          (Delator.Field.int (counters session).finite_witness_issuances)
+        ~finite_parent_issuances:
+          (Delator.Field.int (counters session).finite_parent_issuances)
+        ~finite_child_derivations:
+          (Delator.Field.int (counters session).finite_child_derivations)
+        ~finite_result_promotions:
+          (Delator.Field.int (counters session).finite_result_promotions)
+        ~finite_result_witness_records:
+          (Delator.Field.int (counters session).finite_result_witness_records)
+        ~finite_result_path_records:
+          (Delator.Field.int (counters session).finite_result_path_records)
+        ~finite_result_manifests:
+          (Delator.Field.int (counters session).finite_result_manifests)
+        ~finite_result_completions:
+          (Delator.Field.int (counters session).finite_result_completions)
+        ~finite_result_finalizations:
+          (Delator.Field.int (counters session).finite_result_finalizations)
+        ~finite_result_consumption_attempts:
+          (Delator.Field.int (counters session).finite_result_consumption_attempts)
+        ~finite_result_consumptions:
+          (Delator.Field.int (counters session).finite_result_consumptions)
+        ~finite_consumptions:(Delator.Field.int (counters session).finite_consumptions)
+        ~finite_formal_assumption_issuances:
+          (Delator.Field.int (counters session).finite_formal_assumption_issuances)
+        ~finite_formal_transfer_batches:
+          (Delator.Field.int (counters session).finite_formal_transfer_batches)
+        ~finite_formal_transfers:
+          (Delator.Field.int (counters session).finite_formal_transfers)
+        ~finite_formal_transfer_consumptions:
+          (Delator.Field.int (counters session).finite_formal_transfer_consumptions)
+        ~proof_call_visits:(Delator.Field.int (counters session).proof_call_visits)
+        ~proof_call_summaries:(Delator.Field.int (counters session).proof_call_summaries)
+        ~recursive_spec_result_issuances:
+          (Delator.Field.int (counters session).recursive_spec_result_issuances)
+        ~recursive_spec_result_consumptions:
+          (Delator.Field.int (counters session).recursive_spec_result_consumptions)
+        ~local_assertion_instances_issued:
+          (Delator.Field.int (counters session).local_assertion_instances_issued)
+        ~local_assertion_instances_consumed:
+          (Delator.Field.int (counters session).local_assertion_instances_consumed)
+        ~owned_root_scalar_plans_issued:
+          (Delator.Field.int (counters session).owned_root_scalar_plans_issued)
+        ~owned_root_scalar_plans_consumed:
+          (Delator.Field.int (counters session).owned_root_scalar_plans_consumed)
+        ~owned_root_scalar_plans_rejected:
+          (Delator.Field.int (counters session).owned_root_scalar_plans_rejected)
+        ~owned_root_scalar_observations:
+          (Delator.Field.int (counters session).owned_root_scalar_observations)
+        ~owned_root_scalar_equations:
+          (Delator.Field.int (counters session).owned_root_scalar_equations)
+        ~owned_root_scalar_bridge_paths:
+          (Delator.Field.int (counters session).owned_root_scalar_bridge_paths)
+        ~owned_root_scalar_bridge_equations:
+          (Delator.Field.int (counters session).owned_root_scalar_bridge_equations)
+        ~owned_root_scalar_fresh_successors:
+          (Delator.Field.int (counters session).owned_root_scalar_fresh_successors)
+        ~owned_root_scalar_reconstructions:
+          (Delator.Field.int (counters session).owned_root_scalar_reconstructions)
+        ~transition_predecessor_transfers:
+          (Delator.Field.int (counters session).transition_predecessor_transfers)
+        ~transition_predecessor_consumptions:
+          (Delator.Field.int (counters session).transition_predecessor_consumptions)
+        ~transition_result_receipts:
+          (Delator.Field.int (counters session).transition_result_receipts)
+        ~transition_teardown_removals:
+          (Delator.Field.int (counters session).transition_teardown_removals)
+        ~transition_preservation_obligations:
+          (Delator.Field.int (counters session).transition_preservation_obligations)
+        ~transition_nested_reconstructions:
+          (Delator.Field.int (counters session).transition_nested_reconstructions)
+        ~transition_root_reconstructions:
+          (Delator.Field.int (counters session).transition_root_reconstructions)
+        ~shared_heap_issuances:
+          (Delator.Field.int (counters session).shared_heap_issuances)
+        ~shared_heap_writes:(Delator.Field.int (counters session).shared_heap_writes)
+        ~shared_heap_read_logs:
+          (Delator.Field.int (counters session).shared_heap_read_logs)
+        ~shared_heap_epoch_advances:
+          (Delator.Field.int (counters session).shared_heap_epoch_advances)
+        ~shared_heap_teardowns:
+          (Delator.Field.int (counters session).shared_heap_teardowns)
+        ~invariant_cell_entry_eligibilities:
+          (Delator.Field.int (counters session).invariant_cell_entry_eligibilities)
+        ~invariant_cell_constructor_eligibilities:
+          (Delator.Field.int (counters session).invariant_cell_constructor_eligibilities)
+        ~invariant_cell_closed_initializations:
+          (Delator.Field.int (counters session).invariant_cell_closed_initializations)
+        ~invariant_cell_opens:
+          (Delator.Field.int (counters session).invariant_cell_opens)
+        ~invariant_cell_updates:
+          (Delator.Field.int (counters session).invariant_cell_updates)
+        ~invariant_cell_closes:
+          (Delator.Field.int (counters session).invariant_cell_closes)
+        ~invariant_cell_effect_instantiations:
+          (Delator.Field.int (counters session).invariant_cell_effect_instantiations)
+        ~invariant_cell_terminal_reads:
+          (Delator.Field.int (counters session).invariant_cell_terminal_reads)
+        ~invariant_cell_teardowns:
+          (Delator.Field.int (counters session).invariant_cell_teardowns)
+        ~frozen_constructor_template_issuances:
+          (Delator.Field.int (counters session).frozen_constructor_template_issuances)
+        ~frozen_constructor_template_teardowns:
+          (Delator.Field.int (counters session).frozen_constructor_template_teardowns)
+        ~frozen_conditional_scope_issuances:
+          (Delator.Field.int (counters session).frozen_conditional_scope_issuances)
+        ~frozen_conditional_scope_teardowns:
+          (Delator.Field.int (counters session).frozen_conditional_scope_teardowns)
+        ~frozen_result_instance_issuances:
+          (Delator.Field.int (counters session).frozen_result_instance_issuances)
+        ~frozen_result_instance_teardowns:
+          (Delator.Field.int (counters session).frozen_result_instance_teardowns)
+        ~frozen_call_discharge_issuances:
+          (Delator.Field.int (counters session).frozen_call_discharge_issuances)
+        ~frozen_call_discharge_consumptions:
+          (Delator.Field.int (counters session).frozen_call_discharge_consumptions)
+        ~frozen_call_discharge_teardowns:
+          (Delator.Field.int (counters session).frozen_call_discharge_teardowns)
+        ~frozen_descent_witness_issuances:
+          (Delator.Field.int (counters session).frozen_descent_witness_issuances)
+        ~frozen_descent_witness_consumptions:
+          (Delator.Field.int (counters session).frozen_descent_witness_consumptions)
+        ~frozen_descent_witness_teardowns:
+          (Delator.Field.int (counters session).frozen_descent_witness_teardowns)
+        ~frozen_observation_consumptions:
+          (Delator.Field.int (counters session).frozen_observation_consumptions)
+        ~frozen_observation_teardowns:
+          (Delator.Field.int (counters session).frozen_observation_teardowns)]
+  with Private_receipt_trace_disabled -> ()
 
 type owned_contents_seed_control_capture = {
   seed_capture_manifest : owned_contents_manifest;

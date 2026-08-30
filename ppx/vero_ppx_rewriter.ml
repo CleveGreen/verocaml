@@ -4,6 +4,49 @@ open Parsetree
 
 type contract = Requires | Ensures | Decreases | Assert
 
+let configure_observability () =
+  Delator.init ();
+  match Sys.getenv_opt "DELATOR_LOG" with
+  | None | Some "" -> Delator.set_default_level Delator.Warn
+  | Some _ -> ()
+
+let keep_ghost_of_arguments = function
+  | [] -> false
+  | [ "--keep-ghost" ] -> true
+  | _ ->
+      invalid_arg
+        "verocaml-ppx accepts only the optional --keep-ghost argument"
+
+let rewrite_root_structure_phase
+    ~keep_ghost:(keep_ghost [@delator.field Bool.to_string])
+    ~phase:(phase [@delator.field Fun.id])
+    (rewrite [@delator.skip])
+    (structure [@delator.skip]) =
+  let _ = (keep_ghost, phase) in
+  let rewritten = rewrite structure in
+  [%log.trace "completed PPX root implementation phase"
+    ~phase:(Delator.Field.string phase)
+    ~keep_ghost:(Delator.Field.bool keep_ghost)
+    ~input_items:(Delator.Field.int (List.length structure))
+    ~output_items:(Delator.Field.int (List.length rewritten))];
+  rewritten
+[@@delator.instrument] [@@delator.level trace]
+
+let rewrite_root_signature_phase
+    ~keep_ghost:(keep_ghost [@delator.field Bool.to_string])
+    ~phase:(phase [@delator.field Fun.id])
+    (rewrite [@delator.skip])
+    (signature [@delator.skip]) =
+  let _ = (keep_ghost, phase) in
+  let rewritten = rewrite signature in
+  [%log.trace "completed PPX root interface phase"
+    ~phase:(Delator.Field.string phase)
+    ~keep_ghost:(Delator.Field.bool keep_ghost)
+    ~input_items:(Delator.Field.int (List.length signature.psg_items))
+    ~output_items:(Delator.Field.int (List.length rewritten.psg_items))];
+  rewritten
+[@@delator.instrument] [@@delator.level trace]
+
 let spec_attribute = "verocaml.spec"
 let proof_attribute = "verocaml.proof"
 let axiom_attribute = "verocaml.axiom"
@@ -2331,15 +2374,12 @@ let rewrite_expression_extensions ~keep_ghost ~logical_scope
             "unsupported verocaml extension %%%s" name
       | _ -> default.expr self expression)
 
-let make arguments =
-  let keep_ghost =
-    match arguments with
-    | [] -> false
-    | [ "--keep-ghost" ] -> true
-    | _ ->
-        invalid_arg
-          "verocaml-ppx accepts only the optional --keep-ghost argument"
-  in
+let make (arguments [@delator.skip]) =
+  configure_observability ();
+  let keep_ghost = keep_ghost_of_arguments arguments in
+  [%log.debug "construct PPX mapper"
+    ~keep_ghost:(Delator.Field.bool keep_ghost)
+    ~argument_count:(Delator.Field.int (List.length arguments))];
   let default = Ast_mapper.default_mapper in
   let root_structure = ref true in
   let root_signature = ref true in
@@ -2364,29 +2404,64 @@ let make arguments =
           default.attribute self attribute);
       structure =
         (fun self structure ->
+          let is_root = !root_structure in
           let structure =
-            if !root_structure then (
+            if is_root then (
               root_structure := false;
-              let structure = normalize_axiom_sugar structure in
-              let structure = split_root_verification_scope structure in
-              let structure =
-                instance_modes.structure instance_modes structure
+              let phase name rewrite structure =
+                rewrite_root_structure_phase ~keep_ghost ~phase:name rewrite
+                  structure
               in
-              proof_regions.structure proof_regions structure)
+              let structure =
+                phase "normalize axiom sugar" normalize_axiom_sugar structure
+              in
+              let structure =
+                phase "mark verification scope" split_root_verification_scope
+                  structure
+              in
+              let structure =
+                phase "rewrite instance modes"
+                  (instance_modes.structure instance_modes)
+                  structure
+              in
+              phase "retain proof regions"
+                (proof_regions.structure proof_regions)
+                structure)
             else structure
           in
           let structure =
-            Vero_ppx_symbolic_private.rewrite_structure ~keep_ghost structure
+            let rewrite =
+              Vero_ppx_symbolic_private.rewrite_structure ~keep_ghost
+            in
+            if is_root then
+              rewrite_root_structure_phase ~keep_ghost
+                ~phase:"rewrite symbolic forms" rewrite structure
+            else rewrite structure
           in
           let structure =
-            Vero_ppx_broadcast_private.rewrite_structure ~keep_ghost structure
+            let rewrite =
+              Vero_ppx_broadcast_private.rewrite_structure ~keep_ghost
+            in
+            if is_root then
+              rewrite_root_structure_phase ~keep_ghost
+                ~phase:"rewrite broadcasts" rewrite structure
+            else rewrite structure
           in
-          List.concat_map (rewrite_structure_item self) structure);
+          let rewrite structure =
+            List.concat_map (rewrite_structure_item self) structure
+          in
+          if is_root then
+            rewrite_root_structure_phase ~keep_ghost
+              ~phase:"rewrite declarations" rewrite structure
+          else rewrite structure);
       signature =
         (fun _self signature ->
           if !root_signature then (
             root_signature := false;
-            instance_modes.signature instance_modes signature)
+            rewrite_root_signature_phase ~keep_ghost
+              ~phase:"rewrite instance modes"
+              (instance_modes.signature instance_modes)
+              signature)
           else signature);
       expr =
         (fun self expression ->
@@ -2705,3 +2780,4 @@ let make arguments =
       Some (marker, sidecar)
   in
   mapper
+[@@delator.instrument] [@@delator.level debug]

@@ -164,7 +164,7 @@ solver.
   $ install_root="$(cat verocaml-install-root)"
   $ core="$install_root/lib/verocaml/core"
   $ private_flags=""; for directory in $(find "$install_root/lib/verocaml" -type d -name .private); do private_flags="$private_flags -I $directory"; done
-  $ ocamlfind ocamlc -custom -package smtml,zarith,compiler-libs.common -linkpkg -I "$core" $private_flags "$core/verocaml_core.cma" fixtures/installed_recursive_spec_forgery.ml -o artifacts/installed_recursive_spec_forgery.exe 2>/dev/null
+  $ ocamlfind ocamlc -custom -package smtml,zarith,compiler-libs.common,delator -linkpkg -I "$core" $private_flags "$core/verocaml_core.cma" fixtures/installed_recursive_spec_forgery.ml -o artifacts/installed_recursive_spec_forgery.exe 2>/dev/null
   $ ./artifacts/installed_recursive_spec_forgery.exe artifacts/forged.sst
   installed recursive SST tag rejected before solver
   $ ./recursive_specifications_tool.exe forge artifacts/forged.sst

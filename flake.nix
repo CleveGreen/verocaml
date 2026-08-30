@@ -35,6 +35,11 @@
       flake = false;
     };
 
+    delator-source = {
+      url = "github:CleveGreen/delator/c6d9de5092eabbcb5711f4d5b7b1231f509294e8";
+      flake = false;
+    };
+
     parallel-source = {
       url = "github:janestreet/parallel/e488373bb887e8cce4dab95bb23ec5d2f41d4f17";
       flake = false;
@@ -46,6 +51,7 @@
       self,
       await-source,
       concurrent-source,
+      delator-source,
       nixpkgs,
       opam-nix,
       opam-repository,
@@ -82,12 +88,14 @@
           opam-nix
           ;
       };
+      delatorRepository = opam-nix.lib.${system}.makeOpamRepo delator-source;
 
       scope =
         opam-nix.lib.${system}.buildOpamProject
           {
             pkgs = pkgs;
             repos = [
+              delatorRepository
               parallelRuntime.repository.opamNix
               z3ContextLocalRepository.opamNix
               oxcaml-opam-repository
@@ -108,6 +116,7 @@
           {
             ocaml-system = "5.2.0";
             base = "v0.18~preview.130.83+317";
+            delator = "dev";
             ocaml_intrinsics = "v0.18~preview.130.83+317";
             ppx_deriving = "6.1.1+ox";
             ppx_enumerate = "v0.18~preview.130.83+317";
@@ -123,12 +132,17 @@
 
       verocaml = scope.verocaml.overrideAttrs (old: {
         nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgs.makeWrapper ];
+        DELATOR_STATIC_LEVEL = "info";
         postFixup = (old.postFixup or "") + ''
           wrapProgram "$out/bin/verocaml" \
             --set VEROCAML_OCAMLC "${oxcamlCompiler}/bin/ocamlc" \
+            --set VEROCAML_DUNE "${scope.dune}/bin/dune" \
             --set VEROCAML_PPX "$out/bin/verocaml-ppx" \
             --set VEROCAML_GHOST_DIR \
-              "$out/lib/ocaml/5.2.0/site-lib/verocaml/ghost"
+              "$out/lib/ocaml/5.2.0/site-lib/verocaml/ghost" \
+            --prefix PATH : "${oxcamlCompiler}/bin:${scope.dune}/bin" \
+            --prefix OCAMLPATH : \
+              "$out/lib/ocaml/5.2.0/site-lib:${scope.delator}/lib/ocaml/5.2.0/site-lib:${scope.ppxlib}/lib/ocaml/5.2.0/site-lib"
         '';
       });
 
@@ -147,6 +161,7 @@
         assert oxcamlCompiler.version == "5.2.0+ox";
         assert scope.ocaml-system.version == "5.2.0";
         assert scope.base.version == "v0.18_preview.130.83+317";
+        assert scope.delator.version == "dev";
         assert scope.ocaml_intrinsics.version == "v0.18_preview.130.83+317";
         assert scope.ppx_deriving.version == "6.1.1+ox";
         assert scope.ppx_enumerate.version == "v0.18_preview.130.83+317";
@@ -849,6 +864,92 @@
             touch "$out"
           '';
 
+      duneProjectCliCheck =
+        assert versionAssertions;
+        pkgs.runCommand "verocaml-dune-project-cli-check"
+          {
+            nativeBuildInputs = [
+              oxcamlCompiler
+              scope.dune
+              verocaml
+            ];
+            buildInputs = [
+              scope.delator
+              scope.ppxlib
+            ];
+          }
+          ''
+            set -eu
+            export HOME="$TMPDIR/home"
+            export XDG_CACHE_HOME="$TMPDIR/cache"
+            mkdir -p "$HOME" "$XDG_CACHE_HOME"
+            test "$(ocamlc -vnum)" = "5.2.0+ox"
+
+            cp -R ${./test/dune_project_cli/project} project
+            chmod -R u+w project
+            OCAML_COLOR=never DELATOR_COLOR=never \
+              ${verocaml}/bin/verocaml verify project/lib \
+                --threads 1 --timeout-ms 20000 \
+                > verified.out 2> verified.err
+            grep -F 'result=verified' verified.out
+            grep -F 'verocaml: project directory=' verified.out
+            grep -F 'roots=2 result=verified' verified.out
+            test ! -s verified.err
+
+            OCAML_COLOR=never DELATOR_COLOR=never DELATOR_FORMAT=flat \
+              DELATOR_LOG='Verocaml_bin_dune_private=trace,Verocaml_bin=info,warn' \
+              ${verocaml}/bin/verocaml verify project/lib \
+                --threads 2 --timeout-ms 20000 \
+                > traced.out 2> traced.err
+            grep -F 'result=verified' traced.out
+            test -s traced.err
+
+            OCAML_COLOR=never DELATOR_COLOR=never DELATOR_FORMAT=json \
+              DELATOR_LOG='Verocaml_bin=info,warn' \
+              ${verocaml}/bin/verocaml verify project/lib \
+                --threads 2 --timeout-ms 20000 \
+                > json.out 2> json.err
+            grep -F 'roots=2 result=verified' json.out
+            test -s json.err
+
+            cp -R ${./test/dune_project_cli/project} unmarked-project
+            chmod -R u+w unmarked-project
+            sed -i '/\[@@@verocaml.verify\]/d' unmarked-project/lib/*.ml
+            if ${verocaml}/bin/verocaml verify unmarked-project/lib \
+                 > unmarked.out 2> unmarked.err; then
+              echo 'unmarked Dune project unexpectedly verified' >&2
+              exit 1
+            fi
+            grep -F 'found no [@@@verocaml.verify] modules' unmarked.err
+
+            if ${verocaml}/bin/verocaml verify project/lib \
+                 --dependency missing.cmt > option.out 2> option.err; then
+              echo 'directory verification accepted --dependency' >&2
+              exit 1
+            fi
+            grep -F 'discovers dependencies automatically' option.err
+
+            mkdir not-a-project
+            if ${verocaml}/bin/verocaml verify not-a-project \
+                 > no-project.out 2> no-project.err; then
+              echo 'directory without dune-project unexpectedly verified' >&2
+              exit 1
+            fi
+            grep -F 'could not find dune-project' no-project.err
+
+            cp -R ${./test/dune_project_cli/project} broken-project
+            chmod -R u+w broken-project
+            printf '\nlet broken =\n' >> broken-project/lib/second_root.ml
+            if ${verocaml}/bin/verocaml verify broken-project/lib \
+                 > broken.out 2> broken.err; then
+              echo 'Dune compilation failure unexpectedly verified' >&2
+              exit 1
+            fi
+            grep -F 'dune build' broken.err
+            grep -F 'second_root.ml' broken.err
+            touch "$out"
+          '';
+
       trustedExternalBodiesCheck =
         assert versionAssertions;
         pkgs.runCommand "verocaml-trusted-external-bodies-check"
@@ -941,9 +1042,11 @@
       };
 
       devShells.${system}.default = pkgs.mkShell {
+        DELATOR_STATIC_LEVEL = "trace";
         packages = [
           oxcamlCompiler
           scope.dune
+          scope.delator
           scope.smtml
           scope.parallel
           scope.z3
@@ -965,6 +1068,7 @@
           checkedIntegerVirCheck
           contractsAndCallsCheck
           directTotalityCheck
+          duneProjectCliCheck
           finiteFormalPropagationCheck
           finiteResultPromotionCheck
           genericCloneDependenciesCheck

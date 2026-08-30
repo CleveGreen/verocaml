@@ -531,7 +531,7 @@ let run_capability_controls entries validated =
       |> Option.iter (fun permit ->
              Logical_spec_capability_private.For_testing
              .capability_negative_controls permit validated
-             |> List.iter prerr_endline)
+             |> ignore)
   | Some _ | None -> ()
 
 let run_validator_controls entries validated =
@@ -541,7 +541,7 @@ let run_validator_controls entries validated =
     | Some permit ->
         Logical_spec_capability_private.For_testing.stale_model_control permit
           validated
-        |> Option.iter prerr_endline
+        |> ignore
 
 let prepare ~validated ~type_definitions ~classify ~excluded_contract
     ~authority_snapshot ~invariant_roots =
@@ -673,14 +673,24 @@ module For_testing = struct
                with
                | Ok _ -> ()
                | Error reason ->
-                   Printf.eprintf
-                     "formula-validator function=%s#%d tag=%s candidate=%s \
-                      reason=%s span=%s:%d:%d-%d:%d\n"
-                     definition.function_id.function_name
-                     definition.function_id.function_index (tag expression)
-                     candidate reason expression.span.file
-                     expression.span.start_pos.line expression.span.start_pos.column
-                     expression.span.end_pos.line expression.span.end_pos.column
+                   [%log.info "formula validator rejection"
+                     ~function_name:
+                       (Delator.Field.string
+                          definition.function_id.function_name)
+                     ~function_index:
+                       (Delator.Field.int definition.function_id.function_index)
+                     ~expression_tag:(Delator.Field.string (tag expression))
+                     ~candidate:(Delator.Field.string candidate)
+                     ~reason:(Delator.Field.string reason)
+                     ~span_file:(Delator.Field.string expression.span.file)
+                     ~span_start_line:
+                       (Delator.Field.int expression.span.start_pos.line)
+                     ~span_start_column:
+                       (Delator.Field.int expression.span.start_pos.column)
+                     ~span_end_line:
+                       (Delator.Field.int expression.span.end_pos.line)
+                     ~span_end_column:
+                       (Delator.Field.int expression.span.end_pos.column)]
              in
              let rec visit expression =
                report "source" ~type_definitions ~classify expression;

@@ -1135,7 +1135,31 @@ let validate program =
           environment.standalone_proof_binding_traces <-
             trace :: environment.standalone_proof_binding_traces;
           (match Sys.getenv_opt "VEROCAML_TEST_INSTANCE_MODE_TRACE" with
-          | Some "1" -> prerr_endline trace
+          | Some "1" ->
+              [%log.debug "standalone proof binding"
+                ~source_file:(Delator.Field.string expression.span.file)
+                ~binding_identity:
+                  (Delator.Field.string (Lazy.force descriptor.identity))
+                ~binding_id:(Delator.Field.int binding.id)
+                ~caller_name:
+                  (Delator.Field.string
+                     definition.function_id.function_name)
+                ~caller_index:
+                  (Delator.Field.int definition.function_id.function_index)
+                ~caller_mode:(Delator.Field.string "Proof")
+                ~recursive:(Delator.Field.bool false)
+                ~enclosing_body:(Delator.Field.string "Proof_body")
+                ~authenticated:(Delator.Field.bool true)
+                ~expected_mode:
+                  (Delator.Field.string (mode_name expected_use_context))
+                ~incoming_mode:(Delator.Field.string "Tracked")
+                ~outcome:(Delator.Field.string outcome)
+                ~original_binding:
+                  (Delator.Field.string (Lazy.force descriptor.identity))
+                ~edges:(Delator.Field.int edges)
+                ~synthetic_ghost:(Delator.Field.int 0)
+                ~synthetic_tracked:(Delator.Field.int 0)
+                ~unrelated_authority:(Delator.Field.int 0)]
           | Some _ | None -> ())
       | Some _ | None -> ()
     in
@@ -1599,7 +1623,47 @@ let validate program =
                       (match
                          Sys.getenv_opt "VEROCAML_TEST_INSTANCE_MODE_TRACE"
                        with
-                      | Some "1" -> prerr_endline trace
+                      | Some "1" ->
+                          [%log.debug "instance mode forgetting edge"
+                            ~source_file:
+                              (Delator.Field.string actual.span.file)
+                            ~caller_name:
+                              (Delator.Field.string
+                                 definition.function_id.function_name)
+                            ~caller_index:
+                              (Delator.Field.int
+                                 definition.function_id.function_index)
+                            ~callee_name:
+                              (Delator.Field.string
+                                 callee.function_id.function_name)
+                            ~callee_index:
+                              (Delator.Field.int
+                                 callee.function_id.function_index)
+                            ~callee_mode:
+                              (Delator.Field.string
+                                 (match callee.mode with
+                                 | Sst.Spec -> "Spec"
+                                 | Sst.Proof -> "Proof"
+                                 | Sst.Exec -> "Exec"))
+                            ~recursive:(Delator.Field.bool callee.recursive)
+                            ~formal_index:(Delator.Field.int formal_index)
+                            ~incoming_mode:
+                              (Delator.Field.string
+                                 (mode_name authenticated_mode))
+                            ~authenticated:(Delator.Field.bool true)
+                            ~formal_mode:(Delator.Field.string "Ghost")
+                            ~boundary_result_mode:
+                              (Delator.Field.string "Ghost")
+                            ~callee_result_mode:
+                              (Delator.Field.string
+                                 (mode_name callee_result))
+                            ~edges:(Delator.Field.int 1)
+                            ~synthetic_ghost:
+                              (Delator.Field.int
+                                 (ghost_after - ghost_before))
+                            ~synthetic_tracked:
+                              (Delator.Field.int
+                                 (tracked_after - tracked_before))]
                       | Some _ | None -> ());
                       Ok ()
                     else exact expected actual_mode actual.span "call actual")

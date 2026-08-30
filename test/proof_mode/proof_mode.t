@@ -228,7 +228,7 @@ privileges, or reinterpret pending proof summaries as totality.
   $ core="$root/_build/install/default/lib/verocaml/core"
   $ private_flags=""; for directory in $(find "$root/_build/install/default/lib/verocaml" -type d -name .private); do private_flags="$private_flags -I $directory"; done
   $ OCAML_COLOR=never ocamlfind ocamlc -package smtml,zarith,compiler-libs.common -I "$core" $private_flags -c fixtures/installed_proof_normalize_compatibility.ml -o artifacts/proof_normalize_compatibility.cmo 2> artifacts/proof_normalize_compatibility.err
-  $ OCAML_COLOR=never ocamlfind ocamlc -linkpkg -package smtml,zarith,compiler-libs.common -I "$core" $private_flags "$core/verocaml_core.cma" artifacts/proof_normalize_compatibility.cmo -o artifacts/proof_normalize_compatibility.exe 2>> artifacts/proof_normalize_compatibility.err
+  $ OCAML_COLOR=never ocamlfind ocamlc -linkpkg -package smtml,zarith,compiler-libs.common,delator -I "$core" $private_flags "$core/verocaml_core.cma" artifacts/proof_normalize_compatibility.cmo -o artifacts/proof_normalize_compatibility.exe 2>> artifacts/proof_normalize_compatibility.err
   $ ./artifacts/proof_normalize_compatibility.exe
   $ OCAML_COLOR=never ocamlfind ocamlc -package smtml,zarith,compiler-libs.common -I "$core" $private_flags -c fixtures/installed_recursive_proof_equation_attack.ml -o artifacts/equation_attack.cmo 2>&1 | grep -F 'Error: Unbound value'
   Error: Unbound value "Termination.pending_equation"

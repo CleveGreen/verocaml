@@ -54,7 +54,7 @@ call-scoped downstream counters remain unchanged.
 
   $ mkdir artifacts
   $ retained () { name=$1; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$name.cmo" "fixtures/$name.ml"; }
-  $ trace () { VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify "$@" --timeout-ms 5000 2>&1 | grep 'private-receipt destroy' | sed -E 's/.*finite-formal-assumptions=([0-9]+) finite-formal-batches=([0-9]+) finite-formal-transfers=([0-9]+) finite-formal-consumptions=([0-9]+).*/formal-counters assumptions=\1 batches=\2 transfers=\3 consumptions=\4/'; }
+  $ trace () { VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify "$@" --timeout-ms 5000 2>&1 | grep 'Verification_session: private receipt event_kind=destroy ' | sed -E 's/.*finite_formal_assumption_issuances=([0-9]+) finite_formal_transfer_batches=([0-9]+) finite_formal_transfers=([0-9]+) finite_formal_transfer_consumptions=([0-9]+).*/formal-counters assumptions=\1 batches=\2 transfers=\3 consumptions=\4/'; }
 
 Direct, alias, field, branch-path, repeated-call, Exec, and Tracked flows verify.
 
@@ -87,7 +87,7 @@ driver.
   formal-counters assumptions=9 batches=10 transfers=10 consumptions=10
   $ trace artifacts/generic_recursive_proof.cmt
   formal-counters assumptions=3 batches=3 transfers=3 consumptions=3
-  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/generic_recursive_proof.cmt --timeout-ms 5000 2>&1 | grep 'private-receipt lower function=' | sed -E 's|.*function=([^ ]+).*finite-formal-assumptions=([0-9]+) finite-formal-batches=([0-9]+) finite-formal-transfers=([0-9]+) finite-formal-consumptions=([0-9]+).*|checkpoint function=\1 counters=\2/\3/\4/\5|'
+  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/generic_recursive_proof.cmt --timeout-ms 5000 2>&1 | grep 'Verification_session: private receipt event_kind=lower ' | sed -E 's|.*function_name=([^ ]+) function_index=([0-9]+).*finite_formal_assumption_issuances=([0-9]+) finite_formal_transfer_batches=([0-9]+) finite_formal_transfers=([0-9]+) finite_formal_transfer_consumptions=([0-9]+).*|checkpoint function=\1#\2 counters=\3/\4/\5/\6|'
   checkpoint function=lemma_equal_refl#1 counters=0/0/0/0
   checkpoint function=int_instantiation#4 counters=1/1/1/1
   checkpoint function=bool_instantiation#5 counters=2/2/2/2
@@ -118,13 +118,13 @@ before a production session, dump, or solver.
   $ for n in generic_partial generic_labelled; do accept_generic_spec "$n" || exit 1; done
   generic_partial source+cmt functions=1 obligations=1
   generic_labelled source+cmt functions=1 obligations=1
-  $ reject_generic () { n=$1; code=0; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$n.cmt" --timeout-ms 5000 --dump-sst "artifacts/$n.sst" --dump-vir "artifacts/$n.vir" >"artifacts/$n.out" 2>&1 || code=$?; test "$code" = 2; printf '%s: ' "$n"; grep -o 'VERO_[A-Z_]*' "artifacts/$n.out"; test "$(grep -c 'private-receipt ' "artifacts/$n.out")" = 0; test ! -e "artifacts/$n.sst"; test ! -e "artifacts/$n.vir"; }
+  $ reject_generic () { n=$1; code=0; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$n.cmt" --timeout-ms 5000 --dump-sst "artifacts/$n.sst" --dump-vir "artifacts/$n.vir" >"artifacts/$n.out" 2>&1 || code=$?; test "$code" = 2; printf '%s: ' "$n"; grep -o 'VERO_[A-Z_]*' "artifacts/$n.out"; test "$(grep -c 'Verification_session: private receipt ' "artifacts/$n.out")" = 0; test ! -e "artifacts/$n.sst"; test ! -e "artifacts/$n.vir"; }
   $ for n in generic_type_changing generic_higher_order generic_foreign_actual; do reject_generic "$n" || exit 1; done
   generic_type_changing: VERO_UNSUPPORTED_POLYMORPHISM
   generic_higher_order: VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION
   generic_foreign_actual: VERO_UNSUPPORTED_TYPE
   $ separate () { name=$1; variant=$2; directory="artifacts/$name-$variant"; mkdir -p "$directory"; flag=; if test "$variant" = cmti; then flag=-bin-annot; fi; ocamlc -w -A -alert -all $flag -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "$directory/$name.cmi" "fixtures/$name.mli"; test -e "$directory/$name.cmi"; if test "$variant" = cmti; then test -e "$directory/$name.cmti"; else test ! -e "$directory/$name.cmti"; fi; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -I "$directory" -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "$directory/$name.cmo" "fixtures/$name.ml"; }
-  $ reject_public_generic () { label=$1; directory=$2; name=$3; code=0; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 VEROCAML_TEST_INSTANCE_MODE_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify "$directory/$name.cmt" --timeout-ms 5000 --dump-sst "$directory/rejected.sst" --dump-vir "$directory/rejected.vir" >"$directory/rejected.out" 2>&1 || code=$?; test "$code" = 2; printf '%s: ' "$label"; grep -o 'VERO_[A-Z_]*' "$directory/rejected.out"; test "$(grep -Ec 'private-receipt |instance-mode ' "$directory/rejected.out")" = 0; test ! -e "$directory/rejected.sst"; test ! -e "$directory/rejected.vir"; }
+  $ reject_public_generic () { label=$1; directory=$2; name=$3; code=0; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 VEROCAML_TEST_INSTANCE_MODE_TRACE=1 DELATOR_LOG=Verification_session=debug,Instance_mode=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify "$directory/$name.cmt" --timeout-ms 5000 --dump-sst "$directory/rejected.sst" --dump-vir "$directory/rejected.vir" >"$directory/rejected.out" 2>&1 || code=$?; test "$code" = 2; printf '%s: ' "$label"; grep -o 'VERO_[A-Z_]*' "$directory/rejected.out"; test "$(grep -Ec 'Verification_session: private receipt |Instance_mode: ' "$directory/rejected.out")" = 0; test ! -e "$directory/rejected.sst"; test ! -e "$directory/rejected.vir"; }
   $ separate generic_explicit_interface cmti
   $ separate generic_explicit_interface cmi-only
   $ verify_public_generic () { label=$1; directory=$2; name=$3; OCAML_COLOR=never ../../src/verocaml.exe verify "$directory/$name.cmt" --timeout-ms 5000 --dump-sst "$directory/accepted.sst" --dump-vir "$directory/accepted.vir" >/dev/null; test "$(grep -c '^function seq_reflexive#0 binders=' "$directory/accepted.sst")" = 1; test "$(grep -c '^type seq<' "$directory/accepted.sst")" = 0; printf '%s: verified canonical-schema=true clones=0\n' "$label"; }
@@ -179,14 +179,14 @@ recursive generic-list preflight before its completion-backed handle is issued.
 
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/retained_simple_bindings_provider.cmi fixtures/retained_simple_bindings_provider.mli
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -I artifacts -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/retained_simple_bindings_provider.cmo fixtures/retained_simple_bindings_provider.ml
-  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/retained_simple_bindings_provider.cmt --timeout-ms 5000 --dump-sst artifacts/retained-provider-first.sst --dump-vir artifacts/retained-provider-first.vir >artifacts/retained-provider.out 2>artifacts/retained-provider.trace
+  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/retained_simple_bindings_provider.cmt --timeout-ms 5000 --dump-sst artifacts/retained-provider-first.sst --dump-vir artifacts/retained-provider-first.vir >artifacts/retained-provider.out 2>artifacts/retained-provider.trace
   $ cat artifacts/retained-provider.out
   verocaml: verified file=artifacts/retained_simple_bindings_provider.cmt functions=4 obligations=11
-  $ grep -E '^private-receipt lower function=(seq_reflexive|int_seq_reflexive|bool_seq_reflexive)' artifacts/retained-provider.trace | sed -E 's|.*function=([^ ]+).*finite-formal-assumptions=([0-9]+) finite-formal-batches=([0-9]+) finite-formal-transfers=([0-9]+) finite-formal-consumptions=([0-9]+).*|checkpoint function=\1 counters=\2/\3/\4/\5|'
+  $ grep -E '^DEBUG Verification_session: private receipt event_kind=lower .*function_name=(seq_reflexive|int_seq_reflexive|bool_seq_reflexive)' artifacts/retained-provider.trace | sed -E 's|.*function_name=([^ ]+) function_index=([0-9]+).*finite_formal_assumption_issuances=([0-9]+) finite_formal_transfer_batches=([0-9]+) finite_formal_transfers=([0-9]+) finite_formal_transfer_consumptions=([0-9]+).*|checkpoint function=\1#\2 counters=\3/\4/\5/\6|'
   checkpoint function=seq_reflexive#1 counters=0/0/0/0
   checkpoint function=int_seq_reflexive#4 counters=1/1/1/1
   checkpoint function=bool_seq_reflexive#5 counters=1/2/2/2
-  $ grep '^private-receipt destroy' artifacts/retained-provider.trace | sed -E 's/.*finite-formal-assumptions=([0-9]+) finite-formal-batches=([0-9]+) finite-formal-transfers=([0-9]+) finite-formal-consumptions=([0-9]+).*/provider-final counters=\1\/\2\/\3\/\4/'
+  $ grep '^DEBUG Verification_session: private receipt event_kind=destroy ' artifacts/retained-provider.trace | sed -E 's/.*finite_formal_assumption_issuances=([0-9]+) finite_formal_transfer_batches=([0-9]+) finite_formal_transfers=([0-9]+) finite_formal_transfer_consumptions=([0-9]+).*/provider-final counters=\1\/\2\/\3\/\4/'
   provider-final counters=3/3/3/3
   $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/retained_simple_bindings_provider.cmt --timeout-ms 5000 --dump-sst artifacts/retained-provider-second.sst --dump-vir artifacts/retained-provider-second.vir >/dev/null
   $ cmp artifacts/retained-provider-first.sst artifacts/retained-provider-second.sst
@@ -214,10 +214,10 @@ change canonical schema identities, proof transfers, summaries, SST, or VIR.
   $ ocamlc -w -A -alert -all -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/retained-cmi-only/retained_simple_bindings_provider.cmi fixtures/retained_simple_bindings_provider.mli
   $ test ! -e artifacts/retained-cmi-only/retained_simple_bindings_provider.cmti
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -I artifacts/retained-cmi-only -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/retained-cmi-only/retained_simple_bindings_provider.cmo fixtures/retained_simple_bindings_provider.ml
-  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/retained-cmi-only/retained_simple_bindings_provider.cmt --timeout-ms 5000 --dump-sst artifacts/retained-cmi-only/provider.sst --dump-vir artifacts/retained-cmi-only/provider.vir >artifacts/retained-cmi-only/provider.out 2>artifacts/retained-cmi-only/provider.trace
+  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/retained-cmi-only/retained_simple_bindings_provider.cmt --timeout-ms 5000 --dump-sst artifacts/retained-cmi-only/provider.sst --dump-vir artifacts/retained-cmi-only/provider.vir >artifacts/retained-cmi-only/provider.out 2>artifacts/retained-cmi-only/provider.trace
   $ cat artifacts/retained-cmi-only/provider.out
   verocaml: verified file=artifacts/retained-cmi-only/retained_simple_bindings_provider.cmt functions=4 obligations=11
-  $ grep '^private-receipt destroy' artifacts/retained-cmi-only/provider.trace | sed -E 's/.*finite-formal-assumptions=([0-9]+) finite-formal-batches=([0-9]+) finite-formal-transfers=([0-9]+) finite-formal-consumptions=([0-9]+).*/cmi-only-provider-final counters=\1\/\2\/\3\/\4/'
+  $ grep '^DEBUG Verification_session: private receipt event_kind=destroy ' artifacts/retained-cmi-only/provider.trace | sed -E 's/.*finite_formal_assumption_issuances=([0-9]+) finite_formal_transfer_batches=([0-9]+) finite_formal_transfers=([0-9]+) finite_formal_transfer_consumptions=([0-9]+).*/cmi-only-provider-final counters=\1\/\2\/\3\/\4/'
   cmi-only-provider-final counters=3/3/3/3
   $ sed -E 's/ cmt=[^ ]+/ cmt=<cmt>/' artifacts/retained-provider-first.sst >artifacts/retained-provider-first.normalized.sst
   $ sed -E 's/ cmt=[^ ]+/ cmt=<cmt>/' artifacts/retained-cmi-only/provider.sst >artifacts/retained-cmi-only/provider.normalized.sst

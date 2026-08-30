@@ -389,7 +389,13 @@ let verify_with_external ?external_specifications ?(external_targets = []) reque
       ~solver_policy:configuration.solver_policy ~consumer:request.consumer
       ~external_specifications ~external_targets ~dependencies:request.dependencies
   with
-  | Error _ as error -> error
+  | Error error ->
+      [%log.debug "verification loading failed"
+        ~unit_name:(Delator.Field.string request.consumer.unit_name)
+        ~message:
+          (Delator.Field.string
+             (Interface_specification_loaded_private.error_message error))];
+      Error error
   | Ok loaded ->
       let driver = Interface_specification_loaded_private.driver loaded in
       let vir = Verification_driver_private.vir driver in
@@ -408,7 +414,7 @@ let verify_with_external ?external_specifications ?(external_targets = []) reque
                  transitive_dependencies;
                })
       in
-      Ok
+      let result =
         {
           status = status (Verification_driver_private.status driver);
           semantic_sst =
@@ -422,6 +428,22 @@ let verify_with_external ?external_specifications ?(external_targets = []) reque
             |> List.filter_map diagnostic;
           trusted_external_observations = trusted_external_observations vir;
         }
+      in
+      let outcome =
+        match result.status with
+        | Verified -> "verified"
+        | Counterexample -> "counterexample"
+        | Inconclusive -> "inconclusive"
+        | Incomplete_source -> "incomplete-source"
+      in
+      [%log.info "verification completed"
+        ~unit_name:(Delator.Field.string request.consumer.unit_name)
+        ~outcome
+        ~functions:(Delator.Field.int result.functions)
+        ~obligations:(Delator.Field.int result.obligations)
+        ~dependency_count:(Delator.Field.int (List.length request.dependencies))];
+      Ok result
+[@@delator.instrument] [@@delator.level info]
 
 let verify request =
   let external_targets =
@@ -438,6 +460,7 @@ let verify request =
         ~unit_name:request.consumer.unit_name message
   | Ok external_specifications ->
       verify_with_external ~external_specifications ~external_targets request
+[@@delator.instrument] [@@delator.level info]
 
 let scoped_request ~configuration ~inventory =
   let artifacts =
@@ -548,6 +571,7 @@ let verify_scope request =
            })
   in
   { scoped_rows = root_rows @ dependency_rows @ skipped_rows }
+[@@delator.instrument] [@@delator.level info]
 
 let error_unit_name = Interface_specification_loaded_private.error_unit_name
 let error_message = Interface_specification_loaded_private.error_message

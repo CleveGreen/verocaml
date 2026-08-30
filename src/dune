@@ -240,21 +240,27 @@
   (names physical_core_count_stubs))
  (libraries
   compiler-libs.common
+  delator
   smtml
   zarith
   z3
   parallel.kernel
-  parallel.scheduler))
+  parallel.scheduler)
+ (preprocess
+  (pps delator.ppx -- --static-level=%{env:DELATOR_STATIC_LEVEL=info})))
 
 (library
  (name verocaml_bin_private)
  (wrapped false)
  (modules
   verocaml_bin
+  verocaml_bin_dune_private
   verocaml_bin_render
   verocaml_bin_trusted_external_private
   verocaml_bin_project_private)
- (libraries verocaml_core unix))
+ (libraries verocaml_core unix delator)
+ (preprocess
+  (pps delator.ppx -- --static-level=%{env:DELATOR_STATIC_LEVEL=info})))
 
 (executable
  (name verocaml)

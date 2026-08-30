@@ -191,12 +191,12 @@ lowered.  This does not grant entry-formal authority; the dedicated
 use_invariant_from_formal transition fixture remains a rejection.
 
   $ retained stale_owned_invariant
-  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 ./proof_region_modes_tool.exe driver-transition-result artifacts/stale_owned_invariant.cmt 2>artifacts/stale-owned.trace
+  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never ./proof_region_modes_tool.exe driver-transition-result artifacts/stale_owned_invariant.cmt 2>artifacts/stale-owned.trace
   driver-transition-result status=verified functions=4 obligations=7 preservation-results=1
   transition lifecycle=1/1/1/1 preservation=1 reconstruction=1/0
   dependency lowering/backend/solver=2/2/5 receipts-issued/consumed=2/2 callee-verified/failed=5/0
   capture-issued=1 remapped=1 proof-sst=1 forgetting=1 recursive=0 backend=7 z3=7/7
-  $ grep 'private-receipt lower function=run#' artifacts/stale-owned.trace | sed -E 's/.*transition-predecessors=([^ ]+) transition-results=([^ ]+) teardown=[^ ]+ transition-preservations=([^ ]+) reconstructions=([^ ]+).*/caller-proof-entry predecessor=\1 result=\2 preservation=\3 reconstruction=\4/'
+  $ grep 'Verification_session: private receipt event_kind=lower .*function_name=run ' artifacts/stale-owned.trace | sed -E 's/.*transition_predecessor_transfers=([0-9]+) transition_predecessor_consumptions=([0-9]+) transition_result_receipts=([0-9]+) transition_teardown_removals=[0-9]+ transition_preservation_obligations=([0-9]+) transition_nested_reconstructions=([0-9]+) transition_root_reconstructions=([0-9]+).*/caller-proof-entry predecessor=\1\/\2 result=\3 preservation=\4 reconstruction=\5\/\6/'
   caller-proof-entry predecessor=1/1 result=1 preservation=1 reconstruction=1/0
   $ retained recursive_control
   $ ./proof_region_modes_tool.exe driver-control artifacts/recursive_control.cmt

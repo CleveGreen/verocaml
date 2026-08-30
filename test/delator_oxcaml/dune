@@ -1,0 +1,8 @@
+(test
+ (name oxcaml_backend)
+ (libraries delator)
+ (preprocess
+  (pps delator.ppx -- --static-level=trace)))
+
+(cram
+ (deps oxcaml_backend.exe))

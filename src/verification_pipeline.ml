@@ -206,22 +206,18 @@ let run session prepared ~initial_obligations ~solve ~on_result =
           || frozen_formal_blocked || frozen_blocked
         then (
           Verification_session.trace session
-            (if frozen_blocked then
-               Printf.sprintf "blocked-frozen-constructor function=%s#%d"
-                 definition.function_id.function_name
-                 definition.function_id.function_index
-             else if frozen_formal_blocked then
-               Printf.sprintf "blocked-frozen-formal function=%s#%d"
-                 definition.function_id.function_name
-                 definition.function_id.function_index
-             else if invariant_cell_blocked then
-               Printf.sprintf "blocked-invariant-cell function=%s#%d"
-                 definition.function_id.function_name
-                 definition.function_id.function_index
-             else
-               Printf.sprintf "blocked-dependent function=%s#%d"
-                 definition.function_id.function_name
-                 definition.function_id.function_index);
+            (Verification_session.Blocked
+               {
+                 reason =
+                   (if frozen_blocked then
+                      Verification_session.Blocked_frozen_constructor
+                    else if frozen_formal_blocked then
+                      Verification_session.Blocked_frozen_formal
+                    else if invariant_cell_blocked then
+                      Verification_session.Blocked_invariant_cell
+                    else Verification_session.Blocked_dependent);
+                 function_id = definition.function_id;
+               });
           loop executions functions obligations saw_counterexample
             saw_inconclusive saw_incomplete
             (if invariant_blocked then
@@ -246,10 +242,8 @@ let run session prepared ~initial_obligations ~solve ~on_result =
           | Ok () ->
           if dependent then Verification_session.note_dependent_lowering session;
           Verification_session.trace session
-            (Printf.sprintf
-               "lower function=%s#%d source=%b dependent=%b"
-               definition.function_id.function_name
-               definition.function_id.function_index source dependent);
+            (Verification_session.Lowering
+               { function_id = definition.function_id; source; dependent });
           match
             Symbolic_executor_private.lower_scheduled prepared scheduled
           with
@@ -438,7 +432,8 @@ let run session prepared ~initial_obligations ~solve ~on_result =
                         | Error error -> Error (Engine_error error)
                         | Ok (invariant_issued, finite_issued) ->
                             if source then
-                              Verification_session.trace session "issued";
+                              Verification_session.trace session
+                                Verification_session.Issued;
                             loop executions functions obligations
                               (saw_counterexample || counterexample)
                               (saw_inconclusive || inconclusive)
@@ -459,6 +454,7 @@ let run session prepared ~initial_obligations ~solve ~on_result =
   in
   loop [] 0 initial_obligations false false false [] [] [] false
     (Symbolic_executor_private.scheduled_functions prepared)
+[@@delator.instrument] [@@delator.level debug]
 
 type threaded_state = {
   executions : Vir.function_execution list;
@@ -573,22 +569,18 @@ let trace_blocked session prepared state scheduled =
     .scheduled_has_unestablished_invariant_cell_transition prepared scheduled
   in
   Verification_session.trace session
-    (if frozen_blocked then
-       Printf.sprintf "blocked-frozen-constructor function=%s#%d"
-         definition.function_id.function_name
-         definition.function_id.function_index
-     else if frozen_formal_blocked then
-       Printf.sprintf "blocked-frozen-formal function=%s#%d"
-         definition.function_id.function_name
-         definition.function_id.function_index
-     else if invariant_cell_blocked then
-       Printf.sprintf "blocked-invariant-cell function=%s#%d"
-         definition.function_id.function_name
-         definition.function_id.function_index
-     else
-       Printf.sprintf "blocked-dependent function=%s#%d"
-         definition.function_id.function_name
-         definition.function_id.function_index);
+    (Verification_session.Blocked
+       {
+         reason =
+           (if frozen_blocked then
+              Verification_session.Blocked_frozen_constructor
+            else if frozen_formal_blocked then
+              Verification_session.Blocked_frozen_formal
+            else if invariant_cell_blocked then
+              Verification_session.Blocked_invariant_cell
+            else Verification_session.Blocked_dependent);
+         function_id = definition.function_id;
+       });
   {
     state with
     blocked_invariant_callables =
@@ -624,6 +616,12 @@ let materialize_function session prepared prepare source_ordinal scheduled =
   let dependent =
     Symbolic_executor_private.scheduled_is_receipt_dependent scheduled
   in
+  [%log.trace "materialize verification function"
+    ~source_ordinal:(Delator.Field.int source_ordinal)
+    ~function_name:(Delator.Field.string definition.function_id.function_name)
+    ~function_index:(Delator.Field.int definition.function_id.function_index)
+    ~source:(Delator.Field.bool source)
+    ~dependent:(Delator.Field.bool dependent)];
   match
     Symbolic_executor_private.transfer_transition_predecessors prepared
       scheduled
@@ -632,9 +630,8 @@ let materialize_function session prepared prepare source_ordinal scheduled =
   | Ok () ->
       if dependent then Verification_session.note_dependent_lowering session;
       Verification_session.trace session
-        (Printf.sprintf "lower function=%s#%d source=%b dependent=%b"
-           definition.function_id.function_name
-           definition.function_id.function_index source dependent);
+        (Verification_session.Lowering
+           { function_id = definition.function_id; source; dependent });
       (match
          Symbolic_executor_private.lower_scheduled prepared scheduled
        with
@@ -772,6 +769,14 @@ let update_after_results prepared state envelope results =
     } )
 
 let commit_envelope session prepared commit ~on_result state envelope worker =
+  [%log.trace "commit verification function"
+    ~source_ordinal:(Delator.Field.int envelope.source_ordinal)
+    ~function_name:
+      (Delator.Field.string envelope.definition.function_id.function_name)
+    ~function_index:
+      (Delator.Field.int envelope.definition.function_id.function_index)
+    ~obligations:
+      (Delator.Field.int (List.length envelope.execution.Vir.obligations))];
   match commit envelope.prepared_function worker with
   | Error message -> Error (Solve_error message)
   | Ok results ->
@@ -846,7 +851,8 @@ let commit_envelope session prepared commit ~on_result state envelope worker =
                     | Error error -> Error (Engine_error error)
                     | Ok (invariant_issued, finite_issued) ->
                         if envelope.source then
-                          Verification_session.trace session "issued";
+                          Verification_session.trace session
+                            Verification_session.Issued;
                         Ok
                           {
                             state with
@@ -1089,6 +1095,7 @@ let run_threaded session prepared ~initial_obligations scheduler
                 | None -> loop state remaining)))
   in
   loop (initial_threaded_state initial_obligations) candidates
+[@@delator.instrument] [@@delator.level debug]
 
 let run_validated ~imports ~implementation ~program ~validated ~invariants
     ~preflight ~proof_entry_activations ~configure_solver ~on_result =
@@ -1102,7 +1109,7 @@ let run_validated ~imports ~implementation ~program ~validated ~invariants
         Fun.protect
           ~finally:(fun () ->
             Verification_session.destroy session;
-            Verification_session.trace session "destroy")
+            Verification_session.trace session Verification_session.Destroy)
           (fun () ->
             match preflight () with
             | Error error -> Error (Setup_error error)
@@ -1150,6 +1157,7 @@ let run_validated ~imports ~implementation ~program ~validated ~invariants
           counters = Verification_session.counters session;
           session_destroyed = not (Verification_session.is_active session);
         }
+[@@delator.instrument] [@@delator.level debug]
 
 let scheduler_creation_count = ref 0
 let scheduler_stop_count = ref 0
@@ -1167,7 +1175,7 @@ let run_validated_with_threads ~threads ~imports ~implementation ~program
         Fun.protect
           ~finally:(fun () ->
             Verification_session.destroy session;
-            Verification_session.trace session "destroy")
+            Verification_session.trace session Verification_session.Destroy)
           (fun () ->
             match preflight () with
             | Error error -> Error (Setup_error error)
@@ -1221,6 +1229,7 @@ let run_validated_with_threads ~threads ~imports ~implementation ~program
           counters = Verification_session.counters session;
           session_destroyed = not (Verification_session.is_active session);
         }
+[@@delator.instrument] [@@delator.level debug]
 
 module For_testing = struct
   let reset_validated_pipeline_entries () = validated_pipeline_entries := 0

@@ -446,6 +446,14 @@ let verify_candidate ?imported ?external_specifications ~solver_policy candidate
             match verified_snapshot ~unit_name ~candidate validated with
             | Error _ as error -> error
             | Ok (types, callables, external_specifications, models, invariants) ->
+                [%log.debug "verified dependency provider"
+                  ~unit_name
+                  ~types:(Delator.Field.int (List.length types))
+                  ~callables:(Delator.Field.int (List.length callables))
+                  ~external_specifications:
+                    (Delator.Field.int (List.length external_specifications))
+                  ~models:(Delator.Field.int (List.length models))
+                  ~invariants:(Delator.Field.int (List.length invariants))];
                 Ok
                   ( validated,
                     types,
@@ -454,6 +462,7 @@ let verify_candidate ?imported ?external_specifications ~solver_policy candidate
                     models,
                     invariants,
                     completion ))
+[@@delator.instrument] [@@delator.level debug]
 
 let authenticate_loaded_with_policy ~external_targets ~solver_policy
     ~dependencies:candidates ~consumer =
@@ -675,6 +684,7 @@ let authenticate_loaded_with_policy ~external_targets ~solver_policy
                           verify (verified @ [ staged ]) rest))
           in
           verify [] order)
+[@@delator.instrument] [@@delator.level debug]
 
 type loaded_verification = {
   loaded_environment : environment;
@@ -845,6 +855,7 @@ let run_loaded_consumer ~threads ~solver_policy ?external_specifications environ
             (Solver_backend.error_to_string solver_error)
       | Error (Internal_error message) ->
           error ~unit_name:consumer.unit_name message)
+[@@delator.instrument] [@@delator.level debug]
 
 let verify_loaded_with_policy ~threads ~solver_policy ~external_specifications
     ~external_targets ~dependencies ~consumer =
@@ -870,11 +881,13 @@ let verify_loaded_with_policy ~threads ~solver_policy ~external_specifications
       | Ok (environment, consumer) ->
           run_loaded_consumer ~threads ~solver_policy ?external_specifications environment
             consumer)
+[@@delator.instrument] [@@delator.level debug]
 
 
 let authenticate ~external_targets ~solver_policy ~dependencies ~consumer =
   authenticate_loaded_with_policy ~external_targets ~solver_policy ~dependencies
     ~consumer
+[@@delator.instrument] [@@delator.level debug]
 
 let verify ~threads ~solver_policy ~external_specifications ~external_targets
     ~consumer ~dependencies =
@@ -891,6 +904,7 @@ let verify ~threads ~solver_policy ~external_specifications ~external_targets
                  value.direct_dependencies, value.transitive_dependencies ))
       in
       Ok { driver = loaded.loaded_driver; provenance }
+[@@delator.instrument] [@@delator.level info]
 
 let driver result = result.driver
 let provenance result = result.provenance

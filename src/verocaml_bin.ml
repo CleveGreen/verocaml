@@ -417,7 +417,9 @@ let print_compiler_output stdout stderr =
   if not (String.equal stderr "") then (
     output_string Stdlib.stderr stderr;
     flush Stdlib.stderr)
-let compile_source source on_success =
+let compile_source
+    (source [@delator.field Fun.id])
+    (on_success [@delator.skip]) =
   match source_toolchain () with
   | Error message -> fail_internal message
   | Ok toolchain -> (
@@ -505,6 +507,7 @@ let compile_source source on_success =
       | Error message ->
           fail_internal
             (render_message (Temporary_storage_failure message)))
+[@@delator.instrument] [@@delator.level debug]
 (* This classification is evaluated before command parsing and, critically,
    before any input path is opened. *)
 let startup_classification = Int_bounds.check_target ()
@@ -548,6 +551,7 @@ let automatic_candidates (consumer : Cmt_input.implementation) =
     (consumer.load_path_visible @ consumer.load_path_hidden)
   |> List.filter_map (fun filename ->
          match Cmt_input.load filename with Ok candidate -> Some candidate | Error _ -> None)
+[@@delator.instrument] [@@delator.level trace]
 let declares_external_type_specifications
     (candidate : Cmt_input.implementation) =
   let found = ref false in
@@ -728,6 +732,7 @@ let discover_dependencies (consumer : Cmt_input.implementation) explicit
                 (List.rev_map snd selected @ rest))
   in
   visit [] [] (consumer :: explicit)
+[@@delator.instrument] [@@delator.level debug]
 let load_inputs ~discover options cmt_input =
   let consumer_error diagnostic =
     if options.dependencies = [] then render_frontend_error diagnostic
@@ -797,6 +802,7 @@ let load_inputs ~discover options cmt_input =
                       Result.map
                         (fun discovered -> (consumer, selected @ discovered))
                         (discover_dependencies consumer selected automatic)))))
+[@@delator.instrument] [@@delator.level debug]
 let emit_result ?source_compilation_cmt options result =
   let exit_code = verification_exit_code result in
   let rendered_sst =
@@ -831,6 +837,7 @@ let emit_result ?source_compilation_cmt options result =
                 ~display_file:options.input result
               |> List.iter print_endline;
               exit_code))
+[@@delator.instrument] [@@delator.level info]
 let verify_decoded ?source_compilation_cmt options configuration cmt_input =
   match
     load_inputs ~discover:(Option.is_none source_compilation_cmt) options
@@ -846,11 +853,124 @@ let verify_decoded ?source_compilation_cmt options configuration cmt_input =
           render_service_error error;
           2
       | Ok result -> emit_result ?source_compilation_cmt options result)
+[@@delator.instrument] [@@delator.level info]
 let verify_cmt options configuration cmt_input =
   verify_decoded options configuration cmt_input
 let verify_source options configuration private_cmt =
   verify_decoded ~source_compilation_cmt:private_cmt options configuration
     private_cmt
+
+let marked_for_verification (implementation : Cmt_input.implementation) =
+  implementation.verification_scope_markers = [ "marked-v1" ]
+
+let imported_by implementations (implementation : Cmt_input.implementation) =
+  List.exists
+    (fun owner ->
+      owner != implementation
+      && Array.exists
+           (fun (import : Cmt_input.import) ->
+             String.equal import.unit_name implementation.unit_name)
+           owner.Cmt_input.imports)
+    implementations
+
+let load_dune_artifacts artifacts =
+  let rec load loaded = function
+    | [] -> Ok (List.rev loaded)
+    | (artifact : Verocaml_bin_dune_private.artifact) :: rest -> (
+        match Cmt_input.load artifact.cmt with
+        | Ok implementation ->
+            [%log.trace "loaded Dune artifact"
+              ~cmt:(Delator.Field.string artifact.cmt)
+              ~source:(Delator.Field.string artifact.source)
+              ~unit_name:(Delator.Field.string implementation.unit_name)
+              ~retained:
+                (Delator.Field.bool
+                   (Cmt_input.retained_preprocessing implementation))];
+            load ((artifact, implementation) :: loaded) rest
+        | Error diagnostic -> Error (artifact.cmt, diagnostic))
+  in
+  load [] artifacts
+
+let combined_exit_code left right =
+  match (left, right) with
+  | 2, _ | _, 2 -> 2
+  | 3, _ | _, 3 -> 3
+  | 1, _ | _, 1 -> 1
+  | _ -> 0
+
+let verify_dune_project options configuration =
+  match Verocaml_bin_dune_private.build_and_describe options.input with
+  | Error message ->
+      prerr_endline (Verocaml_bin_render.cli_error message);
+      2
+  | Ok project -> (
+      if options.dependencies <> [] then (
+        prerr_endline
+          (Verocaml_bin_render.cli_error
+             "Dune directory verification discovers dependencies automatically; --dependency is not accepted");
+        2)
+      else if Option.is_some options.dump_sst || Option.is_some options.dump_vir
+      then (
+        prerr_endline
+          (Verocaml_bin_render.cli_error
+             "Dune directory verification does not accept single-file SST or VIR dump paths");
+        2)
+      else
+      match load_dune_artifacts project.artifacts with
+      | Error (_, diagnostic) ->
+          render_frontend_error diagnostic;
+          2
+      | Ok loaded ->
+          let marked =
+            List.filter
+              (fun (_, implementation) ->
+                marked_for_verification implementation)
+              loaded
+          in
+          let marked_implementations = List.map snd marked in
+          let roots =
+            List.filter
+              (fun (_, implementation) ->
+                not (imported_by marked_implementations implementation))
+              marked
+          in
+          [%log.info "selected Dune verification roots"
+            ~root:(Delator.Field.string project.root)
+            ~requested_directory:
+              (Delator.Field.string project.requested_directory)
+            ~marked_count:(Delator.Field.int (List.length marked))
+            ~root_count:(Delator.Field.int (List.length roots))];
+          (match roots with
+          | [] ->
+          prerr_endline
+            (Verocaml_bin_render.cli_error
+               (Printf.sprintf
+                  "Dune built %S but found no [@@@verocaml.verify] modules"
+                  project.requested_directory));
+          2
+          | _ ->
+              let exit_code =
+                List.fold_left
+                  (fun exit_code
+                       ((artifact : Verocaml_bin_dune_private.artifact),
+                        _implementation) ->
+                    let module_options = { options with input = artifact.cmt } in
+                    combined_exit_code exit_code
+                      (verify_cmt module_options configuration artifact.cmt))
+                  0 roots
+              in
+              print_endline
+                (Printf.sprintf
+                   "verocaml: project directory=%s roots=%d result=%s"
+                   project.requested_directory (List.length roots)
+                   (match exit_code with
+                   | 0 -> "verified"
+                   | 1 -> "counterexample"
+                   | 2 -> "rejected"
+                   | _ -> "inconclusive"));
+              exit_code))
+[@@delator.instrument]
+
 let verify options configuration =
   match validate_distinct_paths options with
   | Error message ->
@@ -862,10 +982,14 @@ let verify options configuration =
           render_frontend_error diagnostic;
           2
       | Ok () -> (
-          match Filename.extension options.input with
-          | ".ml" ->
+          if Option.is_some (existing_directory options.input) then
+            verify_dune_project options configuration
+          else
+            match Filename.extension options.input with
+            | ".ml" ->
               compile_source options.input (verify_source options configuration)
-          | _ -> verify_cmt options configuration options.input))
+            | _ -> verify_cmt options configuration options.input))
+[@@delator.instrument] [@@delator.level info]
 let main_force argv =
   match parse argv with
   | Error message ->
@@ -883,9 +1007,30 @@ let main_force argv =
                   configuration_error));
           2
       | Ok configuration -> verify options configuration)
+[@@delator.instrument] [@@delator.level info]
+
+let configure_observability () =
+  Delator.init ();
+  match Sys.getenv_opt "DELATOR_LOG" with
+  | None | Some "" -> Delator.set_default_level Delator.Warn
+  | Some _ -> ()
+
 let main argv =
-  match Array.to_list argv with
-  | _ :: "verify-project" :: _ ->
-      Verocaml_bin_project_private.main ~startup_classification
-        ~default_threads:(fun () -> production_default_threads (Multicore.max_domains ())) argv
-  | _ -> main_force argv
+  configure_observability ();
+  let command =
+    if Array.length argv > 1 then argv.(1) else "<missing>"
+  in
+  Delator.in_span ~level:Delator.Info ~target:__MODULE__ ~name:"command"
+    ~fields:(fun () ->
+      [
+        ("command", Delator.Field.string command);
+        ("argument_count", Delator.Field.int (Array.length argv - 1));
+      ])
+    (fun () ->
+      match Array.to_list argv with
+      | _ :: "verify-project" :: _ ->
+          Verocaml_bin_project_private.main ~startup_classification
+            ~default_threads:(fun () ->
+              production_default_threads (Multicore.max_domains ()))
+            argv
+      | _ -> main_force argv)

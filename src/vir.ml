@@ -764,16 +764,24 @@ let rank_selector_is_positive_child domain selector =
               (Printf.sprintf "$arg%d" field.field_index)
           in
           if Sys.getenv_opt "VEROCAML_TEST_RANK_MATCH_TRACE" = Some "1" then
-            Printf.eprintf
-              "rank-match owner=%b range=%b index=%b path=%b name=%b \
-               selector-domain=%s selector-range=%s child=%s\n"
-              owner range index path name selector.selector_domain.aggregate_type_name
-              (match selector.selector_range with
-              | Aggregate aggregate -> aggregate.aggregate_type_name
-              | Integer -> "int"
-              | Boolean -> "bool"
-              | Parametric _ -> "parameter")
-              child_type.aggregate_type_name;
+            [%log.debug "rank selector match"
+              ~owner_matches:(Delator.Field.bool owner)
+              ~range_matches:(Delator.Field.bool range)
+              ~index_matches:(Delator.Field.bool index)
+              ~path_matches:(Delator.Field.bool path)
+              ~name_matches:(Delator.Field.bool name)
+              ~selector_domain:
+                (Delator.Field.string
+                   selector.selector_domain.aggregate_type_name)
+              ~selector_range:
+                (Delator.Field.string
+                   (match selector.selector_range with
+                   | Aggregate aggregate -> aggregate.aggregate_type_name
+                   | Integer -> "int"
+                   | Boolean -> "bool"
+                   | Parametric _ -> "parameter"))
+              ~child_type:
+                (Delator.Field.string child_type.aggregate_type_name)];
           owner && range && index && path && name
       | Ground_rank_base _ | Constructor_rank_nonnegative _ -> false)
     domain.rank_facts

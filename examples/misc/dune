@@ -1,0 +1,6 @@
+(library
+ (name verocaml_examples)
+ (modules overview sum_of_tree list)
+ (libraries verocaml.vstd verocaml.ghost)
+ (flags (:standard -w -A -alert -all -open Vstd))
+ (preprocess (pps verocaml.ppx)))

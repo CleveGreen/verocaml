@@ -603,7 +603,8 @@ let relocated_paths ~filename ~build_directory ~compiler_arguments load_path =
     List.map resolve load_path.Load_path.visible,
     List.map resolve load_path.Load_path.hidden )
 
-let load_internal ?int_size ?interface_info filename =
+let load_internal ?int_size ?interface_info
+    (filename [@delator.field Fun.id]) =
   match Int_bounds.check_target ?int_size () with
   | Error _ as error -> error
   | Ok () -> (
@@ -684,7 +685,7 @@ let load_internal ?int_size ?interface_info filename =
                     ~compiler_arguments:info.Cmt_format.cmt_args
                     info.Cmt_format.cmt_loadpath
                 in
-                Ok
+                let implementation =
                   {
                     metadata = info;
                     embedded_interface_metadata = interface_info;
@@ -726,6 +727,22 @@ let load_internal ?int_size ?interface_info filename =
                     identifier_occurrence_count =
                       Array.length info.Cmt_format.cmt_ident_occurrences;
                   }
+                in
+                [%log.debug "loaded compiler artifact"
+                  ~filename
+                  ~unit_name:(Delator.Field.string implementation.unit_name)
+                  ~imports:
+                    (Delator.Field.int (Array.length implementation.imports))
+                  ~visible_load_paths:
+                    (Delator.Field.int
+                       (List.length implementation.load_path_visible))
+                  ~hidden_load_paths:
+                    (Delator.Field.int
+                       (List.length implementation.load_path_hidden))
+                  ~retained:
+                    (Delator.Field.bool
+                       (retained_preprocessing implementation))];
+                Ok implementation
           with
           | Cmt_format.Error _
           | Cmi_format.Error _
@@ -738,10 +755,15 @@ let load_internal ?int_size ?interface_info filename =
           | Sys_error _ -> input_error Input_io_error)
       | exception End_of_file -> input_error Malformed_input
       | exception Sys_error _ -> input_error Input_io_error)
+[@@delator.instrument] [@@delator.level debug]
 
-let load ?int_size filename = load_internal ?int_size filename
+let load ?int_size (filename [@delator.field Fun.id]) =
+  load_internal ?int_size filename
+[@@delator.instrument] [@@delator.level trace]
 
-let load_with_interface ?int_size ~cmt ~cmi () =
+let load_with_interface ?int_size
+    ~cmt:(cmt [@delator.field Fun.id])
+    ~cmi:(cmi [@delator.field Fun.id]) () =
   match Int_bounds.check_target ?int_size () with
   | Error _ as error -> error
   | Ok () ->
@@ -763,3 +785,4 @@ let load_with_interface ?int_size ~cmt ~cmi () =
               input_error Malformed_input)
       | exception End_of_file -> input_error Malformed_input
       | exception Sys_error _ -> input_error Input_io_error)
+[@@delator.instrument] [@@delator.level debug]

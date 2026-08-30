@@ -38,14 +38,14 @@ zero-flow rejection, so Proof expression stage alone does not select the rule.
   verocaml: verified file=fixture.cmt functions=1 obligations=0
   verocaml: verified file=fixture.cmt functions=1 obligations=2
   $ : > artifacts/standalone-proof-binding.trace
-  $ for n in tracked_call_bare tracked_return_bare standalone_proof_bare_tracked; do VEROCAML_TEST_INSTANCE_MODE_TRACE=1 ./instance_modes_tool.exe modes "artifacts/$n.cmt" >/dev/null 2>>artifacts/standalone-proof-binding.trace; done
-  $ grep '^standalone-proof-binding ' artifacts/standalone-proof-binding.trace | sed -E 's/.*caller=([^ ]+).*expected=([^ ]+).*outcome=([^ ]+).*edges=([0-9]+).*synthetic-ghost=([0-9]+).*synthetic-tracked=([0-9]+).*unrelated-authority=([0-9]+)$/caller=\1 expected=\2 outcome=\3 edges=\4 synthetic-ghost=\5 synthetic-tracked=\6 unrelated-authority=\7/' | sort | uniq -c
+  $ for n in tracked_call_bare tracked_return_bare standalone_proof_bare_tracked; do VEROCAML_TEST_INSTANCE_MODE_TRACE=1 DELATOR_LOG=Instance_mode=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never ./instance_modes_tool.exe modes "artifacts/$n.cmt" >/dev/null 2>>artifacts/standalone-proof-binding.trace; done
+  $ grep '^DEBUG Instance_mode: standalone proof binding ' artifacts/standalone-proof-binding.trace | sed -E 's/.*caller_name=([^ ]+) caller_index=([^ ]+).*expected_mode=([^ ]+).*outcome=([^ ]+).*edges=([0-9]+).*synthetic_ghost=([0-9]+).*synthetic_tracked=([0-9]+).*unrelated_authority=([0-9]+)$/caller=\1#\2 expected=\3 outcome=\4 edges=\5 synthetic-ghost=\6 synthetic-tracked=\7 unrelated-authority=\8/' | sort | uniq -c
         1 caller=caller#1 expected=Tracked outcome=preserve-exact-Tracked edges=0 synthetic-ghost=0 synthetic-tracked=0 unrelated-authority=0
         1 caller=identity#0 expected=Tracked outcome=preserve-exact-Tracked edges=0 synthetic-ghost=0 synthetic-tracked=0 unrelated-authority=0
         2 caller=observe#1 expected=Ghost outcome=observe-as-Ghost edges=1 synthetic-ghost=0 synthetic-tracked=0 unrelated-authority=0
-  $ bad=$(grep '^standalone-proof-binding ' artifacts/standalone-proof-binding.trace | grep -Evc 'binding=binding:[0-9]+:[0-9]+ binding-id=[0-9]+ caller=.* caller-mode=Proof recursive=false enclosing-body=Proof_body authenticated=true expected=(Ghost|Tracked) incoming=Tracked outcome=(observe-as-Ghost|preserve-exact-Tracked) original-binding=binding:[0-9]+:[0-9]+ edges=[01] synthetic-ghost=0 synthetic-tracked=0 unrelated-authority=0$' || true); echo "invalid-binding-traces=$bad"
+  $ bad=$(grep '^DEBUG Instance_mode: standalone proof binding ' artifacts/standalone-proof-binding.trace | grep -Evc 'binding_identity=binding:[0-9]+:[0-9]+ binding_id=[0-9]+ caller_name=.* caller_index=[0-9]+ caller_mode=Proof recursive=false enclosing_body=Proof_body authenticated=true expected_mode=(Ghost|Tracked) incoming_mode=Tracked outcome=(observe-as-Ghost|preserve-exact-Tracked) original_binding=binding:[0-9]+:[0-9]+ edges=[01] synthetic_ghost=0 synthetic_tracked=0 unrelated_authority=0$' || true); echo "invalid-binding-traces=$bad"
   invalid-binding-traces=0
-  $ VEROCAML_TEST_INSTANCE_MODE_TRACE=1 ./instance_modes_tool.exe reject-zero-no-flow artifacts/exec_call_tracked_bare.cmt 2>artifacts/exec-call-tracked-bare.trace
+  $ VEROCAML_TEST_INSTANCE_MODE_TRACE=1 DELATOR_LOG=Instance_mode=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never ./instance_modes_tool.exe reject-zero-no-flow artifacts/exec_call_tracked_bare.cmt 2>artifacts/exec-call-tracked-bare.trace
   semantic rejection; ghost-formal-flows=0; solvers=0
   $ test ! -s artifacts/exec-call-tracked-bare.trace
 
@@ -54,12 +54,12 @@ exception.  The private retained-CMT boundary mutates only the otherwise valid
 caller's Proof-body provenance, then requires semantic rejection before any
 forgetting edge, backend solver, Z3 context, or standalone-proof trace.
 
-  $ for pass in 1 2; do VEROCAML_TEST_INSTANCE_MODE_TRACE=1 ./instance_modes_tool.exe reject-raw-proof-body-no-authority artifacts/tracked_call_bare.cmt >"artifacts/raw-proof-body.$pass.out" 2>"artifacts/raw-proof-body.$pass.trace"; done
+  $ for pass in 1 2; do VEROCAML_TEST_INSTANCE_MODE_TRACE=1 DELATOR_LOG=Instance_mode=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never ./instance_modes_tool.exe reject-raw-proof-body-no-authority artifacts/tracked_call_bare.cmt >"artifacts/raw-proof-body.$pass.out" 2>"artifacts/raw-proof-body.$pass.trace"; done
   $ cmp artifacts/raw-proof-body.1.out artifacts/raw-proof-body.2.out
   $ cmp artifacts/raw-proof-body.1.trace artifacts/raw-proof-body.2.trace
   $ cat artifacts/raw-proof-body.1.out
   raw-proof-body rejection; boundary=validation; ghost-formal-flows=0; backend-solvers=0; z3-contexts=0; z3-solvers=0
-  $ printf 'standalone-proof-binding-traces=%s raw-body-authenticated-claims=%s\n' "$(grep -c '^standalone-proof-binding ' artifacts/raw-proof-body.1.trace || true)" "$(grep -c 'authenticated=true' artifacts/raw-proof-body.1.trace || true)"
+  $ printf 'standalone-proof-binding-traces=%s raw-body-authenticated-claims=%s\n' "$(grep -c '^DEBUG Instance_mode: standalone proof binding ' artifacts/raw-proof-body.1.trace || true)" "$(grep -c 'authenticated=true' artifacts/raw-proof-body.1.trace || true)"
   standalone-proof-binding-traces=0 raw-body-authenticated-claims=0
   $ test ! -s artifacts/raw-proof-body.1.trace
 
@@ -225,7 +225,7 @@ It rejects before the forgetting edge, while ordinary PPX erasure removes the
 whole proof call rather than evaluating the subtree.
 
   $ retained forgetting_effect
-  $ VEROCAML_TEST_INSTANCE_MODE_TRACE=1 ./instance_modes_tool.exe reject-zero-no-flow artifacts/forgetting_effect.cmt 2>artifacts/forgetting-effect.trace
+  $ VEROCAML_TEST_INSTANCE_MODE_TRACE=1 DELATOR_LOG=Instance_mode=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never ./instance_modes_tool.exe reject-zero-no-flow artifacts/forgetting_effect.cmt 2>artifacts/forgetting-effect.trace
   semantic rejection; ghost-formal-flows=0; solvers=0
   $ test ! -s artifacts/forgetting-effect.trace
   $ ocamlc -stop-after parsing -dsource -ppx ../../ppx/vero_ppx.exe fixtures/forgetting_effect.ml >/dev/null 2>artifacts/forgetting-effect.source
@@ -238,7 +238,7 @@ explicitly Ghost actual from executable code and reject before any forgetting
 edge or solver.
 
   $ : > artifacts/explicit-ghost.trace
-  $ for n in explicit_ghost_spec_bare explicit_ghost_proof_bare; do retained "$n"; VEROCAML_TEST_INSTANCE_MODE_TRACE=1 ./instance_modes_tool.exe reject-zero-no-flow "artifacts/$n.cmt" 2>>artifacts/explicit-ghost.trace; done
+  $ for n in explicit_ghost_spec_bare explicit_ghost_proof_bare; do retained "$n"; VEROCAML_TEST_INSTANCE_MODE_TRACE=1 DELATOR_LOG=Instance_mode=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never ./instance_modes_tool.exe reject-zero-no-flow "artifacts/$n.cmt" 2>>artifacts/explicit-ghost.trace; done
   semantic rejection; ghost-formal-flows=0; solvers=0
   semantic rejection; ghost-formal-flows=0; solvers=0
   $ test ! -s artifacts/explicit-ghost.trace
@@ -280,14 +280,14 @@ solver.
   $ compiled=0; ppx_rejected=0; for f in artifacts/matrix/*.ml; do n=$(basename "$f" .ml); if ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/matrix-cmt/$n.cmo" "$f" >/dev/null 2>&1; then compiled=$((compiled + 1)); else ppx_rejected=$((ppx_rejected + 1)); fi; done; echo "compiled=$compiled ppx-rejected=$ppx_rejected matrix=$((compiled + ppx_rejected))"
   compiled=36 ppx-rejected=6 matrix=42
   $ : > artifacts/matrix.trace
-  $ for cmt in artifacts/matrix-cmt/*.cmt; do VEROCAML_TEST_INSTANCE_MODE_TRACE=1 ./instance_modes_tool.exe reject-zero-flow "$cmt" 2>>artifacts/matrix.trace; done | sort | uniq -c
+  $ for cmt in artifacts/matrix-cmt/*.cmt; do VEROCAML_TEST_INSTANCE_MODE_TRACE=1 DELATOR_LOG=Instance_mode=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never ./instance_modes_tool.exe reject-zero-flow "$cmt" 2>>artifacts/matrix.trace; done | sort | uniq -c
         6 adapter rejection; ghost-formal-flows=0; solvers=0
        36 semantic rejection; ghost-formal-flows=1; solvers=0
-  $ printf 'semantic-traces=%s adapter-before-edge=%s\n' "$(grep -c '^forgetting-edge' artifacts/matrix.trace)" "$((42 - $(grep -c '^forgetting-edge' artifacts/matrix.trace)))"
+  $ printf 'semantic-traces=%s adapter-before-edge=%s\n' "$(grep -c '^DEBUG Instance_mode: instance mode forgetting edge ' artifacts/matrix.trace)" "$((42 - $(grep -c '^DEBUG Instance_mode: instance mode forgetting edge ' artifacts/matrix.trace)))"
   semantic-traces=36 adapter-before-edge=6
-  $ bad=$(grep '^forgetting-edge' artifacts/matrix.trace | grep -Evc 'incoming=Ghost .*authenticated=true formal-mode=Ghost boundary-result-mode=Ghost .*edges=1 synthetic-ghost=0 synthetic-tracked=0$' || true); echo "invalid-traces=$bad"
+  $ bad=$(grep '^DEBUG Instance_mode: instance mode forgetting edge ' artifacts/matrix.trace | grep -Evc 'incoming_mode=Ghost .*authenticated=true formal_mode=Ghost boundary_result_mode=Ghost .*edges=1 synthetic_ghost=0 synthetic_tracked=0$' || true); echo "invalid-traces=$bad"
   invalid-traces=0
-  $ for mode in Ghost Tracked; do printf 'declared-result-%s=%s\n' "$mode" "$(grep -c "callee-result-mode=$mode " artifacts/matrix.trace)"; done
+  $ for mode in Ghost Tracked; do printf 'declared-result-%s=%s\n' "$mode" "$(grep -c "callee_result_mode=$mode " artifacts/matrix.trace)"; done
   declared-result-Ghost=33
   declared-result-Tracked=3
 
@@ -302,9 +302,9 @@ issues no synthetic erased descriptor, and rejects before solver creation.
   $ printf 'compiled=%s matrix=%s\n' "$(find artifacts/unannotated-cmt -name '*.cmt' | wc -l)" "$(find artifacts/unannotated -name '*.ml' | wc -l)"
   compiled=36 matrix=36
   $ : > artifacts/unannotated.trace
-  $ for cmt in artifacts/unannotated-cmt/*.cmt; do VEROCAML_TEST_INSTANCE_MODE_TRACE=1 ./instance_modes_tool.exe reject-zero-flow "$cmt" 2>>artifacts/unannotated.trace; done | sort | uniq -c
+  $ for cmt in artifacts/unannotated-cmt/*.cmt; do VEROCAML_TEST_INSTANCE_MODE_TRACE=1 DELATOR_LOG=Instance_mode=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never ./instance_modes_tool.exe reject-zero-flow "$cmt" 2>>artifacts/unannotated.trace; done | sort | uniq -c
        36 semantic rejection; ghost-formal-flows=1; solvers=0
-  $ grep '^forgetting-edge' artifacts/unannotated.trace | sed -E 's/.*callee-mode=([^ ]+).*incoming=([^ ]+).*formal-mode=([^ ]+).*boundary-result-mode=([^ ]+).*callee-result-mode=([^ ]+).*edges=([0-9]+).*synthetic-ghost=([0-9]+).*synthetic-tracked=([0-9]+).*/callee=\1 incoming=\2 formal=\3 boundary-result=\4 callee-result=\5 edges=\6 synthetic-ghost=\7 synthetic-tracked=\8/' | sort | uniq -c
+  $ grep '^DEBUG Instance_mode: instance mode forgetting edge ' artifacts/unannotated.trace | sed -E 's/.*callee_mode=([^ ]+).*incoming_mode=([^ ]+).*formal_mode=([^ ]+).*boundary_result_mode=([^ ]+).*callee_result_mode=([^ ]+).*edges=([0-9]+).*synthetic_ghost=([0-9]+).*synthetic_tracked=([0-9]+).*/callee=\1 incoming=\2 formal=\3 boundary-result=\4 callee-result=\5 edges=\6 synthetic-ghost=\7 synthetic-tracked=\8/' | sort | uniq -c
         6 callee=Proof incoming=Exec formal=Ghost boundary-result=Ghost callee-result=Ghost edges=1 synthetic-ghost=0 synthetic-tracked=0
         6 callee=Proof incoming=Ghost formal=Ghost boundary-result=Ghost callee-result=Ghost edges=1 synthetic-ghost=0 synthetic-tracked=0
         6 callee=Proof incoming=Tracked formal=Ghost boundary-result=Ghost callee-result=Ghost edges=1 synthetic-ghost=0 synthetic-tracked=0

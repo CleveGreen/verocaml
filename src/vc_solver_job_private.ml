@@ -454,6 +454,7 @@ let solve_recursive job route =
             0 ))
 
 let solve_prepared job =
+  let solved =
   match job.route with
   | Ordinary controlled ->
       let outcome, telemetry =
@@ -516,6 +517,28 @@ let solve_prepared job =
           };
         ordinary_contribution = None;
       }
+  in
+  [%log.trace "solver obligation completed"
+    ~canonical_index:(Delator.Field.int job.canonical_index)
+    ~route_name:
+      (Delator.Field.string
+         (match job.route with
+         | Ordinary _ -> "ordinary"
+         | Direct (Structural_rank, _) -> "structural-rank"
+         | Direct (Logical_aggregate, _) -> "logical-aggregate"
+         | Recursive _ -> "recursive"))
+    ~outcome_name:
+      (Delator.Field.string
+         (match solved.outcome with
+         | Error _ -> "error"
+         | Ok Solver_backend.Verified -> "verified"
+         | Ok (Solver_backend.Counterexample _) -> "counterexample"
+         | Ok (Solver_backend.Inconclusive _) -> "inconclusive"))
+    ~attempts:(Delator.Field.int (List.length solved.attempt_telemetry))
+    ~contexts:(Delator.Field.int solved.telemetry.contexts_created)
+    ~solvers:(Delator.Field.int solved.telemetry.solvers_created)];
+  solved
+[@@delator.instrument] [@@delator.level trace]
 
 let job_index job = job.canonical_index
 let job_obligation job = job.obligation

@@ -220,6 +220,7 @@ let lower ?(allow_public_parametric_signatures = false) ?external_specifications
                                   registration;
                                   external_registration;
                                 }))))))
+[@@delator.instrument] [@@delator.level debug]
 
 let program lowered = lowered.program
 let registration lowered = lowered.registration

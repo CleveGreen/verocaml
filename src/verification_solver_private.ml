@@ -98,6 +98,7 @@ let preflight ~solver_policy program =
                          (Recursive_spec_encoding.error_to_string error)))
           in
           check (Recursive_spec_encoding.definition_ids verified))
+[@@delator.instrument] [@@delator.level debug]
 
 let termination_obligations preflight = preflight.termination_obligations
 let terminal_result preflight = preflight.terminal_result
@@ -391,6 +392,7 @@ let prepare_function threaded ~source_ordinal
                   rest)
   in
   loop 0 [] request.proof_activation_routes None execution.Vir.obligations
+[@@delator.instrument] [@@delator.level trace]
 
 let worker_request prepared = prepared.request
 
@@ -454,6 +456,7 @@ let solve_execution ~solver_policy recursive_verification _config
         | Counterexample _ | Inconclusive _ -> Ok (List.rev completed)
   in
   loop 0 [] request.proof_activation_routes execution.Vir.obligations
+[@@delator.instrument] [@@delator.level debug]
 
 let configure ~solver_policy preflight =
   match
@@ -467,6 +470,7 @@ let configure ~solver_policy preflight =
       Ok
         (fun (request : Verification_pipeline.solve_request) ->
           solve_execution ~solver_policy preflight config request)
+[@@delator.instrument] [@@delator.level debug]
 
 let add_telemetry (left : Z3_bridge.counters)
     (right : Z3_bridge.counters) =
@@ -672,6 +676,7 @@ let configure_threaded ~solver_policy preflight =
           threaded_policy = solver_policy;
           threaded_recursive = preflight;
         }
+[@@delator.instrument] [@@delator.level debug]
 
 module For_testing = struct
   let force_recursive_local_inconclusive force =

@@ -205,16 +205,13 @@ let exit_code rows =
   else if !counterexample then 1
   else 0
 
-let verify startup_classification options configuration =
+let verify_inventory ~startup_classification ~configuration inventory =
   match startup_classification with
   | Error diagnostic ->
       prerr_endline (frontend_error diagnostic);
       2
   | Ok () -> (
-      match load_inventory options.inventory with
-      | Error () -> 2
-      | Ok inventory -> (
-          match Verifier_service.scoped_request ~configuration ~inventory with
+      match Verifier_service.scoped_request ~configuration ~inventory with
           | Error error ->
               prerr_endline
                 (dependency_error
@@ -229,7 +226,14 @@ let verify startup_classification options configuration =
                 (fun row -> stderr_lines row |> List.iter prerr_endline)
                 rows;
               List.iter (fun row -> stdout_line row |> print_endline) rows;
-              exit_code rows))
+              exit_code rows)
+[@@delator.instrument] [@@delator.level info]
+
+let verify startup_classification options configuration =
+  match load_inventory options.inventory with
+  | Error () -> 2
+  | Ok inventory ->
+      verify_inventory ~startup_classification ~configuration inventory
 
 let main ~startup_classification ~default_threads argv =
   match parse ~default_threads argv with

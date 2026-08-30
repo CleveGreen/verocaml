@@ -79,44 +79,45 @@ A completed local callee issues one receipt before its dependent is lowered.
 The exact true alias reaches the function return with the original symbolic
 identity.
 
+  $ receipt_core () { awk '/Verification_session: private receipt / { delete f; for (i = 1; i <= NF; i++) { split($i, pair, "="); if (length(pair[1]) < length($i)) f[pair[1]] = substr($i, length(pair[1]) + 2) } printf "event=%s function=%s#%s source=%s dependent=%s callee=%s/%s/%s dependent-work=%s/%s/%s receipts=%s/%s finite-formal=%s/%s/%s/%s\n", f["event_kind"], f["function_name"], f["function_index"], f["source"], f["dependent"], f["callee_solver_attempts"], f["callee_verified_results"], f["callee_failed_results"], f["dependent_lowerings"], f["dependent_backend_contexts"], f["dependent_solver_attempts"], f["receipts_issued"], f["receipts_consumed"], f["finite_formal_assumption_issuances"], f["finite_formal_transfer_batches"], f["finite_formal_transfers"], f["finite_formal_transfer_consumptions"] }' "$1"; }
   $ retained local_positive
   $ ./private_receipt_tool.exe sessions artifacts/local_positive.cmt
   production-sessions first=verified first-issued=1 first-consumed=1 first-destroyed=true second=incomplete second-issued=0 second-consumed=0 second-dependent-lowerings=0 second-dependent-backends=0 second-dependent-solvers=0 second-destroyed=true
-  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/local_positive.cmt --timeout-ms 5000 > artifacts/local.out 2> artifacts/local.trace
+  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/local_positive.cmt --timeout-ms 5000 > artifacts/local.out 2> artifacts/local.trace
   $ cat artifacts/local.out
   verocaml: verified file=artifacts/local_positive.cmt functions=3 obligations=5
-  $ grep '^private-receipt issued' artifacts/local.trace
-  private-receipt issued callee-solver-attempts=2 callee-verified-results=2 callee-failed-results=0 dependent-lowerings=0 dependent-backends=0 dependent-solver-attempts=0 receipts-issued=1 receipts-consumed=0 finite-formal-assumptions=0 finite-formal-batches=0 finite-formal-transfers=0 finite-formal-consumptions=0
-  $ grep '^private-receipt destroy' artifacts/local.trace | tail -1
-  private-receipt destroy callee-solver-attempts=2 callee-verified-results=2 callee-failed-results=0 dependent-lowerings=1 dependent-backends=1 dependent-solver-attempts=3 receipts-issued=1 receipts-consumed=1 finite-formal-assumptions=0 finite-formal-batches=0 finite-formal-transfers=0 finite-formal-consumptions=0
+  $ receipt_core artifacts/local.trace | grep '^event=issued '
+  event=issued function=#-1 source=false dependent=false callee=2/2/0 dependent-work=0/0/0 receipts=1/0 finite-formal=0/0/0/0
+  $ receipt_core artifacts/local.trace | grep '^event=destroy ' | tail -1
+  event=destroy function=#-1 source=false dependent=false callee=2/2/0 dependent-work=1/1/3 receipts=1/1 finite-formal=0/0/0/0
 
 A failed callee produces no receipt and no dependent lowering, backend, or
 solver activity.
 
   $ retained failing_callee
-  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/failing_callee.cmt --timeout-ms 5000 > artifacts/failing.out 2> artifacts/failing.trace
+  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/failing_callee.cmt --timeout-ms 5000 > artifacts/failing.out 2> artifacts/failing.trace
   [1]
-  $ grep '^private-receipt blocked-dependent' artifacts/failing.trace
-  private-receipt blocked-dependent function=run#4 callee-solver-attempts=1 callee-verified-results=0 callee-failed-results=1 dependent-lowerings=0 dependent-backends=0 dependent-solver-attempts=0 receipts-issued=0 receipts-consumed=0 finite-formal-assumptions=0 finite-formal-batches=0 finite-formal-transfers=0 finite-formal-consumptions=0
+  $ receipt_core artifacts/failing.trace | grep '^event=blocked-dependent '
+  event=blocked-dependent function=run#4 source=false dependent=false callee=1/0/1 dependent-work=0/0/0 receipts=0/0 finite-formal=0/0/0/0
 
 A failed receipt component skips only its own dependent. An independent
 receipt source still issues and its dependent is lowered and solved.
 
   $ retained independent_receipt_failure
-  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/independent_receipt_failure.cmt --timeout-ms 5000 > artifacts/independent.out 2> artifacts/independent.trace
+  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/independent_receipt_failure.cmt --timeout-ms 5000 > artifacts/independent.out 2> artifacts/independent.trace
   [1]
-  $ grep -E '^private-receipt (issued|blocked-dependent function=run_bad|lower function=run_good)' artifacts/independent.trace
-  private-receipt issued callee-solver-attempts=2 callee-verified-results=2 callee-failed-results=0 dependent-lowerings=0 dependent-backends=0 dependent-solver-attempts=0 receipts-issued=1 receipts-consumed=0 finite-formal-assumptions=0 finite-formal-batches=0 finite-formal-transfers=0 finite-formal-consumptions=0
-  private-receipt blocked-dependent function=run_bad#5 callee-solver-attempts=3 callee-verified-results=2 callee-failed-results=1 dependent-lowerings=1 dependent-backends=1 dependent-solver-attempts=1 receipts-issued=1 receipts-consumed=1 finite-formal-assumptions=0 finite-formal-batches=0 finite-formal-transfers=0 finite-formal-consumptions=0
-  private-receipt lower function=run_good#6 source=false dependent=true callee-solver-attempts=3 callee-verified-results=2 callee-failed-results=1 dependent-lowerings=2 dependent-backends=1 dependent-solver-attempts=1 receipts-issued=1 receipts-consumed=1 finite-formal-assumptions=0 finite-formal-batches=0 finite-formal-transfers=0 finite-formal-consumptions=0
+  $ receipt_core artifacts/independent.trace | grep -E '^event=(issued |blocked-dependent function=run_bad|lower function=run_good)'
+  event=issued function=#-1 source=false dependent=false callee=2/2/0 dependent-work=0/0/0 receipts=1/0 finite-formal=0/0/0/0
+  event=blocked-dependent function=run_bad#5 source=false dependent=false callee=3/2/1 dependent-work=1/1/1 receipts=1/1 finite-formal=0/0/0/0
+  event=lower function=run_good#6 source=false dependent=true callee=3/2/1 dependent-work=2/1/1 receipts=1/1 finite-formal=0/0/0/0
 
 Receipt availability does not prove an ordinary call precondition.
 
   $ retained false_precondition
-  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/false_precondition.cmt --timeout-ms 5000 > artifacts/pre.out 2> artifacts/pre.trace
+  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/false_precondition.cmt --timeout-ms 5000 > artifacts/pre.out 2> artifacts/pre.trace
   [1]
-  $ grep '^private-receipt issued' artifacts/pre.trace
-  private-receipt issued callee-solver-attempts=2 callee-verified-results=2 callee-failed-results=0 dependent-lowerings=0 dependent-backends=0 dependent-solver-attempts=0 receipts-issued=1 receipts-consumed=0 finite-formal-assumptions=0 finite-formal-batches=0 finite-formal-transfers=0 finite-formal-consumptions=0
+  $ receipt_core artifacts/pre.trace | grep '^event=issued '
+  event=issued function=#-1 source=false dependent=false callee=2/2/0 dependent-work=0/0/0 receipts=1/0 finite-formal=0/0/0/0
   $ grep 'vc=call-precondition' artifacts/pre.trace | sed -E 's/span=[^ ]+/span=SPAN/'
   verocaml: counterexample function=run#4 vc=call-precondition[Box.make#0,0] span=SPAN result=counterexample
 
@@ -124,18 +125,18 @@ Distinct branch calls receive distinct call instances. Their structurally
 similar branch-local results do not launder a fact through the join.
 
   $ retained branch_laundering
-  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/branch_laundering.cmt --timeout-ms 5000 > artifacts/branch.out 2> artifacts/branch.trace
+  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/branch_laundering.cmt --timeout-ms 5000 > artifacts/branch.out 2> artifacts/branch.trace
   [1]
   $ grep 'vc=invariant-function-return' artifacts/branch.trace | sed -E 's/span=[^ ]+/span=SPAN/'
   verocaml: counterexample function=run#4 vc=invariant-function-return[invariant:Box.t:1:Box.invariant:2] span=SPAN result=counterexample
-  $ grep '^private-receipt destroy' artifacts/branch.trace | tail -1
-  private-receipt destroy callee-solver-attempts=2 callee-verified-results=2 callee-failed-results=0 dependent-lowerings=1 dependent-backends=1 dependent-solver-attempts=5 receipts-issued=1 receipts-consumed=2 finite-formal-assumptions=0 finite-formal-batches=0 finite-formal-transfers=0 finite-formal-consumptions=0
+  $ receipt_core artifacts/branch.trace | grep '^event=destroy ' | tail -1
+  event=destroy function=#-1 source=false dependent=false callee=2/2/0 dependent-work=1/1/5 receipts=1/2 finite-formal=0/0/0/0
 
 Mutable rebinding likewise does not preserve the exact returned result
 identity. Copy, widening, swapping, and Ghost rejection are exercised directly
 by the private authority matrix above.
 
-  $ for n in rebind_laundering; do retained "$n"; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$n.cmt" --timeout-ms 5000 >"artifacts/$n.out" 2>"artifacts/$n.trace"; echo "$n=$?"; done
+  $ for n in rebind_laundering; do retained "$n"; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$n.cmt" --timeout-ms 5000 >"artifacts/$n.out" 2>"artifacts/$n.trace"; echo "$n=$?"; done
   rebind_laundering=1
   $ for n in rebind_laundering; do grep 'vc=invariant-function-return' "artifacts/$n.trace" | sed -E 's/span=[^ ]+/span=SPAN/'; done
   verocaml: counterexample function=run#4 vc=invariant-function-return[invariant:Box.t:1:Box.invariant:2] span=SPAN result=counterexample
@@ -144,11 +145,11 @@ An unrelated failing callable is not a receipt prerequisite: issuance and
 consumption happen before its ordinary verification failure.
 
   $ retained unrelated_failure
-  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/unrelated_failure.cmt --timeout-ms 5000 > artifacts/unrelated.out 2> artifacts/unrelated.trace
+  $ VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/unrelated_failure.cmt --timeout-ms 5000 > artifacts/unrelated.out 2> artifacts/unrelated.trace
   [1]
-  $ grep -E '^private-receipt (issued|lower function=unrelated)' artifacts/unrelated.trace
-  private-receipt issued callee-solver-attempts=2 callee-verified-results=2 callee-failed-results=0 dependent-lowerings=0 dependent-backends=0 dependent-solver-attempts=0 receipts-issued=1 receipts-consumed=0 finite-formal-assumptions=0 finite-formal-batches=0 finite-formal-transfers=0 finite-formal-consumptions=0
-  private-receipt lower function=unrelated#5 source=false dependent=false callee-solver-attempts=2 callee-verified-results=2 callee-failed-results=0 dependent-lowerings=1 dependent-backends=1 dependent-solver-attempts=3 receipts-issued=1 receipts-consumed=1 finite-formal-assumptions=0 finite-formal-batches=0 finite-formal-transfers=0 finite-formal-consumptions=0
+  $ receipt_core artifacts/unrelated.trace | grep -E '^event=(issued |lower function=unrelated)'
+  event=issued function=#-1 source=false dependent=false callee=2/2/0 dependent-work=0/0/0 receipts=1/0 finite-formal=0/0/0/0
+  event=lower function=unrelated#5 source=false dependent=false callee=2/2/0 dependent-work=1/1/3 receipts=1/1 finite-formal=0/0/0/0
 
 Every installed authority module is explicitly private in Dune metadata.
 Standard Dune/Findlib consumers cannot import those modules.  A separate

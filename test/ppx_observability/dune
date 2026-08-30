@@ -1,0 +1,9 @@
+(executable
+ (name ppx_driver_observability_tool)
+ (libraries vero_ppx_driver compiler-libs.common))
+
+(cram
+ (deps
+  (glob_files fixtures/*)
+  ppx_driver_observability_tool.exe
+  ../../ppx/vero_ppx.exe))

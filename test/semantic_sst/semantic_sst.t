@@ -33,7 +33,7 @@ the installed =Sst_callable= compatibility wrapper.
   Error: Unbound value "Termination.pending_fuel"
   $ OCAML_COLOR=never ocamlfind ocamlc -package smtml,zarith,compiler-libs.common -I "$core" $private_flags -c fixtures/installed_termination_seal_forge.ml -o artifacts/installed_termination_seal_forge.cmo 2>&1 | grep -F 'Error: Unbound value'
   Error: Unbound value "Termination.seal"
-  $ ocamlfind ocamlc -custom -package smtml,zarith,compiler-libs.common -linkpkg -I "$core" $private_flags "$core/verocaml_core.cma" fixtures/installed_semantic_queries.ml -o artifacts/installed_semantic_queries.exe 2>/dev/null
+  $ ocamlfind ocamlc -custom -package smtml,zarith,compiler-libs.common,delator -linkpkg -I "$core" $private_flags "$core/verocaml_core.cma" fixtures/installed_semantic_queries.ml -o artifacts/installed_semantic_queries.exe 2>/dev/null
   $ ./artifacts/installed_semantic_queries.exe
   installed validated queries, callable wrapper, and termination graph accepted
 

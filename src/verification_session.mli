@@ -659,7 +659,27 @@ val note_invariant_cell_terminal_read : t -> unit
 val note_invariant_cell_teardown : t -> unit
 val counters : t -> counters
 val render_counters : t -> string
-val trace : t -> string -> unit
+
+type blocked_reason =
+  | Blocked_frozen_constructor
+  | Blocked_frozen_formal
+  | Blocked_invariant_cell
+  | Blocked_dependent
+
+type trace_event =
+  | Blocked of {
+      reason : blocked_reason;
+      function_id : Sst.function_id;
+    }
+  | Lowering of {
+      function_id : Sst.function_id;
+      source : bool;
+      dependent : bool;
+    }
+  | Issued
+  | Destroy
+
+val trace : t -> trace_event -> unit
 
 module For_testing : sig
   val set_owned_root_scalar_plan_attack_for_testing :

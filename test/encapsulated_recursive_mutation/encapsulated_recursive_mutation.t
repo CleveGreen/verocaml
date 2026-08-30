@@ -207,6 +207,6 @@ raw authenticated evidence still links and runs, but validation rejects it.
   2
   $ OCAML_COLOR=never ocamlfind ocamlc -package smtml,zarith,compiler-libs.common -I "$core" $private_flags -c fixtures/installed_adapter_issue_attack.ml -o artifacts/installed_adapter_issue_attack.cmo 2>&1 | grep -F 'Error: Unbound value'
   Error: Unbound value "Typedtree_adapter.issue_abstraction"
-  $ ocamlfind ocamlc -custom -package smtml,zarith,compiler-libs.common -linkpkg -I "$core" $private_flags "$core/verocaml_core.cma" fixtures/installed_raw_forgery.ml -o artifacts/installed_raw_forgery.exe 2>/dev/null
+  $ ocamlfind ocamlc -custom -package smtml,zarith,compiler-libs.common,delator -linkpkg -I "$core" $private_flags "$core/verocaml_core.cma" fixtures/installed_raw_forgery.ml -o artifacts/installed_raw_forgery.exe 2>/dev/null
   $ ./artifacts/installed_raw_forgery.exe
   raw installed-client certificate rejected

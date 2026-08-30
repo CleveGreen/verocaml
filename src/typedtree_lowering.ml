@@ -1,4 +1,7 @@
 let lower ?allow_imported_opens implementation =
+  [%log.debug "begin typedtree lowering"
+    ~unit_name:(Delator.Field.string implementation.Cmt_input.unit_name)
+    ~source_file:(Delator.Field.string implementation.source_file)];
   let authenticated_source_text =
     match implementation.Cmt_input.source_digest with
     | None -> None
@@ -60,7 +63,7 @@ let lower ?allow_imported_opens implementation =
               match Finite_formal_requirement.seal implementation program with
               | Ok () -> Ok program
               | Error message ->
-                  Printf.eprintf "finite-formal seal: %s\n" message;
+                  [%log.debug "finite-formal sealing failed" ~message];
                   Error
                     (Diagnostic.make
                        (Diagnostic.Unsupported_construct
@@ -68,8 +71,10 @@ let lower ?allow_imported_opens implementation =
                        (Diagnostic.file_span implementation.source_file)))
           | Error error ->
               Error (Instance_mode.to_diagnostic error)))
+[@@delator.instrument]
 
 let lower_file ?int_size ?allow_imported_opens filename =
   match Cmt_input.load ?int_size filename with
   | Error _ as error -> error
   | Ok implementation -> lower ?allow_imported_opens implementation
+[@@delator.instrument]

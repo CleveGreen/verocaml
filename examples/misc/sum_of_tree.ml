@@ -1,3 +1,5 @@
+[@@@verocaml.verify]
+
 let implies (premise : bool) (conclusion : bool) : bool =
   (not premise) || conclusion
 [@@verocaml.spec]
