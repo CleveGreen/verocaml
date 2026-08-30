@@ -1,0 +1,7 @@
+(library
+ (name verocaml_examples)
+ (wrapped false)
+ (modules overview playground_clean testing list)
+ (libraries verocaml.vstd verocaml.ghost)
+ (flags (:standard -w -A -alert -all -open Vstd))
+ (preprocess (pps verocaml.ppx)))
