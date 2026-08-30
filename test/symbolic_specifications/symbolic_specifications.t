@@ -277,3 +277,11 @@ semantic construction.
   $ ./symbolic_specifications_tool.exe diagnostic artifacts/foreign_consumer.cmt | sed -n '1p;$p' | sed -E 's/code=[^ ]+/code=<closed>/'
   rejected=adapter code=<closed> sst=0 vir=0 vc=0
   resources backend=0 contexts=0 solvers=0 resets=0 cleaned=0 live=0
+
+Imported symbolic identities remain bound to the exact consumer issuance even
+though their declarations are not members of the consumer's physical program.
+Exact path and compiler UID are required, and equal-but-unissued or ambiguous
+declarations fail closed.
+
+  $ ./symbolic_specifications_tool.exe imported-issuance
+  imported-symbolic path=exact uid=exact issuance=consumer-bound ambiguity=rejected

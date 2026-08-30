@@ -1,5 +1,8 @@
 type source
 
+val with_load_path :
+  visible:string list -> hidden:string list -> (unit -> 'a) -> 'a
+
 type lowered = {
   descriptor : Parametric_adt.t;
   definition : Sst.type_definition;
@@ -24,9 +27,6 @@ val external_source :
   (source, string) result
 
 val covers_path : source -> Path.t -> bool
-
-val standard_sources :
-  ?observed_paths:Path.t list -> Env.t -> (source list, string) result
 
 val lower :
   span:(Location.t -> Diagnostic.span) ->

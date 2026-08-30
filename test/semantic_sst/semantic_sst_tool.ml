@@ -91,7 +91,9 @@ let expect_validation_before_lowering label program =
         (Symbolic_executor.error_to_string error)
   | Ok _ -> fail "%s reached symbolic lowering" label
 
-let invalid_call = function Sst_validation.Invalid_call _ -> true | _ -> false
+let invalid_call = function
+  | Sst_validation.Invalid_call _ | Invalid_call_stage _ -> true
+  | _ -> false
 let invalid_body = function Sst_validation.Invalid_body _ -> true | _ -> false
 
 let identity () =

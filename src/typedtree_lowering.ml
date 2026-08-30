@@ -67,13 +67,7 @@ let lower ?allow_imported_opens implementation =
                           Diagnostic.Malformed_ghost_call)
                        (Diagnostic.file_span implementation.source_file)))
           | Error error ->
-              Printf.eprintf "instance-mode seal: %s\n"
-                error.Instance_mode.message;
-              Error
-                (Diagnostic.make
-                   (Diagnostic.Unsupported_construct
-                      Diagnostic.Malformed_ghost_call)
-                   error.Instance_mode.span)))
+              Error (Instance_mode.to_diagnostic error)))
 
 let lower_file ?int_size ?allow_imported_opens filename =
   match Cmt_input.load ?int_size filename with

@@ -1,3 +1,6 @@
+type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
 let optional_partial ?(base = 0) (value : int) : int = base + value
 [@@verocaml.spec]
 

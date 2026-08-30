@@ -1,3 +1,6 @@
+type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
 type 'a box = Box of 'a
 
 [%%verocaml.symbolic val empty_option : 'a option]

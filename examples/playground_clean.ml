@@ -1,7 +1,7 @@
 let implies premise conclusion = (not premise) || conclusion
 [@@verocaml.spec]
 
-let iff (a : bool) b = a = b
+let iff a b = a = b
 [@@verocaml.spec]
 
 let lemma_iff a b =
@@ -17,8 +17,7 @@ let lemma_iff a b =
 let admit () =
   [%verocaml.ensures fun _ -> false];
   ()
-[@@verocaml.external_body]
-[@@verocaml.proof]
+[@@verocaml.axiom]
 
 let assume (cond : bool) =
   [%verocaml.ensures fun _ -> cond];
@@ -46,18 +45,18 @@ type 'a node =
   | Empty
   | Node of 'a * 'a node
 
-type stack = {
-  top : int node;
+type 'a stack = {
+  top : 'a node;
   length : int;
 }
 
-let spec_is_empty (a : int node) : bool =
+let spec_is_empty a : bool =
   match a with
     | Empty -> true
     | Node _ -> false
 [@@verocaml.spec]
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : 'a node) : int =
   [%verocaml.decreases node];
   match node with
     | Empty -> 0
@@ -65,13 +64,13 @@ let rec spec_node_len (node : int node) : int =
 [@@verocaml.spec]
 [@@verocaml.revealed]
 
-let lemma_empty_is_empty (empty : int node) =
+let lemma_empty_is_empty (empty : 'a node) =
   [%verocaml.requires empty = Empty];
   [%verocaml.ensures fun _ -> spec_is_empty empty];
   ()
 [@@verocaml.proof]
 
-let lemma_non_empty_is_not_empty (non_empty : int node) =
+let lemma_non_empty_is_not_empty (non_empty : 'a node) =
   [%verocaml.requires non_empty <> Empty];
   [%verocaml.ensures fun _ -> not (spec_is_empty non_empty)];
   match non_empty with
@@ -79,7 +78,7 @@ let lemma_non_empty_is_not_empty (non_empty : int node) =
     | Node _ -> ()
 [@@verocaml.proof]
 
-let lemma_empty_converse (empty : int node) =
+let lemma_empty_converse (empty : 'a node) =
   [%verocaml.requires spec_is_empty empty];
   [%verocaml.ensures fun _ -> empty = Empty];
   if empty <> Empty then begin
@@ -89,48 +88,39 @@ let lemma_empty_converse (empty : int node) =
     ()
 [@@verocaml.proof]
 
-let lemma_empty_len (node : int node [@finite]) =
+let lemma_empty_len (node : 'a node [@finite]) =
   [%verocaml.requires spec_is_empty node];
   [%verocaml.ensures fun _ -> (spec_node_len node) = 0];
   [%verocaml.reveal_with_fuel (spec_node_len, 1)];
   ()
 [@@verocaml.proof]
 
-let spec_push_front (value : int) (stack : stack) : stack =
+let spec_push_front (value : int) (stack : int stack) : int stack =
   let { top; length; } = stack in
   { top = Node (value, top); length = length + 1 }
 [@@verocaml.spec]
 
-let rec spec_node_eq (a : int node) (b : int node) : bool =
+let rec spec_node_eq (a : 'a node) (b : 'a node) : bool =
   [%verocaml.decreases a];
-  match a with
-    | Empty -> spec_is_empty b
-    | Node (va, na) -> match b with
-      | Node (vb, nb) -> va = vb && spec_node_eq na nb
-      | Empty -> false
+  match (a, b) with
+    | (Empty, Empty) -> true
+    | (Node (va, na), Node(vb, nb)) -> va = vb && spec_node_eq na nb
+    | (_, _) -> false
 [@@verocaml.spec]
 [@@verocaml.revealed]
 
 let rec node_eq_symm
-    (a : int node [@finite])
-    (b : int node [@finite]) =
+    (a : 'a node [@finite])
+    (b : 'a node [@finite]) =
   [%verocaml.requires spec_node_eq a b];
   [%verocaml.ensures fun _ -> spec_node_eq b a];
   [%verocaml.decreases a];
-  match a with
-  | Empty ->
-      begin match b with
-      | Empty -> ()
-      | Node (_, _) -> ()
-      end
-  | Node (va, na) ->
-      begin match b with
-      | Empty -> ()
-      | Node (vb, nb) ->
-          node_eq_symm na nb
-      end
+  match (a, b) with
+    | (Node (va, na), Node(vb, nb)) -> node_eq_symm na nb
+    | (_, _) -> ()
 [@@verocaml.proof]
 
+(*
 let rec node_eq_trans
     (a : int node [@finite])
     (b : int node [@finite])
@@ -513,3 +503,4 @@ let rec make_n_nodes (value : int) (count : int) : int node =
   [%verocaml.decreases count];
   if count = 0 then Empty
   else Node (value, (make_n_nodes value (count - 1)))
+*)

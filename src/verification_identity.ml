@@ -118,7 +118,47 @@ let create ~imports ~implementation ~validated =
     Sst_validation.callable_descriptors validated
     |> List.map Sst_validation.callable_definition
   in
-  let callables = imported_callables @ local_callables in
+  let external_callables =
+    definitions
+    |> List.filter_map (fun (definition : Sst.function_definition) ->
+           match definition.body with
+           | Sst.External_specification
+               (Sst.Imported_unverified_target link)
+             when not
+                    (List.exists
+                       (fun identity ->
+                         identity.function_index
+                         = definition.function_id.function_index)
+                       local_callables) ->
+               Some
+                 {
+                   function_index = definition.function_id.function_index;
+                   display_name = definition.function_id.function_name;
+                   leaf_name =
+                     (match
+                        List.rev (String.split_on_char '.' link.canonical_path)
+                      with
+                     | leaf :: _ -> leaf
+                     | [] -> link.canonical_path);
+                   resolved_path = link.canonical_path;
+                   binding_uid = link.value_uid;
+                   canonical_path_component =
+                     String.concat "\000"
+                       [
+                         link.target_unit;
+                         link.target_interface_digest;
+                         link.canonical_path;
+                         link.value_uid;
+                         link.callable_abi_digest;
+                       ];
+                 }
+           | Sst.Checked_exec _ | Sst.Spec_definition _
+           | Sst.Recursive_spec_definition _ | Sst.Proof_body _
+           | Sst.External_specification _ | Sst.Trusted_external_spec_target _
+           | Sst.Trusted_external_body _ | Sst.Symbolic_declaration _ ->
+               None)
+  in
+  let callables = imported_callables @ external_callables @ local_callables in
   if List.length callables <> List.length definitions then
     Error "private callable identity count does not match the validated program"
   else

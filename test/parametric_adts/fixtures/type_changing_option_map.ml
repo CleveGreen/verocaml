@@ -1,3 +1,6 @@
+type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
 let map_option
     (callback : 'a -> 'b option)
     (value : 'a option) : 'b option =

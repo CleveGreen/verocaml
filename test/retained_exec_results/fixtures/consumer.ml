@@ -1,5 +1,8 @@
 [@@@verocaml.verify]
 
+type 'a external_list = 'a list
+[@@verocaml.external_type_specification]
+
 let direct value = (Provider.make_record value).Provider.value
 
 let bound value =

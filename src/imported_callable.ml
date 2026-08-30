@@ -51,6 +51,12 @@ type provider_type = {
   rank_profile_digest : string option;
 }
 
+type provider_external_specification = {
+  definition : Sst.function_definition;
+  signature : Parametric_signature_private.t;
+  target_link : Sst.target_link;
+}
+
 type provider_description = {
   unit_name : string;
   interface_digest : string;
@@ -59,6 +65,7 @@ type provider_description = {
   import_digest : string;
   callables : provider_callable list;
   types : provider_type list;
+  external_specifications : provider_external_specification list;
 }
 
 type callable_snapshot = {
@@ -84,6 +91,14 @@ type type_snapshot = {
   parametric_descriptor : Parametric_adt.t option;
 }
 
+type external_specification_snapshot = {
+  definition : Sst.function_definition;
+  signature : Parametric_signature_private.t;
+  target_link : Sst.target_link;
+  provider_unit : string;
+  provider_interface : string;
+}
+
 type provider = {
   provider_issuer : unit ref;
   provider_token : unit ref;
@@ -101,6 +116,7 @@ type environment = {
   providers : provider list;
   callables : callable_snapshot list;
   types : type_snapshot list;
+  external_specifications : external_specification_snapshot list;
   snapshot : string;
 }
 
@@ -143,12 +159,21 @@ let aggregate_applications_admitted = ref 0
 let aggregate_descriptors_invalidated = ref 0
 let digest value = Digest.string value |> Digest.to_hex
 
+exception Import_mapping_error of string
+
+let mapping_error message =
+  raise (Import_mapping_error ("[VERO_DEPENDENCY] " ^ message))
+
+let require_provider provider =
+  if provider.provider_issuer != issuer || provider.provider_token == issuer
+  then invalid_arg "unauthenticated retained provider"
+
 let ( let* ) result continuation =
   match result with Ok value -> continuation value | Error _ as error -> error
 
 let stable_index namespace name =
   let hex = digest (namespace ^ "\000" ^ name) in
-  let prefix = String.sub hex 0 7 in
+  let prefix = String.sub hex 0 15 in
   1_000_000 + int_of_string ("0x" ^ prefix)
 
 let simple_binding = function
@@ -159,11 +184,14 @@ let validate_callable (callable : provider_callable) =
   let definition = callable.definition in
   let valid_parameter parameter =
     let parameter = Sst.require_value_parameter parameter in
-    match parameter.optional_default with
-    | None ->
+    match (definition.body, parameter.optional_default) with
+    | Sst.Symbolic_declaration _, None
+      when parameter.pattern.pattern_desc = Sst.Wildcard ->
+        true
+    | _, None ->
         Option.is_some (simple_binding parameter.pattern)
         || parameter.pattern.pattern_desc = Sst.Unit_pattern
-    | Some default ->
+    | _, Some default ->
         parameter.pattern.pattern_desc = Sst.Wildcard
         && Option.is_some (simple_binding default.optional_pattern)
   in
@@ -215,7 +243,9 @@ let validate_callable (callable : provider_callable) =
         match (definition.mode, definition.body) with
         | Sst.Exec, Sst.Checked_exec _
         | Sst.Proof, Sst.Proof_body _
+        | (Sst.Exec | Sst.Proof), Sst.Trusted_external_body _
         | Sst.Spec, Sst.Spec_definition _
+        | Sst.Spec, Sst.Symbolic_declaration _
         | Sst.Spec, Sst.Recursive_spec_definition _ ->
             Ok ()
         | _ ->
@@ -318,66 +348,208 @@ let obligation_description ?(parametric_adts = [])
     | [] -> Ok { description with callables = List.rev callables }
     | callable :: rest -> (
         let* () = validate_callable callable in
-        let* classification =
-          classify_result ~parametric_adts description callable
-        in
-        match classification with
-        | Retained_exec_result_private.Retain_existing
-        | Retained_exec_result_private.Contract_only_exec ->
+        match callable.definition.Sst.body with
+        | Sst.Symbolic_declaration _ ->
             loop (callable :: callables) rest
-        | Retained_exec_result_private.Opaque_model_spec closure ->
-            let model =
-              Option.map
-                (fun model ->
-                  {
-                    model with
-                    closure_type_ids = closure.closure_type_ids;
-                    closure_digest = closure.closure_digest;
-                  })
-                callable.model
+        | Sst.Checked_exec _ | Sst.Spec_definition _ | Sst.Proof_body _
+        | Sst.Recursive_spec_definition _ | Sst.External_specification _
+        | Sst.Trusted_external_spec_target _ | Sst.Trusted_external_body _ ->
+            let* classification =
+              classify_result ~parametric_adts description callable
             in
-            let callable = { callable with model } in
-            loop (callable :: callables) rest
-        | Retained_exec_result_private.Ineligible -> loop callables rest)
+            (match classification with
+            | Retained_exec_result_private.Retain_existing
+            | Retained_exec_result_private.Contract_only_exec ->
+                loop (callable :: callables) rest
+            | Retained_exec_result_private.Opaque_model_spec closure ->
+                let model =
+                  Option.map
+                    (fun model ->
+                      {
+                        model with
+                        closure_type_ids = closure.closure_type_ids;
+                        closure_digest = closure.closure_digest;
+                      })
+                    callable.model
+                in
+                let callable = { callable with model } in
+                loop (callable :: callables) rest
+            | Retained_exec_result_private.Ineligible -> loop callables rest))
   in
   loop [] description.callables
 
-let type_map providers =
-  List.concat_map
-    (fun (provider : provider_description) ->
-      List.map
-        (fun (typ : provider_type) ->
-          let old = typ.definition.Sst.type_id in
-          let fresh =
-            {
-              Sst.type_index = stable_index provider.unit_name typ.resolved_path;
-              type_name = typ.resolved_path;
-            }
-          in
-          (old, fresh))
-        provider.types)
-    providers
+let fresh_type_id (provider : provider_description) (typ : provider_type) =
+  {
+    Sst.type_index = stable_index provider.unit_name typ.resolved_path;
+    type_name = typ.resolved_path;
+  }
+
+let fresh_private_type_id (provider : provider_description) (id : Sst.type_id) =
+  let identity =
+    Printf.sprintf "%s#%d" id.Sst.type_name id.type_index
+  in
+  {
+    Sst.type_index = stable_index provider.unit_name ("private-type:" ^ identity);
+    type_name = provider.unit_name ^ ".$private." ^ identity;
+  }
+
+let fresh_function_id (provider : provider_description)
+    (definition : Sst.function_definition) =
+  let resolved_path =
+    provider.unit_name ^ "." ^ definition.function_id.function_name
+  in
+  {
+    Sst.function_index = stable_index provider.unit_name resolved_path;
+    function_name = resolved_path;
+  }
+
+let same_provider_identity left right =
+  String.equal left.description.unit_name right.description.unit_name
+  && String.equal left.description.interface_digest
+       right.description.interface_digest
+
+let dependency_closure provider =
+  let rec collect collected = function
+    | [] -> Ok (List.rev collected)
+    | dependency :: rest ->
+        require_provider dependency;
+        if List.exists (same_provider_identity dependency) collected then
+          collect collected rest
+        else
+          match
+            List.find_opt
+              (fun candidate ->
+                String.equal candidate.description.unit_name
+                  dependency.description.unit_name)
+              collected
+          with
+          | Some _ ->
+              Error
+                (Printf.sprintf
+                   "[VERO_DEPENDENCY] provider %s has conflicting public dependency identities for %s"
+                   provider.description.unit_name
+                   dependency.description.unit_name)
+          | None ->
+              collect (dependency :: collected)
+                (dependency.direct_dependencies @ rest)
+  in
+  collect [] provider.direct_dependencies
+
+let normalize_id_map ~kind ~name entries =
+  let rec collect normalized = function
+    | [] -> Ok (List.rev normalized)
+    | (source, mapped) :: rest -> (
+        match
+          List.find_opt (fun (candidate, _) -> candidate = source) normalized
+        with
+        | None -> collect ((source, mapped) :: normalized) rest
+        | Some (_, existing) when existing = mapped -> collect normalized rest
+        | Some _ ->
+            Error
+              (Printf.sprintf
+                 "[VERO_DEPENDENCY] ambiguous provider-scoped %s identity %s"
+                 kind (name source)))
+  in
+  collect [] entries
+
+let type_map provider =
+  let description = provider.description in
+  let public =
+    List.map
+      (fun (typ : provider_type) ->
+        (typ.definition.Sst.type_id, fresh_type_id description typ))
+      description.types
+  in
+  let local_type_id id =
+    match
+      List.find_opt
+        (fun (typ : provider_type) -> typ.definition.Sst.type_id = id)
+        description.types
+    with
+    | Some typ -> fresh_type_id description typ
+    | None -> fresh_private_type_id description id
+  in
+  let private_model_closure =
+    description.callables
+    |> List.concat_map (fun (callable : provider_callable) ->
+           Option.fold ~none:[] ~some:(fun model -> model.closure_type_ids)
+             callable.model)
+    |> List.map (fun id -> (id, local_type_id id))
+  in
+  let* dependencies = dependency_closure provider in
+  let inherited =
+    List.concat_map
+      (fun dependency ->
+        List.map
+          (fun (typ : provider_type) ->
+            let identity = fresh_type_id dependency.description typ in
+            (identity, identity))
+          dependency.description.types)
+      dependencies
+  in
+  normalize_id_map ~kind:"type"
+    ~name:(fun id -> Printf.sprintf "%s#%d" id.Sst.type_name id.type_index)
+    (public @ private_model_closure @ inherited)
 
 let imported_source_type_path (_provider : provider_description)
     (typ : provider_type) =
   typ.source_path
 
-let function_map providers =
-  List.concat_map
-    (fun (provider : provider_description) ->
-      List.map
-        (fun (callable : provider_callable) ->
-          let old = callable.definition.Sst.function_id in
-          let fresh =
-            {
-              Sst.function_index =
-                stable_index provider.unit_name callable.resolved_path;
-              function_name = callable.resolved_path;
-            }
-          in
-          (old, fresh))
-        provider.callables)
-    providers
+let function_map provider =
+  let description = provider.description in
+  let local_definitions =
+    List.map
+      (fun (callable : provider_callable) -> callable.definition)
+      description.callables
+    @ List.map
+        (fun (specification : provider_external_specification) ->
+          specification.definition)
+        description.external_specifications
+  in
+  let local =
+    List.map
+      (fun definition ->
+        (definition.Sst.function_id, fresh_function_id description definition))
+      local_definitions
+  in
+  let* dependencies = dependency_closure provider in
+  let inherited =
+    List.concat_map
+      (fun dependency ->
+        List.map
+          (fun (callable : provider_callable) ->
+            let identity =
+              fresh_function_id dependency.description callable.definition
+            in
+            (identity, identity))
+          dependency.description.callables)
+      dependencies
+  in
+  normalize_id_map ~kind:"function"
+    ~name:(fun id ->
+      Printf.sprintf "%s#%d" id.Sst.function_name id.function_index)
+    (local @ inherited)
+
+let mapped_type_id (type_ids : (Sst.type_id * Sst.type_id) list)
+    (id : Sst.type_id) : Sst.type_id =
+  match List.assoc_opt id type_ids with
+  | Some mapped -> mapped
+  | None ->
+      mapping_error
+        (Printf.sprintf "provider closure references unmapped private type %s#%d"
+           id.Sst.type_name id.type_index)
+
+let mapped_function_id
+    (function_ids : (Sst.function_id * Sst.function_id) list)
+    (id : Sst.function_id) : Sst.function_id =
+  if Spec_function_sst_private.is_application_id id then id
+  else match List.assoc_opt id function_ids with
+  | Some mapped -> mapped
+  | None ->
+      mapping_error
+        (Printf.sprintf
+           "provider closure references unmapped private function %s#%d"
+           id.Sst.function_name id.function_index)
 
 let rec map_typ type_ids = function
   | Sst.Unit -> Sst.Unit
@@ -388,23 +560,161 @@ let rec map_typ type_ids = function
         (List.map
            (fun (label, typ) -> (label, map_typ type_ids typ))
            components)
-  | Sst.Aggregate id ->
-      Sst.Aggregate (Option.value ~default:id (List.assoc_opt id type_ids))
+  | Sst.Aggregate id -> Sst.Aggregate (mapped_type_id type_ids id)
   | Sst.Parameter _ as parameter -> parameter
   | Sst.Application (constructor, arguments) ->
       Sst.Application (constructor, List.map (map_typ type_ids) arguments)
 
+let map_symbolic_declaration type_ids function_ids
+    (callable : provider_callable) =
+  match callable.definition.Sst.body with
+  | Sst.Symbolic_declaration source ->
+      if
+        Sst_callback_private.has_callback_parameters
+          callable.definition.parameters
+      then
+        Error
+          "[VERO_DEPENDENCY] imported symbolic declaration has a callback parameter"
+      else
+        let function_id =
+          mapped_function_id function_ids callable.definition.function_id
+        in
+        let parameters =
+          List.map
+            (fun parameter ->
+              let parameter = Sst.require_value_parameter parameter in
+              Sst.Value_parameter
+                {
+                  parameter with
+                  Sst.pattern =
+                    {
+                      parameter.pattern with
+                      Sst.typ = map_typ type_ids parameter.pattern.Sst.typ;
+                    };
+                })
+            callable.definition.parameters
+        in
+        let preliminary =
+          {
+            callable.definition with
+            Sst.function_id;
+            parameters;
+            result_type = map_typ type_ids callable.definition.result_type;
+          }
+        in
+        let* rebased, _ =
+          Parametric_signature_private.rebase_definition callable.signature
+            ~source_definition:
+              (Parametric_signature_private.source_definition callable.signature)
+            ~function_id preliminary
+        in
+        let* mapped =
+          Symbolic_application_private.declare
+            ~marker_id:(Symbolic_application_private.marker_id source)
+            ~declaration_index:function_id.function_index
+            ~declaration_name:function_id.function_name
+            ~canonical_path:callable.resolved_path
+            ~value_uid:callable.binding_uid
+            ~source_file:(Symbolic_application_private.source_file source)
+            ~compilation_identity:
+              (Symbolic_application_private.compilation_identity source)
+            ~declaration_span:
+              (Symbolic_application_private.declaration_span source)
+            ~type_binders:rebased.type_binders
+            ~parameter_types:
+              (List.map
+                 (fun parameter ->
+                   (Sst.require_value_parameter parameter).Sst.pattern.typ)
+                 rebased.parameters)
+            ~result_type:rebased.result_type
+        in
+        Ok (Some (source, mapped))
+  | Sst.Checked_exec _ | Sst.Spec_definition _ | Sst.Proof_body _
+  | Sst.Recursive_spec_definition _ | Sst.Trusted_external_body _
+  | Sst.External_specification _ | Sst.Trusted_external_spec_target _ ->
+      Ok None
+
+let symbolic_declaration_map provider type_ids function_ids =
+  let rec local mapped type_ids function_ids = function
+    | [] -> Ok (List.rev mapped)
+    | callable :: rest ->
+        let* declaration =
+          map_symbolic_declaration type_ids function_ids callable
+        in
+        local
+          (Option.fold ~none:mapped
+             ~some:(fun item -> item :: mapped)
+             declaration)
+          type_ids function_ids rest
+  in
+  let* mapped =
+    local [] type_ids function_ids provider.description.callables
+  in
+  let* dependencies = dependency_closure provider in
+  let rec inherited mapped = function
+    | [] -> Ok mapped
+    | dependency :: rest ->
+        let* dependency_types = type_map dependency in
+        let* dependency_functions = function_map dependency in
+        let* declarations =
+          local [] dependency_types dependency_functions
+            dependency.description.callables
+        in
+        let identities =
+          List.map (fun (_, declaration) -> (declaration, declaration)) declarations
+        in
+        inherited (identities @ mapped) rest
+  in
+  let* mapped = inherited mapped dependencies in
+  let rec normalize normalized = function
+    | [] -> Ok (List.rev normalized)
+    | (source, mapped) :: rest -> (
+        match
+          List.find_opt
+            (fun (candidate, _) ->
+              Symbolic_application_private.same_declaration source candidate)
+            normalized
+        with
+        | None -> normalize ((source, mapped) :: normalized) rest
+        | Some (_, existing)
+          when Symbolic_application_private.same_declaration existing mapped ->
+            normalize normalized rest
+        | Some _ ->
+            Error
+              "[VERO_DEPENDENCY] ambiguous provider-scoped symbolic declaration identity")
+  in
+  normalize [] mapped
+
+let mapped_symbolic_declaration declarations source =
+  match
+    List.filter_map
+      (fun (candidate, mapped) ->
+        if Symbolic_application_private.same_declaration candidate source then
+          Some mapped
+        else None)
+      declarations
+  with
+  | [ mapped ] -> Some mapped
+  | [] | _ :: _ :: _ -> None
+
+let require_mapped_symbolic_declaration declarations source =
+  match mapped_symbolic_declaration declarations source with
+  | Some declaration -> declaration
+  | None ->
+      mapping_error
+        (Printf.sprintf
+           "provider closure references unmapped private symbolic declaration %s#%d"
+           (Symbolic_application_private.declaration_name source)
+           (Symbolic_application_private.declaration_index source))
+
 let map_constructor type_ids (id : Sst.constructor_id) =
   {
     id with
-    Sst.constructor_type =
-      Option.value ~default:id.constructor_type
-        (List.assoc_opt id.constructor_type type_ids);
+    Sst.constructor_type = mapped_type_id type_ids id.constructor_type;
   }
 
 let map_field_owner type_ids = function
-  | Sst.Record_owner id ->
-      Sst.Record_owner (Option.value ~default:id (List.assoc_opt id type_ids))
+  | Sst.Record_owner id -> Sst.Record_owner (mapped_type_id type_ids id)
   | Sst.Constructor_owner id ->
       Sst.Constructor_owner (map_constructor type_ids id)
 
@@ -475,9 +785,7 @@ let map_transition type_ids offset (transition : Sst.owned_tree_transition) =
     | Sst.Reconstruct_record { record_type; changed_field; preserved_fields } ->
         Sst.Reconstruct_record
           {
-            record_type =
-              Option.value ~default:record_type
-                (List.assoc_opt record_type type_ids);
+            record_type = mapped_type_id type_ids record_type;
             changed_field = map_field_id type_ids changed_field;
             preserved_fields = List.map (map_field_id type_ids) preserved_fields;
           }
@@ -507,16 +815,13 @@ let map_shared_transition type_ids function_ids offset
       function_name = transition.shared_function_name;
     }
   in
-  let mapped_function =
-    Option.value ~default:function_id (List.assoc_opt function_id function_ids)
-  in
+  let mapped_function = mapped_function_id function_ids function_id in
   {
     transition with
     Sst.shared_function_index = mapped_function.function_index;
     shared_function_name = mapped_function.function_name;
     shared_record_type =
-      Option.value ~default:transition.shared_record_type
-        (List.assoc_opt transition.shared_record_type type_ids);
+      mapped_type_id type_ids transition.shared_record_type;
     shared_formal_roots =
       List.map (map_binding type_ids offset) transition.shared_formal_roots;
     shared_target = map_binding type_ids offset transition.shared_target;
@@ -527,8 +832,11 @@ let map_shared_transition type_ids function_ids offset
     shared_target_field = map_field_id type_ids transition.shared_target_field;
   }
 
-let rec map_expression type_ids function_ids offset expression =
-  let recurse = map_expression type_ids function_ids offset in
+let rec map_expression type_ids function_ids symbolic_declarations offset
+    expression =
+  let recurse =
+    map_expression type_ids function_ids symbolic_declarations offset
+  in
   let expression_desc =
     match expression.Sst.expression_desc with
     | Sst.Int_constant value -> Sst.Int_constant value
@@ -543,9 +851,7 @@ let rec map_expression type_ids function_ids offset expression =
     | Sst.Record_value { record_type; fields } ->
         Sst.Record_value
           {
-            record_type =
-              Option.value ~default:record_type
-                (List.assoc_opt record_type type_ids);
+            record_type = mapped_type_id type_ids record_type;
             fields =
               List.map
                 (fun (field, value) ->
@@ -664,8 +970,7 @@ let rec map_expression type_ids function_ids offset expression =
         Sst.Direct_call
           {
             call_form;
-            callee =
-              Option.value ~default:callee (List.assoc_opt callee function_ids);
+            callee = mapped_function_id function_ids callee;
             type_arguments = List.map (map_typ type_ids) type_arguments;
             arguments =
               List.map
@@ -696,16 +1001,42 @@ let rec map_expression type_ids function_ids offset expression =
                   List.map (fun (label, value) -> (label, recurse value))
                     application.arguments };
             result = recurse result }
-    | Sst.Symbolic_application _ ->
-        assert false
-    | Sst.Reveal id ->
-        Sst.Reveal (Option.value ~default:id (List.assoc_opt id function_ids))
+    | Sst.Symbolic_application source ->
+        let source_declaration =
+          Symbolic_application_private.declaration source
+        in
+        let declaration =
+          require_mapped_symbolic_declaration symbolic_declarations
+            source_declaration
+        in
+        let arguments =
+          List.map recurse (Symbolic_application_private.arguments source)
+        in
+        let application =
+          Symbolic_application_private.create declaration
+            ~type_arguments:
+              (List.map (map_typ type_ids)
+                 (Symbolic_application_private.type_arguments source))
+            ~arguments
+            ~argument_types:
+              (List.map (map_typ type_ids)
+                 (Symbolic_application_private.argument_types source))
+            ~result_type:
+              (map_typ type_ids
+                 (Symbolic_application_private.result_type source))
+            ~span:(Symbolic_application_private.span source)
+        in
+        Sst.Symbolic_application
+          (match application with
+          | Ok application -> application
+          | Error message ->
+              mapping_error
+                ("invalid imported symbolic application: " ^ message))
+    | Sst.Reveal id -> Sst.Reveal (mapped_function_id function_ids id)
     | Sst.Reveal_with_fuel { function_id; literal_depth } ->
         Sst.Reveal_with_fuel
           {
-            function_id =
-              Option.value ~default:function_id
-                (List.assoc_opt function_id function_ids);
+            function_id = mapped_function_id function_ids function_id;
             literal_depth;
           }
     | Sst.Use_type_invariant { use_id; value } ->
@@ -720,25 +1051,32 @@ let rec map_expression type_ids function_ids offset expression =
   in
   { expression with Sst.expression_desc; typ = map_typ type_ids expression.typ }
 
-let map_staged type_ids function_ids offset (staged : Sst.staged_expression) =
+let map_staged type_ids function_ids symbolic_declarations offset
+    (staged : Sst.staged_expression) =
   {
     staged with
     Sst.expression =
-      map_expression type_ids function_ids offset staged.expression;
+      map_expression type_ids function_ids symbolic_declarations offset
+        staged.expression;
   }
 
-let map_contracts type_ids function_ids offset (contracts : Sst.contracts) =
+let map_contracts type_ids function_ids symbolic_declarations offset
+    (contracts : Sst.contracts) =
   let predicate (clause : Sst.predicate_clause) =
     {
       clause with
-      Sst.predicate = map_staged type_ids function_ids offset clause.predicate;
+      Sst.predicate =
+        map_staged type_ids function_ids symbolic_declarations offset
+          clause.predicate;
     }
   in
   let ensures (clause : Sst.ensures_clause) =
     {
       clause with
       Sst.binder = Option.map (map_pattern type_ids offset) clause.binder;
-      predicate = map_staged type_ids function_ids offset clause.predicate;
+      predicate =
+        map_staged type_ids function_ids symbolic_declarations offset
+          clause.predicate;
     }
   in
   {
@@ -775,21 +1113,16 @@ let map_type_definition type_ids (definition : Sst.type_definition) =
   in
   {
     definition with
-    Sst.type_id =
-      Option.value ~default:definition.type_id
-        (List.assoc_opt definition.type_id type_ids);
+    Sst.type_id = mapped_type_id type_ids definition.type_id;
     type_kind;
     representation = Sst.Revealed;
   }
 
-let transform_callable type_ids function_ids (provider : provider_description)
-    (callable : provider_callable) =
+let transform_callable type_ids function_ids symbolic_declarations
+    (provider : provider_description) (callable : provider_callable) =
   let offset = binding_offset provider.unit_name in
   let source = callable.definition in
-  let function_id =
-    Option.value ~default:source.function_id
-      (List.assoc_opt source.function_id function_ids)
-  in
+  let function_id = mapped_function_id function_ids source.function_id in
   let parameters =
     List.map
       (function
@@ -806,28 +1139,34 @@ let transform_callable type_ids function_ids (provider : provider_description)
                         Sst.optional_pattern =
                           map_pattern type_ids offset default.optional_pattern;
                         optional_expression =
-                          map_expression type_ids function_ids offset
+                          map_expression type_ids function_ids
+                            symbolic_declarations offset
                             default.optional_expression;
                       })
                     value.optional_default;
               })
       source.parameters
   in
-  let map_body = function
-    | Sst.Checked_exec body ->
-        Sst.Checked_exec
-          { body with body = map_staged type_ids function_ids offset body.body }
-    | Sst.Spec_definition body ->
-        Sst.Spec_definition (map_staged type_ids function_ids offset body)
-    | Sst.Proof_body body ->
-        Sst.Proof_body
-          { body with body = map_staged type_ids function_ids offset body.body }
-    | Sst.Recursive_spec_definition body ->
-        Sst.Recursive_spec_definition
-          { body with body = map_staged type_ids function_ids offset body.body }
-    | Sst.External_specification _ | Sst.Trusted_external_spec_target _
-    | Sst.Trusted_external_body _ | Sst.Symbolic_declaration _ ->
-        assert false
+  let* body =
+    match source.body with
+    | Sst.Symbolic_declaration declaration ->
+        Ok
+          (Sst.Symbolic_declaration
+             (require_mapped_symbolic_declaration symbolic_declarations
+                declaration))
+    | Sst.Spec_definition body when Option.is_none callable.model ->
+        Ok
+          (Sst.Spec_definition
+             (map_staged type_ids function_ids symbolic_declarations offset
+                body))
+    | (Sst.Spec_definition _ as body) -> Ok body
+    | (Sst.Checked_exec _ | Sst.Proof_body _
+      | Sst.Recursive_spec_definition _) as body ->
+        Ok body
+    | (Sst.Trusted_external_body _ as body) -> Ok body
+    | Sst.External_specification _ | Sst.Trusted_external_spec_target _ ->
+        Error
+          "[VERO_DEPENDENCY] external target wrappers are not retained callables"
   in
   let definition =
     {
@@ -835,8 +1174,10 @@ let transform_callable type_ids function_ids (provider : provider_description)
       Sst.function_id;
       recursive = source.recursive;
       parameters;
-      contracts = map_contracts type_ids function_ids offset source.contracts;
-      body = map_body source.body;
+      contracts =
+        map_contracts type_ids function_ids symbolic_declarations offset
+          source.contracts;
+      body;
       result_type = map_typ type_ids source.result_type;
       returns_unique_parameter = None;
     }
@@ -847,11 +1188,20 @@ let transform_callable type_ids function_ids (provider : provider_description)
         (Parametric_signature_private.source_definition callable.signature)
       ~function_id definition
   in
-  let* definition = opaque_contract_carrier callable definition in
+  let* definition =
+    match source.body with
+    | Sst.Symbolic_declaration _ -> Ok definition
+    | Sst.Spec_definition _ when Option.is_none callable.model -> Ok definition
+    | Sst.Spec_definition _
+    | Sst.Checked_exec _ | Sst.Recursive_spec_definition _ | Sst.Proof_body _ ->
+        opaque_contract_carrier callable definition
+    | Sst.Trusted_external_body _ -> Ok definition
+    | Sst.External_specification _ | Sst.Trusted_external_spec_target _ ->
+        Error
+          "[VERO_DEPENDENCY] external target wrappers are not retained callables"
+  in
   let map_requirement requirement =
-    let map_type_id type_id =
-      Option.value ~default:type_id (List.assoc_opt type_id type_ids)
-    in
+    let map_type_id = mapped_type_id type_ids in
     {
       requirement with
       binding_ids = List.map (fun id -> offset + id) requirement.binding_ids;
@@ -901,15 +1251,10 @@ let transform_callable type_ids function_ids (provider : provider_description)
       (fun model ->
         {
           model with
-          domain =
-            Option.value ~default:model.domain
-              (List.assoc_opt model.domain type_ids);
+          domain = mapped_type_id type_ids model.domain;
           result_type = map_typ type_ids model.result_type;
           closure_type_ids =
-            List.map
-              (fun type_id ->
-                Option.value ~default:type_id (List.assoc_opt type_id type_ids))
-              model.closure_type_ids;
+            List.map (mapped_type_id type_ids) model.closure_type_ids;
         })
       callable.model
   in
@@ -930,9 +1275,62 @@ let transform_callable type_ids function_ids (provider : provider_description)
       model;
     }
 
-let require_provider provider =
-  if provider.provider_issuer != issuer || provider.provider_token == issuer
-  then invalid_arg "unauthenticated retained provider"
+let transform_external_specification type_ids function_ids
+    symbolic_declarations (provider : provider_description)
+    (specification : provider_external_specification) =
+  let source = specification.definition in
+  let offset = binding_offset provider.unit_name in
+  let function_id = mapped_function_id function_ids source.function_id in
+  let parameters =
+    List.map
+      (function
+        | Sst.Callback_parameter _ as parameter -> parameter
+        | Sst.Value_parameter value ->
+            Sst.Value_parameter
+              {
+                value with
+                Sst.pattern = map_pattern type_ids offset value.pattern;
+                optional_default =
+                  Option.map
+                    (fun (default : Sst.optional_default) ->
+                      {
+                        Sst.optional_pattern =
+                          map_pattern type_ids offset default.optional_pattern;
+                        optional_expression =
+                          map_expression type_ids function_ids
+                            symbolic_declarations offset
+                            default.optional_expression;
+                      })
+                    value.optional_default;
+              })
+      source.parameters
+  in
+  let definition =
+    {
+      source with
+      Sst.function_id;
+      parameters;
+      contracts =
+        map_contracts type_ids function_ids symbolic_declarations offset
+          source.contracts;
+      result_type = map_typ type_ids source.result_type;
+      returns_unique_parameter = None;
+    }
+  in
+  let* definition, signature =
+    Parametric_signature_private.rebase_definition specification.signature
+      ~source_definition:
+        (Parametric_signature_private.source_definition specification.signature)
+      ~function_id definition
+  in
+  Ok
+    {
+      definition;
+      signature;
+      target_link = specification.target_link;
+      provider_unit = provider.unit_name;
+      provider_interface = provider.interface_digest;
+    }
 
 let provider_snapshot implementation program description direct_dependencies =
   String.concat "|"
@@ -953,6 +1351,37 @@ let provider_snapshot implementation program description direct_dependencies =
              ^ dependency.description.interface_digest)
            direct_dependencies);
     ]
+
+let validate_provider_external_specification
+    (specification : provider_external_specification) =
+  match specification.target_link with
+  | Sst.Same_unit_target _ | Sst.Unresolved_target _ ->
+      Error
+        "[VERO_DEPENDENCY] provider external specification has a nonportable target"
+  | Sst.Imported_unverified_target link ->
+      if
+        specification.definition.Sst.body
+        <> Sst.External_specification specification.target_link
+        || specification.definition.function_id <> link.wrapper
+        || specification.definition.mode <> Sst.Exec
+        || specification.definition.recursive
+        || Sst_callback_private.has_callback_parameters
+             specification.definition.parameters
+        || specification.definition.contracts.decreases <> []
+        || specification.definition.contracts.assertions <> []
+      then
+        Error
+          "[VERO_DEPENDENCY] provider external specification has invalid authority"
+      else if
+        not
+          (String.equal
+             (Parametric_signature_private.semantic_fingerprint
+                specification.signature)
+             link.callable_abi_digest)
+      then
+        Error
+          "[VERO_DEPENDENCY] provider external specification ABI fingerprint differs"
+      else Ok ()
 
 let validate_description (description : provider_description) =
   if
@@ -1029,7 +1458,16 @@ let validate_description (description : provider_description) =
           Error
             "[VERO_DEPENDENCY] retained provider supplied a conflicting \
              generic-family model closure"
-        else Ok ()
+        else
+          let rec validate_external = function
+            | [] -> Ok ()
+            | specification :: rest ->
+                let* () =
+                  validate_provider_external_specification specification
+                in
+                validate_external rest
+          in
+          validate_external description.external_specifications
 
 let description_matches_program program (description : provider_description) =
   let callable_matches (callable : provider_callable) =
@@ -1039,7 +1477,14 @@ let description_matches_program program (description : provider_description) =
     List.exists (fun definition -> definition = source) program.Sst.functions
     && callable.definition = source
   in
+  let external_matches
+      (specification : provider_external_specification) =
+    List.exists
+      (fun definition -> definition = specification.definition)
+      program.Sst.functions
+  in
   List.for_all callable_matches description.callables
+  && List.for_all external_matches description.external_specifications
 
 let seal_provider ~provider_completion ~implementation ~program
     ~direct_dependencies description =
@@ -1050,6 +1495,23 @@ let seal_provider ~provider_completion ~implementation ~program
   then Error "[VERO_DEPENDENCY] retained provider lacks verified completion"
   else if not (description_matches_program program description) then
     Error "[VERO_DEPENDENCY] retained summary does not match verified provider"
+  else if
+    List.exists
+      (fun (specification : provider_external_specification) ->
+        match specification.target_link with
+        | Sst.Imported_unverified_target link ->
+            not
+              (Array.exists
+                 (fun (import : Cmt_input.import) ->
+                   String.equal import.unit_name link.target_unit
+                   && import.crc = Some link.target_interface_digest
+                   && String.equal link.import_crc link.target_interface_digest)
+                 implementation.imports)
+        | Sst.Same_unit_target _ | Sst.Unresolved_target _ -> true)
+      description.external_specifications
+  then
+    Error
+      "[VERO_DEPENDENCY] provider external specification target import is not exact"
   else
     match validate_description description with
     | Error _ as error -> error
@@ -1098,17 +1560,91 @@ let descriptions providers =
       provider.description)
     providers
 
-let create providers =
+type provider_mapping = {
+  mapping_description : provider_description;
+  mapping_type_ids : (Sst.type_id * Sst.type_id) list;
+  mapping_function_ids : (Sst.function_id * Sst.function_id) list;
+  mapping_symbolic_declarations :
+    (Symbolic_application_private.declaration
+    * Symbolic_application_private.declaration)
+    list;
+}
+
+let mapping_for_provider provider =
+  let* mapping_type_ids = type_map provider in
+  let* mapping_function_ids = function_map provider in
+  let* mapping_symbolic_declarations =
+    symbolic_declaration_map provider mapping_type_ids mapping_function_ids
+  in
+  Ok
+    {
+      mapping_description = provider.description;
+      mapping_type_ids;
+      mapping_function_ids;
+      mapping_symbolic_declarations;
+    }
+
+let create_unchecked providers =
   let descriptions = descriptions providers in
-  let type_ids = type_map descriptions in
-  let function_ids = function_map descriptions in
+  let external_type_specifications =
+    List.concat_map
+      (fun (provider : provider_description) ->
+        List.filter_map
+          (fun (typ : provider_type) ->
+            Option.bind typ.parametric_descriptor (fun descriptor ->
+                match Parametric_adt.provenance descriptor with
+                | Parametric_adt.External _ ->
+                    Some (provider.unit_name, descriptor)
+                | Parametric_adt.Local _ -> None))
+          provider.types)
+      descriptions
+  in
+  let rec overlapping = function
+    | [] -> None
+    | (unit_name, descriptor) :: rest ->
+        let constructor = Parametric_adt.type_constructor descriptor in
+        let compiler_uid = Parametric_adt.compiler_uid descriptor in
+        (match
+           List.find_opt
+             (fun (_, candidate) ->
+               String.equal compiler_uid (Parametric_adt.compiler_uid candidate)
+               || String.equal constructor.constructor_path
+                    (Parametric_adt.type_constructor candidate).constructor_path)
+             rest
+         with
+        | Some (other_unit, other) ->
+            Some
+              ( unit_name,
+                other_unit,
+                constructor.constructor_path,
+                (Parametric_adt.type_constructor other).constructor_path )
+        | None -> overlapping rest)
+  in
+  let* () =
+    match overlapping external_type_specifications with
+    | None -> Ok ()
+    | Some (left, right, left_path, right_path) ->
+        Error
+          (Printf.sprintf
+             "[VERO_DEPENDENCY] overlapping external type specifications from %s and %s target %s / %s"
+             left right left_path right_path)
+  in
+  let rec mappings mapped = function
+    | [] -> Ok (List.rev mapped)
+    | provider :: rest ->
+        let* mapping = mapping_for_provider provider in
+        mappings (mapping :: mapped) rest
+  in
+  let* mappings = mappings [] providers in
   let importable_type (_provider : provider_description)
       (_typ : provider_type) =
     true
   in
   let rec map_types mapped = function
     | [] -> Ok (List.rev mapped)
-    | (provider : provider_description) :: rest ->
+    | scope :: rest ->
+        let provider = scope.mapping_description in
+        let type_ids = scope.mapping_type_ids in
         let rec one mapped = function
           | [] -> map_types mapped rest
           | (typ : provider_type) :: tail
@@ -1139,30 +1675,65 @@ let create providers =
   in
   let rec map_callables mapped = function
     | [] -> Ok (List.rev mapped)
-    | (provider : provider_description) :: rest ->
+    | scope :: rest ->
+        let provider = scope.mapping_description in
         let rec one mapped = function
           | [] -> map_callables mapped rest
           | callable :: tail -> (
               match
-                transform_callable type_ids function_ids provider callable
+                transform_callable scope.mapping_type_ids
+                  scope.mapping_function_ids
+                  scope.mapping_symbolic_declarations provider callable
               with
               | Error _ as error -> error
               | Ok summary -> one (summary :: mapped) tail)
         in
         one mapped provider.callables
   in
-  let* mapped_types = map_types [] descriptions in
-  match map_callables [] descriptions with
-  | Error _ as error -> error
-  | Ok mapped_callables ->
-      let ids =
-        List.map
-          (fun (item : callable_snapshot) -> item.definition.Sst.function_id)
-          mapped_callables
-      in
-      if List.length ids <> List.length (List.sort_uniq compare ids) then
-        Error "[VERO_DEPENDENCY] retained callable synthetic identity collision"
-      else
+  let rec map_external_specifications mapped = function
+    | [] -> Ok (List.rev mapped)
+    | scope :: rest ->
+        let provider = scope.mapping_description in
+        let rec one mapped = function
+          | [] -> map_external_specifications mapped rest
+          | specification :: tail ->
+              let* specification =
+                transform_external_specification scope.mapping_type_ids
+                  scope.mapping_function_ids
+                  scope.mapping_symbolic_declarations provider specification
+              in
+              one (specification :: mapped) tail
+        in
+        one mapped provider.external_specifications
+  in
+  let* mapped_types = map_types [] mappings in
+  let* mapped_callables = map_callables [] mappings in
+  let* mapped_external_specifications =
+    map_external_specifications [] mappings
+  in
+  let numeric_collision identities index =
+    let identities = List.sort_uniq compare identities in
+    let indices = List.map index identities in
+    List.length indices <> List.length (List.sort_uniq Int.compare indices)
+  in
+  let mapped_type_identities =
+    List.concat_map
+      (fun scope -> List.map snd scope.mapping_type_ids)
+      mappings
+  in
+  let mapped_function_identities =
+    List.concat_map
+      (fun scope -> List.map snd scope.mapping_function_ids)
+      mappings
+  in
+  if
+    numeric_collision mapped_type_identities (fun id -> id.Sst.type_index)
+  then Error "[VERO_DEPENDENCY] retained type synthetic index collision"
+  else if
+    numeric_collision mapped_function_identities (fun id ->
+        id.Sst.function_index)
+  then Error "[VERO_DEPENDENCY] retained callable synthetic index collision"
+  else
         let snapshot =
           String.concat "|"
             (List.map
@@ -1170,6 +1741,12 @@ let create providers =
                  callable.path ^ "#" ^ callable.binding_uid ^ "#"
                  ^ callable.summary_digest)
                mapped_callables)
+            ^ String.concat "|"
+                (List.map
+                   (fun (specification : external_specification_snapshot) ->
+                     specification.provider_unit ^ "#"
+                     ^ specification.definition.function_id.function_name)
+                   mapped_external_specifications)
         in
         Ok
           {
@@ -1178,8 +1755,13 @@ let create providers =
             providers;
             callables = mapped_callables;
             types = mapped_types;
+            external_specifications = mapped_external_specifications;
             snapshot;
           }
+
+let create providers =
+  try create_unchecked providers
+  with Import_mapping_error message -> Error message
 
 let empty =
   {
@@ -1188,6 +1770,7 @@ let empty =
     providers = [];
     callables = [];
     types = [];
+    external_specifications = [];
     snapshot = "empty";
   }
 
@@ -1203,6 +1786,10 @@ let callables environment =
 let types environment =
   require environment;
   environment.types
+
+let external_specifications environment =
+  require environment;
+  environment.external_specifications
 
 let same_function_id left right =
   left.Sst.function_index = right.Sst.function_index
@@ -1273,7 +1860,13 @@ let seal_calls environment ~implementation ~program =
              import.crc)
       imports
   in
-  if not (List.for_all direct_provider environment.providers) then
+  if
+    not
+      (List.for_all
+         (fun provider ->
+           provider.description.callables = [] || direct_provider provider)
+         environment.providers)
+  then
     Error
       "[VERO_DEPENDENCY] retained callable target is not an exact direct \
        dependency"
@@ -1453,22 +2046,27 @@ let require_registration (registration : registration) =
   if registration.registration_issuer != issuer || registration.token == issuer
   then invalid_arg "unauthenticated imported-call registration"
 
+let require_live_registration registration =
+  require_registration registration;
+  if registration.invalidated then
+    invalid_arg "stale imported-call registration"
+
 (* The private token authenticates ordinary lookups in constant time.  The
    canonical consumer snapshot is checked once before a session can use the
    registration, rather than rendering the whole program at every call. *)
 let require_registration_snapshot (registration : registration) =
-  require_registration registration;
+  require_live_registration registration;
   if
     not
       (String.equal registration.snapshot (Sst.to_string registration.program))
   then invalid_arg "unauthenticated imported-call registration"
 
 let registration_environment registration =
-  require_registration registration;
+  require_live_registration registration;
   registration.environment
 
 let find_call registration expression =
-  require_registration registration;
+  require_live_registration registration;
   List.find_opt
     (fun call ->
       call.expression == expression
@@ -1702,14 +2300,14 @@ let consume_aggregate_model_call registration ~session ~expression ~actual_types
            this consumer session"
 
 let is_imported registration id =
-  require_registration registration;
+  require_live_registration registration;
   List.exists
     (fun (callable : callable_snapshot) ->
       same_function_id callable.definition.Sst.function_id id)
     registration.environment.callables
 
 let finite_requirement registration id ordinal =
-  require_registration registration;
+  require_live_registration registration;
   if
     List.exists
       (fun call ->
@@ -2141,6 +2739,7 @@ module For_testing = struct
         import_digest = "imports";
         callables;
         types;
+        external_specifications = [];
       }
     in
     let retained name provider =
@@ -2239,6 +2838,7 @@ module For_testing = struct
           import_digest = "imports";
           callables = [];
           types = [ typ ];
+          external_specifications = [];
         }
       in
       match validate_description description with

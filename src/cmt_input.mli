@@ -50,3 +50,5 @@ val load_with_interface :
   cmi:string ->
   unit ->
   (implementation, Diagnostic.t) result
+
+val retained_preprocessing : implementation -> bool

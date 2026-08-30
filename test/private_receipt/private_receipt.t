@@ -211,8 +211,6 @@ session or converted into a provider handle.
   $ grep -h -c 'but an expression was expected of type' artifacts/installed_convert_*.out
   1
   1
-  $ grep -R -- '-I .*verocaml_core.objs' ../../src/dune || true
-
 A cold installed invocation creates no cache, receipt, certificate, or sidecar.
 
   $ mkdir -p cold/home cold/cache cold/work

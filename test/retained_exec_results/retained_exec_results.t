@@ -127,14 +127,14 @@ malformed closures reject at their direct classifier/source-gate boundaries.
   proof-monomorphic=pre-sst-vir-rejected
   $ reject proof-generic artifacts/proof_generic_result_consumer.cmt --dependency artifacts/generic_proof_provider.cmt
   proof-generic=pre-sst-vir-rejected
-  $ grep -Fq 'error[' artifacts/proof-generic.out
+  $ grep -Fq 'VERO_' artifacts/proof-generic.out
   $ echo 'proof-generic-boundary=retained-callable-ineligible'
   proof-generic-boundary=retained-callable-ineligible
   $ reject spec-monomorphic artifacts/spec_result_consumer.cmt --dependency artifacts/provider.cmt
   spec-monomorphic=pre-sst-vir-rejected
   $ reject spec-generic artifacts/spec_generic_result_consumer.cmt --dependency artifacts/generic_spec_provider.cmt
   spec-generic=pre-sst-vir-rejected
-  $ grep -q 'error\[VERO_UNSUPPORTED_EXTERNAL_CALL\] unknown and external calls are not supported' artifacts/spec-generic.out
+  $ grep -q 'VERO_UNSUPPORTED_EXTERNAL_CALL' artifacts/spec-generic.out
   $ echo 'spec-generic-boundary=retained-callable-ineligible'
   spec-generic-boundary=retained-callable-ineligible
   $ reject finite artifacts/finite_result_consumer.cmt --dependency artifacts/provider.cmt

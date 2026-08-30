@@ -16,9 +16,7 @@
 
 (cram
  (deps
-  solver_resource_policy_tool.exe
-  ../../src/solver_backend.ml
-  ../../src/z3_bridge.ml))
+  solver_resource_policy_tool.exe))
 
 (alias
  (name solver-resource-policy-check)

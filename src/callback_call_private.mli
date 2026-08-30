@@ -25,6 +25,8 @@ type 'error direct_lowering_services = {
     Location.t ->
     Types.type_expr ->
     (Parametric_type.t, 'error) result;
+  optional_carrier :
+    Location.t -> Parametric_type.t -> (Parametric_type.t, 'error) result;
   lower_expression :
     Typedtree.expression -> (Sst.expression, 'error) result;
   callback_actual :
@@ -32,8 +34,7 @@ type 'error direct_lowering_services = {
     string option ->
     Typedtree.expression ->
     (Sst.call_argument, 'error) result;
-  verified_callback_candidate : bool;
-  unverified_callback_error : Location.t -> 'error;
+  callback_candidate_contract : (unit, 'error) result;
   parameter_label : Typedtree.arg_label -> string option;
   policy_error : Location.t -> string -> 'error;
   polymorphic_error : Location.t -> 'error;

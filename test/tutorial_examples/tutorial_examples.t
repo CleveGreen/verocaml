@@ -14,7 +14,7 @@ than a test-only verifier executable.
 
   $ tmpdir="$(mktemp -d)"
   $ trap 'rm -rf "$tmpdir"' EXIT HUP INT TERM
-  $ while IFS= read -r file; do name="$(basename "$file" .ml)"; nix run . -- verify "$file" >"$tmpdir/$name.out" 2>&1 && grep -q "verified.*file=$file" "$tmpdir/$name.out" || exit 1; echo "verified=$name"; done < test/tutorial_examples/manifest.txt
+  $ while IFS= read -r file; do name="$(basename "$file" .ml)"; nix run path:. -- verify "$file" >"$tmpdir/$name.out" 2>&1 && grep -q "verified.*file=$file" "$tmpdir/$name.out" || exit 1; echo "verified=$name"; done < test/tutorial_examples/manifest.txt
   verified=01-contracts
   verified=02-recursive-specification
   verified=03-scalar-induction
@@ -28,8 +28,8 @@ The list theorem's public dump is deterministic across two independent
 destinations. Its Proof measure is the recursive aggregate itself, and VIR
 records strict descent through the authenticated structural-height rank.
 
-  $ nix run . -- verify examples/tutorial/04-list-induction.ml --dump-sst "$tmpdir/run-1.sst" --dump-vir "$tmpdir/run-1.vir" >"$tmpdir/run-1.out" 2>&1
-  $ nix run . -- verify examples/tutorial/04-list-induction.ml --dump-sst "$tmpdir/run-2.sst" --dump-vir "$tmpdir/run-2.vir" >"$tmpdir/run-2.out" 2>&1
+  $ nix run path:. -- verify examples/tutorial/04-list-induction.ml --dump-sst "$tmpdir/run-1.sst" --dump-vir "$tmpdir/run-1.vir" >"$tmpdir/run-1.out" 2>&1
+  $ nix run path:. -- verify examples/tutorial/04-list-induction.ml --dump-sst "$tmpdir/run-2.sst" --dump-vir "$tmpdir/run-2.vir" >"$tmpdir/run-2.out" 2>&1
   $ cmp "$tmpdir/run-1.sst" "$tmpdir/run-2.sst"
   $ cmp "$tmpdir/run-1.vir" "$tmpdir/run-2.vir"
   $ grep -A30 '^function equal_sum#' "$tmpdir/run-1.sst" | grep -A1 '^  decreases 0 stage=logical' | grep -q 'variable left.*int_list'
@@ -45,7 +45,7 @@ summary rather than dormant-recursion syntax.
 
   $ test "$(grep -c '^          equal_sum left_tail right_tail;$' examples/tutorial/04-list-induction.ml)" -eq 1
   $ sed '/^          equal_sum left_tail right_tail;$/d' examples/tutorial/04-list-induction.ml > "$tmpdir/list-call-removed.ml"
-  $ set +e; OCAML_COLOR=never nix run . -- verify "$tmpdir/list-call-removed.ml" >"$tmpdir/list-call-removed.out" 2>&1; mutant_status=$?; set -e
+  $ set +e; OCAML_COLOR=never nix run path:. -- verify "$tmpdir/list-call-removed.ml" >"$tmpdir/list-call-removed.out" 2>&1; mutant_status=$?; set -e
   $ test "$mutant_status" -eq 3
   $ grep -q 'inconclusive function=equal_sum.*vc=postcondition' "$tmpdir/list-call-removed.out"
   $ echo 'recursive-call-removed=failed enclosing-postcondition=inconclusive'
@@ -54,7 +54,7 @@ summary rather than dormant-recursion syntax.
 The separate deliberately false proof pins the documented counterexample
 exit class and diagnostic.
 
-  $ set +e; OCAML_COLOR=never nix run . -- verify test/tutorial_examples/fixtures/failed-proof.ml >"$tmpdir/failed-proof.out" 2>&1; failed_status=$?; set -e
+  $ set +e; OCAML_COLOR=never nix run path:. -- verify test/tutorial_examples/fixtures/failed-proof.ml >"$tmpdir/failed-proof.out" 2>&1; failed_status=$?; set -e
   $ test "$failed_status" -eq 1
   $ grep -q 'counterexample function=wrong_successor.*vc=postcondition' "$tmpdir/failed-proof.out"
   $ echo 'failed-proof=counterexample exit=1'

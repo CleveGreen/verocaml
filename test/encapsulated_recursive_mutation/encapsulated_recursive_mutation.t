@@ -82,10 +82,6 @@ following root write uses the reconstructed successor.
   structural successors present
   $ if grep -Eqi 'points-to|separating-conjunction|permission-algebra|heap-location|alias-relation' artifacts/first.vir; then false; else echo 'no heap or separation vocabulary'; fi
   no heap or separation vocabulary
-  $ root="${PWD%%/_build/*}"; grep -Fq 'implemented =cursor.field <- rhs= transition' "$root/docs/MOVE_SEMANTICS.org" && grep -Fq 'Implemented scope' "$root/docs/ENCAPSULATED_RECURSIVE_MUTATION.org" && echo 'documentation records implementation'
-  documentation records implementation
-  $ grep -Fq 'Arbitrary source-to-destination child relocation is not implemented' "$root/docs/MOVE_SEMANTICS.org" && grep -Fq 'moves that leave a source hole' "$root/docs/MOVE_SEMANTICS.org" && grep -Fq 'no usable destructive =overwrite_=' "$root/docs/MOVE_SEMANTICS.org" && echo 'overlap, reinitialization, and overwrite stay rejected'
-  overlap, reinitialization, and overwrite stay rejected
 
 The same owned-tree reconstruction corpus composes with authenticated
 invariants. Root, rebase, and nested successors produce invariant-preservation

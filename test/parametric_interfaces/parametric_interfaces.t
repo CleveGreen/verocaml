@@ -41,10 +41,10 @@ Build one real retained provider and concrete and open consumers.
   $ grep -c 'optional-forward' artifacts/consumer.sst
   2
   $ grep '^adt ' artifacts/consumer.sst | sed -E 's/ uid=[^ ]+/ uid=<uid>/; s/#[0-9]+/#<id>/g'
-  adt Stdlib.option<'0@Stdlib.option#-1> uid=<uid> provenance=external-type-specification binders=1 variant[0:None()|1:Some(0:$0:'0@Stdlib.option#-1)] recursive-fields=0
-  adt Stdlib.list<'0@Stdlib.list#-2> uid=<uid> provenance=external-type-specification binders=1 variant[0:[]()|1:::(0:$0:'0@Stdlib.list#-2,1:$1:Stdlib.list<'0@Stdlib.list#-2>)] recursive-fields=1
-  adt Stdlib.result<'0@Stdlib.result#-3, '1@Stdlib.result#-3> uid=<uid> provenance=external-type-specification binders=2 variant[0:Ok(0:$0:'0@Stdlib.result#-3)|1:Error(0:$0:'1@Stdlib.result#-3)] recursive-fields=0
   adt box<'0@Provider.box#<id>> uid=<uid> provenance=local binders=1 record{0:value:'0@Provider.box#<id>} recursive-fields=0
+  adt list<'0@Provider.list_specification#<id>> uid=<uid> provenance=external-type-specification binders=1 variant[0:[]()|1:::(0:$0:'0@Provider.list_specification#<id>,1:$1:list<'0@Provider.list_specification#<id>>)] recursive-fields=1
+  adt option<'0@Provider.option_specification#<id>> uid=<uid> provenance=external-type-specification binders=1 variant[0:None()|1:Some(0:$0:'0@Provider.option_specification#<id>)] recursive-fields=0
+  adt Stdlib.result<'0@Provider.result_specification#<id>, '1@Provider.result_specification#<id>> uid=<uid> provenance=external-type-specification binders=2 variant[0:Ok(0:$0:'0@Provider.result_specification#<id>)|1:Error(0:$0:'1@Provider.result_specification#<id>)] recursive-fields=0
   adt tree<'0@Provider.tree#<id>> uid=<uid> provenance=local binders=1 variant[0:Leaf()|1:Node(0:$0:'0@Provider.tree#<id>,1:$1:tree<'0@Provider.tree#<id>>,2:$2:tree<'0@Provider.tree#<id>>)] recursive-fields=2
   $ grep -E '^function (relay|relay_tree)#.*binders' artifacts/open.sst
   function relay#0 binders=['0@relay#0] mode=exec recursive=false result='0@relay#0 policy=default-linear/default-z3 @ open_consumer.ml:1:0-1:35
@@ -96,10 +96,10 @@ Alpha-renamed schemes have equal semantic identity and distinct provenance.
 
 Partial, callback, higher-order, and wrong-mode uses reject without outputs.
 
-  $ for name in partial callback wrong_mode; do retained "$name"; code=0; OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$name.cmt" --timeout-ms 60000 --dependency artifacts/provider.cmt --dump-sst "artifacts/$name.sst" --dump-vir "artifacts/$name.vir" >"artifacts/$name.out" 2>&1 || code=$?; test "$code" = 2; test ! -e "artifacts/$name.sst" && test ! -e "artifacts/$name.vir"; printf '%s: ' "$name"; grep -o 'error\[VERO_[A-Z_]*\]' "artifacts/$name.out" | head -1; done
-  partial: error[VERO_UNSUPPORTED_TOP_LEVEL_BINDING]
-  callback: error[VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION]
-  wrong_mode: error[VERO_DEPENDENCY]
+  $ for name in partial callback wrong_mode; do retained "$name"; code=0; OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$name.cmt" --timeout-ms 60000 --dependency artifacts/provider.cmt --dump-sst "artifacts/$name.sst" --dump-vir "artifacts/$name.vir" >"artifacts/$name.out" 2>&1 || code=$?; test "$code" = 2; test ! -e "artifacts/$name.sst" && test ! -e "artifacts/$name.vir"; printf '%s: ' "$name"; grep -o 'VERO_[A-Z_]*' "artifacts/$name.out" | head -1; done
+  partial: VERO_UNSUPPORTED_TOP_LEVEL_BINDING
+  callback: VERO_CALLBACK_CONTRACT
+  wrong_mode: VERO_DEPENDENCY
 
 Swapped CMI/CMT and ordinary/retained family mixtures reject.
 

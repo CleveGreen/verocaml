@@ -1,0 +1,20 @@
+(library
+ (name vstd_consumer)
+ (modules vstd_consumer)
+ (libraries verocaml.vstd verocaml.ghost)
+ (flags (:standard -w -A -alert -all))
+ (preprocess (pps vero_ppx_driver)))
+
+(library
+ (name ambient_vstd_consumer)
+ (modules ambient_vstd_consumer)
+ (libraries verocaml.vstd verocaml.ghost)
+ (flags (:standard -w -A -alert -all))
+ (preprocess (pps vero_ppx_driver)))
+
+(cram
+ (deps
+  ../../src/verocaml.exe
+  .vstd_consumer.objs/byte/vstd_consumer.cmt
+  .ambient_vstd_consumer.objs/byte/ambient_vstd_consumer.cmt
+  (alias ../../library/all)))

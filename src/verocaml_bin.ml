@@ -294,24 +294,17 @@ let validate_distinct_paths options =
   inspect [] requested
 let executable_directory () =
   absolute_path Sys.executable_name |> Filename.dirname
-let first_existing_file paths =
-  List.find_opt
-    (fun path ->
-      try Sys.file_exists path && not (Sys.is_directory path)
-      with Sys_error _ -> false)
-    paths
-let first_existing_directory paths =
-  List.find_opt
-    (fun path ->
-      try Sys.file_exists path && Sys.is_directory path
-      with Sys_error _ -> false)
-    paths
+let existing_file path =
+  try
+    if Sys.file_exists path && not (Sys.is_directory path) then Some path
+    else None
+  with Sys_error _ -> None
+let existing_directory path =
+  try
+    if Sys.file_exists path && Sys.is_directory path then Some path else None
+  with Sys_error _ -> None
 let compiler_prefix () =
   Config.standard_library |> Filename.dirname |> Filename.dirname
-let base_ocaml_version () =
-  match String.index_opt Sys.ocaml_version '+' with
-  | None -> Sys.ocaml_version
-  | Some index -> String.sub Sys.ocaml_version 0 index
 type source_toolchain = {
   ocamlc : string;
   ppx : string;
@@ -320,6 +313,9 @@ type source_toolchain = {
 let source_toolchain () =
   let executable_directory = executable_directory () in
   let install_prefix = Filename.dirname executable_directory in
+  let development_layout =
+    Filename.check_suffix Sys.executable_name ".exe"
+  in
   let getenv_or name fallback =
     match Sys.getenv_opt name with
     | Some value -> value
@@ -328,46 +324,35 @@ let source_toolchain () =
   let default_ocamlc =
     Filename.concat (Filename.concat (compiler_prefix ()) "bin") "ocamlc"
   in
-  let default_ppx_candidates =
-    [
-      Filename.concat executable_directory "verocaml-ppx";
+  let default_ppx =
+    if development_layout then
       Filename.concat
         (Filename.concat executable_directory "..")
-        "ppx/vero_ppx.exe";
-    ]
+        "ppx/vero_ppx.exe"
+    else Filename.concat executable_directory "verocaml-ppx"
   in
-  let installed_ghost_root =
-    Filename.concat
-      (Filename.concat
-         (Filename.concat
-            (Filename.concat install_prefix "lib")
-            "ocaml")
-         (base_ocaml_version ()))
-      "site-lib/verocaml/ghost"
-  in
-  let default_ghost_candidates =
-    [
-      installed_ghost_root;
+  let default_ghost_directory =
+    if development_layout then
+      Filename.concat
+        (Filename.concat executable_directory "..")
+        "runtime/.vero_ghost.objs/byte"
+    else
       Filename.concat
         (Filename.concat (Filename.concat install_prefix "lib") "verocaml")
-        "ghost";
-      Filename.concat
-        (Filename.concat executable_directory "..")
-        "runtime/.vero_ghost.objs/byte";
-    ]
+        "ghost"
   in
   let ocamlc = getenv_or "VEROCAML_OCAMLC" default_ocamlc in
   let ppx =
     match Sys.getenv_opt "VEROCAML_PPX" with
-    | Some path -> first_existing_file [ path ]
-    | None -> first_existing_file default_ppx_candidates
+    | Some path -> existing_file path
+    | None -> existing_file default_ppx
   in
   let ghost_directory =
     match Sys.getenv_opt "VEROCAML_GHOST_DIR" with
-    | Some path -> first_existing_directory [ path ]
-    | None -> first_existing_directory default_ghost_candidates
+    | Some path -> existing_directory path
+    | None -> existing_directory default_ghost_directory
   in
-  match (first_existing_file [ ocamlc ], ppx, ghost_directory) with
+  match (existing_file ocamlc, ppx, ghost_directory) with
   | Some ocamlc, Some ppx, Some ghost_directory ->
       Ok { ocamlc; ppx; ghost_directory }
   | None, _, _ ->
@@ -375,7 +360,13 @@ let source_toolchain () =
   | _, None, _ -> Error (render_message Ppx_unavailable)
   | _, _, None -> Error (render_message Ghost_unavailable)
 let environment_with_compiler_color () =
-  let environment = Unix.environment () in
+  let environment =
+    Unix.environment ()
+    |> Array.to_list
+    |> List.filter (fun entry ->
+           not (String.starts_with ~prefix:"BUILD_PATH_PREFIX_MAP=" entry))
+    |> Array.of_list
+  in
   if
     Array.exists
       (fun entry -> String.starts_with ~prefix:"OCAML_COLOR=" entry)
@@ -530,7 +521,214 @@ let render_service_error error =
         (Verocaml_bin_render.dependency_error
            ~unit_name:(Verifier_service.error_unit_name error)
            ~message:(Verifier_service.error_message error))
-let load_inputs options cmt_input =
+let canonical_import_unit = function
+  | "CamlinternalFormatBasics" | "Stdlib" | "Stdlib__Domain"
+  | "Stdlib__Effect" | "Vero_ghost" ->
+      true
+  | _ -> false
+let custom_import (owner : Cmt_input.implementation)
+    (import : Cmt_input.import) =
+  not (String.equal owner.unit_name import.unit_name)
+  && not (canonical_import_unit import.unit_name)
+let adjacent_cmt_files directories =
+  let files directory =
+    try
+      Sys.readdir directory |> Array.to_list |> List.sort String.compare
+      |> List.filter_map (fun entry ->
+             if Filename.check_suffix entry ".cmt" then
+               let filename = Filename.concat directory entry in
+               if Sys.is_directory filename then None else Some filename
+             else None)
+    with Sys_error _ -> []
+  in
+  List.sort_uniq String.compare directories
+  |> List.concat_map files |> List.sort_uniq String.compare
+let automatic_candidates (consumer : Cmt_input.implementation) =
+  adjacent_cmt_files
+    (consumer.load_path_visible @ consumer.load_path_hidden)
+  |> List.filter_map (fun filename ->
+         match Cmt_input.load filename with Ok candidate -> Some candidate | Error _ -> None)
+let declares_external_type_specifications
+    (candidate : Cmt_input.implementation) =
+  let found = ref false in
+  let relevant attribute =
+    String.equal attribute.Parsetree.attr_name.txt
+      "verocaml.external_type_specification"
+    || String.equal attribute.attr_name.txt
+         "verocaml.internal.external_type_specification.v1"
+  in
+  let default = Tast_iterator.default_iterator in
+  let iterator =
+    {
+      default with
+      type_declaration =
+        (fun self declaration ->
+          if List.exists relevant declaration.Typedtree.typ_attributes then
+            found := true;
+          default.type_declaration self declaration);
+    }
+  in
+  iterator.structure iterator candidate.structure;
+  !found
+let compiler_argument argument (candidate : Cmt_input.implementation) =
+  Array.exists (String.equal argument) candidate.compiler_arguments
+let dune_wrapper_support (candidate : Cmt_input.implementation) =
+  (not (Cmt_input.retained_preprocessing candidate))
+  && Filename.check_suffix candidate.source_file ".ml-gen"
+  && compiler_argument "-no-alias-deps" candidate
+  && compiler_argument "-nopervasives" candidate
+  && compiler_argument "-nostdlib" candidate
+let dune_wrapper_member wrapper (candidate : Cmt_input.implementation) =
+  String.equal (Filename.dirname wrapper.Cmt_input.filename)
+    (Filename.dirname candidate.filename)
+  && Array.exists
+       (fun (import : Cmt_input.import) ->
+         String.equal import.unit_name candidate.unit_name
+         && Option.is_none import.crc)
+       wrapper.imports
+let exact_identity (candidate : Cmt_input.implementation) =
+  Option.map (fun crc -> (candidate.unit_name, crc)) candidate.interface_digest
+let deduplicate_explicit candidates =
+  let rec loop identities loaded = function
+    | [] -> Ok (List.rev loaded)
+    | candidate :: rest -> (
+        match exact_identity candidate with
+        | None -> loop identities (candidate :: loaded) rest
+        | Some identity -> (
+            match List.assoc_opt identity identities with
+            | None ->
+                loop
+                  ((identity, candidate) :: identities)
+                  (candidate :: loaded) rest
+            | Some existing
+              when String.equal existing.raw_artifact_digest
+                     candidate.raw_artifact_digest ->
+                loop identities loaded rest
+            | Some existing -> Error (identity, [ existing; candidate ])))
+  in
+  loop [] [] candidates
+let exact_matches unit_name crc candidates =
+  List.filter
+    (fun (candidate : Cmt_input.implementation) ->
+      String.equal candidate.unit_name unit_name
+      && candidate.interface_digest = Some crc)
+    candidates
+let distinct_artifacts candidates =
+  List.sort
+    (fun (left : Cmt_input.implementation) right ->
+      String.compare left.filename right.filename)
+    candidates
+  |> List.fold_left
+       (fun distinct candidate ->
+         if
+           List.exists
+             (fun existing ->
+               String.equal existing.Cmt_input.raw_artifact_digest
+                 candidate.Cmt_input.raw_artifact_digest)
+             distinct
+         then distinct
+         else candidate :: distinct)
+       []
+  |> List.rev
+let report_ambiguity unit_name crc candidates =
+  let artifacts =
+    candidates
+    |> List.map (fun (candidate : Cmt_input.implementation) ->
+           Printf.sprintf "%S (%s)" candidate.filename
+             candidate.raw_artifact_digest)
+    |> String.concat ", "
+  in
+  prerr_endline
+    (Verocaml_bin_render.dependency_error ~unit_name:(Some unit_name)
+       ~message:
+         (Printf.sprintf
+            "ambiguous exact interface CRC %s is provided by differing CMT artifacts: %s"
+            crc artifacts))
+let discover_dependencies (consumer : Cmt_input.implementation) explicit
+    automatic =
+  let explicit_units =
+    List.map (fun (candidate : Cmt_input.implementation) -> candidate.unit_name)
+      explicit
+    |> List.sort_uniq String.compare
+  in
+  let rec visit visited discovered = function
+    | [] -> Ok (List.rev discovered)
+    | owner :: rest ->
+        let identity =
+          (owner.Cmt_input.unit_name, owner.Cmt_input.raw_artifact_digest)
+        in
+        if List.mem identity visited then visit visited discovered rest
+        else
+          let imports =
+            Array.to_list owner.imports |> List.filter (custom_import owner)
+            |> List.sort (fun (left : Cmt_input.import) right ->
+                   match String.compare left.Cmt_input.unit_name right.unit_name with
+                   | 0 -> Option.compare String.compare left.crc right.crc
+                   | comparison -> comparison)
+          in
+          let rec select selected = function
+            | [] -> Ok selected
+            | (import : Cmt_input.import) :: imports -> (
+                if String.equal import.unit_name consumer.unit_name then
+                  select selected imports
+                else
+                match import.crc with
+                | None -> select selected imports
+                | Some crc ->
+                    let explicit_matches =
+                      exact_matches import.unit_name crc explicit
+                    in
+                    let automatic_matches =
+                      exact_matches import.unit_name crc automatic
+                    in
+                    let artifacts =
+                      distinct_artifacts (explicit_matches @ automatic_matches)
+                    in
+                    (match artifacts with
+                    | _ :: _ :: _ ->
+                        report_ambiguity import.unit_name crc artifacts;
+                        Error ()
+                    | [] -> select selected imports
+                    | [ candidate ] ->
+                        let selected_candidate =
+                          match explicit_matches with
+                          | [ explicit ] -> Some (false, explicit)
+                          | [] when List.mem import.unit_name explicit_units ->
+                              None
+                          | [] -> Some (true, candidate)
+                          | _ -> assert false
+                        in
+                        select
+                          (Option.fold ~none:selected
+                             ~some:(fun candidate -> candidate :: selected)
+                             selected_candidate)
+                          imports))
+          in
+          (match select [] imports with
+          | Error () -> Error ()
+          | Ok selected ->
+              let discovered =
+                List.fold_left
+                  (fun discovered (automatic, candidate) ->
+                    if
+                      automatic
+                      && not
+                           (List.exists
+                              (fun existing ->
+                                String.equal existing.Cmt_input.unit_name
+                                  candidate.Cmt_input.unit_name
+                                && String.equal existing.raw_artifact_digest
+                                     candidate.raw_artifact_digest)
+                              discovered)
+                    then candidate :: discovered
+                    else discovered)
+                  discovered selected
+              in
+              visit (identity :: visited) discovered
+                (List.rev_map snd selected @ rest))
+  in
+  visit [] [] (consumer :: explicit)
+let load_inputs ~discover options cmt_input =
   let consumer_error diagnostic =
     if options.dependencies = [] then render_frontend_error diagnostic
     else
@@ -555,10 +753,50 @@ let load_inputs options cmt_input =
   | Error diagnostic ->
       consumer_error diagnostic;
       Error ()
-  | Ok consumer ->
-      Result.map
-        (fun dependencies -> (consumer, dependencies))
-        (load_dependencies [] options.dependencies)
+  | Ok consumer -> (
+      match load_dependencies [] options.dependencies with
+      | Error () -> Error ()
+      | Ok explicit -> (
+          match deduplicate_explicit explicit with
+          | Error ((unit_name, crc), candidates) ->
+              report_ambiguity unit_name crc (distinct_artifacts candidates);
+              Error ()
+          | Ok explicit ->
+              let automatic =
+                if discover then automatic_candidates consumer else []
+              in
+              (* A hidden Dune member has no CRC-bearing import edge from its
+                 generated wrapper.  Discover the exact CRC graph first, then
+                 admit external-type catalogs only for wrappers in that graph.
+                 Merely placing a wrapper and member on an ambient [-I] path
+                 must not grant specification authority. *)
+              (match discover_dependencies consumer explicit automatic with
+              | Error () -> Error ()
+              | Ok reachable_dependencies ->
+                  let reachable_wrappers =
+                    List.filter dune_wrapper_support
+                      (explicit @ reachable_dependencies)
+                  in
+                  let implicit_catalogs =
+                    List.filter
+                      (fun (candidate : Cmt_input.implementation) ->
+                        Cmt_input.retained_preprocessing candidate
+                        && declares_external_type_specifications candidate
+                        && List.exists
+                             (fun wrapper ->
+                               dune_wrapper_member wrapper candidate)
+                             reachable_wrappers)
+                      automatic
+                  in
+                  (match deduplicate_explicit (explicit @ implicit_catalogs) with
+                  | Error ((unit_name, crc), candidates) ->
+                      report_ambiguity unit_name crc
+                        (distinct_artifacts candidates);
+                      Error ()
+                  | Ok selected ->
+                      Result.map
+                        (fun discovered -> (consumer, selected @ discovered))
+                        (discover_dependencies consumer selected automatic)))))
 let emit_result ?source_compilation_cmt options result =
   let exit_code = verification_exit_code result in
   let rendered_sst =
@@ -594,7 +832,10 @@ let emit_result ?source_compilation_cmt options result =
               |> List.iter print_endline;
               exit_code))
 let verify_decoded ?source_compilation_cmt options configuration cmt_input =
-  match load_inputs options cmt_input with
+  match
+    load_inputs ~discover:(Option.is_none source_compilation_cmt) options
+      cmt_input
+  with
   | Error () -> 2
   | Ok (consumer, dependencies) -> (
       let request =

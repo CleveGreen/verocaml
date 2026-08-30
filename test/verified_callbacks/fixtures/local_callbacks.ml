@@ -1,3 +1,6 @@
+type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
 let apply f x =
   [%verocaml.requires call_requires (f x)];
   [%verocaml.ensures fun result -> call_ensures (f x) result];

@@ -1,3 +1,6 @@
+type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
 let observed (_value : 'a) : bool = true [@@verocaml.spec]
 type 'a seq = Nil | Cons of 'a * 'a seq
 type 'a tree = Leaf | Node of 'a * 'a tree * 'a tree

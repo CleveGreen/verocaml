@@ -7,7 +7,16 @@ val make_definition :
   span:Diagnostic.span ->
   (Sst.function_definition, string) result
 
-val seal : program:Sst.program -> (unit, string) result
+val seal :
+  imported_definitions:Sst.function_definition list ->
+  program:Sst.program ->
+  (unit, string) result
+
+val authenticate_imported :
+  canonical_path:string ->
+  value_uid:string ->
+  Sst.function_definition ->
+  (Symbolic_application_private.declaration, string) result
 
 val authenticate :
   program:Sst.program ->

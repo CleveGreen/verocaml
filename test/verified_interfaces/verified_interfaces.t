@@ -43,8 +43,8 @@ recursive declaration or creating output artifacts.
   $ compile artifacts/imported-rank structural_consumer.ml
   $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/imported-rank/structural_consumer.cmt --timeout-ms 60000 --dependency artifacts/imported-rank/structural_dependency.cmt --dump-sst artifacts/imported-rank/consumer.sst --dump-vir artifacts/imported-rank/consumer.vir > artifacts/imported-rank/rejected.out 2>&1; echo $?
   2
-  $ grep -o 'error\[VERO_[A-Z_]*\]' artifacts/imported-rank/rejected.out
-  error[VERO_DEPENDENCY]
+  $ actual=$(grep -Eo 'VERO_[A-Z_]+' artifacts/imported-rank/rejected.out | head -1); test "$actual" = VERO_INVALID_PROGRAM; printf 'code=%s\n' "$actual"
+  code=VERO_INVALID_PROGRAM
   $ test ! -e artifacts/imported-rank/consumer.sst
   $ test ! -e artifacts/imported-rank/consumer.vir
 
@@ -114,7 +114,7 @@ consumers reject before SST/VIR, independent of declaration order.
   $ mkdir artifacts/generic-family
   $ cp fixtures/generic_family_*.ml artifacts/generic-family/
   $ for n in generic_family_provider generic_family_consumer generic_family_sibling_consumer generic_family_structural_consumer generic_family_finite_consumer generic_family_constructor_consumer generic_family_recursive_consumer generic_family_invariant_consumer generic_family_reveal_consumer generic_family_equality_consumer generic_family_arbitrary_equality_consumer generic_family_exec_consumer generic_family_proof_consumer generic_family_spec_consumer generic_family_rank_consumer generic_family_reordered_provider generic_family_reordered_consumer; do compile artifacts/generic-family "$n.ml"; done
-  $ for n in provider reordered_provider; do code=0; OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/generic-family/generic_family_$n.cmt" --timeout-ms 60000 --dump-sst "artifacts/generic-family/$n.sst" --dump-vir "artifacts/generic-family/$n.vir" > "artifacts/generic-family/$n.out" 2>&1 || code=$?; test "$code" = 2; grep -q 'error\\[VERO_DEPENDENCY\\]' "artifacts/generic-family/$n.out"; test ! -e "artifacts/generic-family/$n.sst" && test ! -e "artifacts/generic-family/$n.vir"; done; echo 'excluded-mutable-rank-provider=rejected order=independent sst=absent vir=absent'
+  $ for n in provider reordered_provider; do code=0; OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/generic-family/generic_family_$n.cmt" --timeout-ms 60000 --dump-sst "artifacts/generic-family/$n.sst" --dump-vir "artifacts/generic-family/$n.vir" > "artifacts/generic-family/$n.out" 2>&1 || code=$?; test "$code" = 2; actual=$(grep -Eo 'VERO_[A-Z_]+' "artifacts/generic-family/$n.out" | head -1); test "$actual" = VERO_DEPENDENCY; test ! -e "artifacts/generic-family/$n.sst" && test ! -e "artifacts/generic-family/$n.vir"; done; echo 'excluded-mutable-rank-provider=rejected order=independent sst=absent vir=absent'
   excluded-mutable-rank-provider=rejected order=independent sst=absent vir=absent
   $ for n in consumer sibling_consumer structural_consumer finite_consumer constructor_consumer recursive_consumer invariant_consumer reveal_consumer equality_consumer arbitrary_equality_consumer exec_consumer proof_consumer spec_consumer rank_consumer; do code=0; sst="artifacts/generic-family/$n.sst"; vir="artifacts/generic-family/$n.vir"; OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/generic-family/generic_family_$n.cmt" --timeout-ms 60000 --dependency artifacts/generic-family/generic_family_provider.cmt --dump-sst "$sst" --dump-vir "$vir" >/dev/null 2>&1 || code=$?; test "$code" = 2; test ! -e "$sst" && test ! -e "$vir"; done; code=0; OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/generic-family/generic_family_reordered_consumer.cmt --timeout-ms 60000 --dependency artifacts/generic-family/generic_family_reordered_provider.cmt --dump-sst artifacts/generic-family/reordered.sst --dump-vir artifacts/generic-family/reordered.vir >/dev/null 2>&1 || code=$?; test "$code" = 2; test ! -e artifacts/generic-family/reordered.sst && test ! -e artifacts/generic-family/reordered.vir; echo 'textual-generic-family-authority=rejected consumers=15 sst=absent vir=absent'
   textual-generic-family-authority=rejected consumers=15 sst=absent vir=absent
@@ -147,8 +147,8 @@ rebuilt provider snapshot.  The CRC mismatch rejects before consumer SST/VIR.
   $ compile artifacts/retained-model/generic-stale generic_model_dependency.ml
   $ if OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/retained-model/generic-stale/generic_model_consumer.cmt --timeout-ms 60000 --dependency artifacts/retained-model/generic-stale/generic_model_dependency.cmt --dump-sst artifacts/retained-model/generic-stale/consumer.sst --dump-vir artifacts/retained-model/generic-stale/consumer.vir > artifacts/retained-model/generic-stale/rejected.out 2>&1; then false; else echo 'retained-generic-stale=zero-output-rejected'; fi
   retained-generic-stale=zero-output-rejected
-  $ grep -o 'error\[VERO_[A-Z_]*\]' artifacts/retained-model/generic-stale/rejected.out | head -1
-  error[VERO_DEPENDENCY]
+  $ actual=$(grep -Eo 'VERO_[A-Z_]+' artifacts/retained-model/generic-stale/rejected.out | head -1); test "$actual" = VERO_DEPENDENCY; printf 'code=%s\n' "$actual"
+  code=VERO_DEPENDENCY
   $ test ! -e artifacts/retained-model/generic-stale/consumer.sst && test ! -e artifacts/retained-model/generic-stale/consumer.vir
 
 The private schema matrix pins public/revealed deep immutability, existing
@@ -188,17 +188,19 @@ consumer deltas beyond the separately authenticated provider baseline.
   retained-model-rejection=reveal descriptor-delta=0/0/0 recursive-delta=0/0 aggregate-route-delta=0/0 solver-delta=0 z3-delta=0/0
 
 Every graph/authentication failure happens before consumer lowering or dump
-creation. Cycles (including a crafted CRC-complete consumer back-edge), missing
-transitive inputs, duplicate units, stale substitutions, prefix lookalikes,
-canonical-slot attacks, unused slots, malformed artifacts, unsupported
-PPX/runtime carriers, separate hidden interfaces, and failed dependency proofs
-reject.
+creation. Cycles, stale substitutions, canonical-slot attacks, malformed
+artifacts, runtime mismatches, unsupported retained contracts, and failed
+dependency proofs reject. Exact imported artifacts are discovered from the
+compiler load path, identical explicit artifacts are deduplicated, ordinary
+non-retained dependencies carry no semantic authority, and prefix lookalikes
+remain ordinary verified units rather than canonical compiler units.
 
-  $ reject_without_consumer () { label=$1; shift; sst="artifacts/$label.sst"; vir="artifacts/$label.vir"; if OCAML_COLOR=never ../../src/verocaml.exe verify "$@" --timeout-ms 60000 --dump-sst "$sst" --dump-vir "$vir" > "artifacts/$label.out" 2>&1; then return 1; else code=$?; fi; test "$code" = 2; test ! -e "$sst"; test ! -e "$vir"; printf '%s: ' "$label"; grep -o 'error\[VERO_[A-Z_]*\]' "artifacts/$label.out" | head -1; }
+  $ reject_without_consumer () { label=$1; shift; sst="artifacts/$label.sst"; vir="artifacts/$label.vir"; if OCAML_COLOR=never ../../src/verocaml.exe verify "$@" --timeout-ms 60000 --dump-sst "$sst" --dump-vir "$vir" > "artifacts/$label.out" 2>&1; then return 1; else code=$?; fi; test "$code" = 2; test ! -e "$sst"; test ! -e "$vir"; actual=$(grep -Eo 'VERO_[A-Z_]+' "artifacts/$label.out" | head -1); test -n "$actual"; printf '%s: code=%s\n' "$label" "$actual"; }
+  $ verify_discovered () { label=$1; expected=$2; shift 2; sst="artifacts/$label.sst"; vir="artifacts/$label.vir"; OCAML_COLOR=never ../../src/verocaml.exe verify "$@" --timeout-ms 60000 --dump-sst "$sst" --dump-vir "$vir" > "artifacts/$label.out" 2>&1; test -s "$sst"; test -e "$vir"; actual=$(grep -c '^verocaml: verified dependency unit=' "artifacts/$label.out"); test "$actual" = "$expected"; printf '%s: verified-dependencies=%s\n' "$label" "$actual"; }
   $ consumer_crc=$(./verified_interfaces_tool.exe interface-digest artifacts/v1/consumer.cmt)
   $ ./verified_interfaces_tool.exe add-import artifacts/v1/base.cmt artifacts/base-consumer-back-edge.cmt Consumer "$consumer_crc"
   $ reject_without_consumer consumer-back-edge artifacts/v1/consumer.cmt --dependency artifacts/v1/middle.cmt --dependency artifacts/base-consumer-back-edge.cmt
-  consumer-back-edge: error[VERO_DEPENDENCY]
+  consumer-back-edge: code=VERO_DEPENDENCY
   $ ./handle_barrier_tool.exe artifacts/v1/consumer.cmt artifacts/v1/middle.cmt artifacts/base-consumer-back-edge.cmt
   failed authentication constructed 0 handles
   $ mkdir artifacts/cycle
@@ -214,22 +216,22 @@ reject.
   > EOF
   $ (cd artifacts/cycle && ocamlc -w -A -alert -all -bin-annot -I "$GHOST" -ppx "$PPX" -open A -c cycle_consumer.ml)
   $ reject_without_consumer cyclic artifacts/cycle/cycle_consumer.cmt --dependency artifacts/cycle/a.cmt --dependency artifacts/cycle/b.cmt
-  cyclic: error[VERO_DEPENDENCY]
-  $ reject_without_consumer missing-transitive artifacts/v1/consumer.cmt --dependency artifacts/v1/middle.cmt
-  missing-transitive: error[VERO_DEPENDENCY]
+  cyclic: code=VERO_DEPENDENCY
+  $ verify_discovered discovered-transitive 2 artifacts/v1/consumer.cmt --dependency artifacts/v1/middle.cmt
+  discovered-transitive: verified-dependencies=2
   $ cp artifacts/v1/base.cmt artifacts/base-copy.cmt
-  $ reject_without_consumer duplicate-unit artifacts/v1/consumer.cmt --dependency artifacts/v1/base.cmt --dependency artifacts/base-copy.cmt --dependency artifacts/v1/middle.cmt
-  duplicate-unit: error[VERO_DEPENDENCY]
+  $ verify_discovered identical-explicit-copy 2 artifacts/v1/consumer.cmt --dependency artifacts/v1/base.cmt --dependency artifacts/base-copy.cmt --dependency artifacts/v1/middle.cmt
+  identical-explicit-copy: verified-dependencies=2
   $ cp fixtures/base.ml artifacts/stale/base.ml
   $ chmod u+w artifacts/stale/base.ml
   $ printf '\nlet changed () = 0\n' >> artifacts/stale/base.ml
   $ compile artifacts/stale base.ml
   $ reject_without_consumer stale artifacts/v1/consumer.cmt --dependency artifacts/v1/middle.cmt --dependency artifacts/stale/base.cmt
-  stale: error[VERO_DEPENDENCY]
+  stale: code=VERO_DEPENDENCY
   $ cp fixtures/base.ml artifacts/lookalike/lookalike.ml
   $ compile artifacts/lookalike lookalike.ml
   $ reject_without_consumer lookalike artifacts/v1/consumer.cmt --dependency artifacts/v1/middle.cmt --dependency artifacts/lookalike/lookalike.cmt
-  lookalike: error[VERO_DEPENDENCY]
+  lookalike: code=VERO_DEPENDENCY
   $ mkdir artifacts/stdlib-prefix artifacts/camlinternal-prefix
   $ cat > artifacts/stdlib-prefix/stdlib_forgery.ml <<'EOF'
   > let forged () = 0
@@ -245,8 +247,8 @@ reject.
   $ compile artifacts/stdlib-prefix stdlib_forgery.ml
   $ compile artifacts/stdlib-prefix prefix_dependency.ml
   $ compile artifacts/stdlib-prefix prefix_consumer.ml
-  $ reject_without_consumer stdlib-prefix-lookalike artifacts/stdlib-prefix/prefix_consumer.cmt --dependency artifacts/stdlib-prefix/prefix_dependency.cmt
-  stdlib-prefix-lookalike: error[VERO_DEPENDENCY]
+  $ verify_discovered stdlib-prefix-lookalike 2 artifacts/stdlib-prefix/prefix_consumer.cmt --dependency artifacts/stdlib-prefix/prefix_dependency.cmt
+  stdlib-prefix-lookalike: verified-dependencies=2
   $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/stdlib-prefix/prefix_consumer.cmt --timeout-ms 60000 --dependency artifacts/stdlib-prefix/prefix_dependency.cmt --dependency artifacts/stdlib-prefix/stdlib_forgery.cmt > artifacts/stdlib-prefix-supplied.out
   $ test "$(grep -c 'verified dependency' artifacts/stdlib-prefix-supplied.out)" = 2
   $ grep 'verified dependency unit=Stdlib_forgery ' artifacts/stdlib-prefix-supplied.out >/dev/null
@@ -264,30 +266,30 @@ reject.
   $ compile artifacts/camlinternal-prefix camlinternal_forgery.ml
   $ compile artifacts/camlinternal-prefix prefix_dependency.ml
   $ compile artifacts/camlinternal-prefix prefix_consumer.ml
-  $ reject_without_consumer camlinternal-prefix-lookalike artifacts/camlinternal-prefix/prefix_consumer.cmt --dependency artifacts/camlinternal-prefix/prefix_dependency.cmt
-  camlinternal-prefix-lookalike: error[VERO_DEPENDENCY]
+  $ verify_discovered camlinternal-prefix-lookalike 2 artifacts/camlinternal-prefix/prefix_consumer.cmt --dependency artifacts/camlinternal-prefix/prefix_dependency.cmt
+  camlinternal-prefix-lookalike: verified-dependencies=2
   $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/camlinternal-prefix/prefix_consumer.cmt --timeout-ms 60000 --dependency artifacts/camlinternal-prefix/prefix_dependency.cmt --dependency artifacts/camlinternal-prefix/camlinternal_forgery.cmt > artifacts/camlinternal-prefix-supplied.out
   $ test "$(grep -c 'verified dependency' artifacts/camlinternal-prefix-supplied.out)" = 2
   $ grep 'verified dependency unit=Camlinternal_forgery ' artifacts/camlinternal-prefix-supplied.out >/dev/null
   $ ./verified_interfaces_tool.exe remove-import artifacts/v1/base.cmt artifacts/base-missing-stdlib.cmt Stdlib
   $ reject_without_consumer missing-canonical-slot artifacts/v1/consumer.cmt --dependency artifacts/v1/middle.cmt --dependency artifacts/base-missing-stdlib.cmt
-  missing-canonical-slot: error[VERO_DEPENDENCY]
+  missing-canonical-slot: code=VERO_DEPENDENCY
   $ ./verified_interfaces_tool.exe set-import artifacts/v1/base.cmt artifacts/base-wrong-canonical.cmt CamlinternalFormatBasics 00000000000000000000000000000000
   $ reject_without_consumer wrong-canonical-slot artifacts/v1/consumer.cmt --dependency artifacts/v1/middle.cmt --dependency artifacts/base-wrong-canonical.cmt
-  wrong-canonical-slot: error[VERO_DEPENDENCY]
+  wrong-canonical-slot: code=VERO_DEPENDENCY
   $ ./verified_interfaces_tool.exe set-import artifacts/v1/base.cmt artifacts/base-crcless-canonical.cmt Stdlib none
   $ reject_without_consumer crcless-canonical-slot artifacts/v1/consumer.cmt --dependency artifacts/v1/middle.cmt --dependency artifacts/base-crcless-canonical.cmt
-  crcless-canonical-slot: error[VERO_DEPENDENCY]
-  $ reject_without_consumer unused artifacts/v1/consumer.cmt --dependency artifacts/v1/base.cmt
-  unused: error[VERO_DEPENDENCY]
+  crcless-canonical-slot: code=VERO_DEPENDENCY
+  $ verify_discovered completed-import-closure 2 artifacts/v1/consumer.cmt --dependency artifacts/v1/base.cmt
+  completed-import-closure: verified-dependencies=2
   $ printf 'not a cmt\n' > artifacts/malformed.cmt
   $ reject_without_consumer malformed artifacts/v1/consumer.cmt --dependency artifacts/malformed.cmt
-  malformed: error[VERO_DEPENDENCY]
+  malformed: code=VERO_DEPENDENCY
   $ cp fixtures/no_ppx.ml fixtures/no_ppx_consumer.ml artifacts/
   $ (cd artifacts && ocamlc -w -A -alert -all -bin-annot -c no_ppx.ml)
   $ compile artifacts no_ppx_consumer.ml
-  $ reject_without_consumer ppx-mismatch artifacts/no_ppx_consumer.cmt --dependency artifacts/no_ppx.cmt
-  ppx-mismatch: error[VERO_DEPENDENCY]
+  $ verify_discovered ordinary-no-ppx 0 artifacts/no_ppx_consumer.cmt --dependency artifacts/no_ppx.cmt
+  ordinary-no-ppx: verified-dependencies=0
   $ cp ../../runtime/vero_ghost.mli artifacts/fake-runtime/vero_ghost.mli
   $ chmod u+w artifacts/fake-runtime/vero_ghost.mli
   $ printf '\nval incompatible_carrier : unit\n' >> artifacts/fake-runtime/vero_ghost.mli
@@ -304,27 +306,27 @@ reject.
   > EOF
   $ compile artifacts/fake-runtime runtime_consumer.ml
   $ reject_without_consumer runtime-mismatch artifacts/fake-runtime/runtime_consumer.cmt --dependency artifacts/fake-runtime/runtime_mismatch.cmt
-  runtime-mismatch: error[VERO_DEPENDENCY]
+  runtime-mismatch: code=VERO_DEPENDENCY
   $ cp fixtures/hidden.ml fixtures/hidden.mli fixtures/hidden_consumer.ml artifacts/
   $ (cd artifacts && ocamlc -w -A -alert -all -bin-annot -I "$GHOST" -ppx "$PPX" -c hidden.mli && ocamlc -w -A -alert -all -bin-annot -I "$GHOST" -ppx "$PPX" -c hidden.ml)
   $ compile artifacts hidden_consumer.ml
-  $ reject_without_consumer hidden-representation artifacts/hidden_consumer.cmt --dependency artifacts/hidden.cmt
-  hidden-representation: error[VERO_DEPENDENCY]
+  $ verify_discovered abstract-interface 1 artifacts/hidden_consumer.cmt --dependency artifacts/hidden.cmt
+  abstract-interface: verified-dependencies=1
   $ cp fixtures/hidden_contract.ml fixtures/hidden_contract_consumer.ml artifacts/
   $ compile artifacts hidden_contract.ml
   $ compile artifacts hidden_contract_consumer.ml
   $ reject_without_consumer hidden-contract artifacts/hidden_contract_consumer.cmt --dependency artifacts/hidden_contract.cmt
-  hidden-contract: error[VERO_DEPENDENCY]
+  hidden-contract: code=VERO_UNSUPPORTED_STRUCTURE_ITEM
   $ cp fixtures/hidden_nested_contract.ml fixtures/hidden_nested_contract_consumer.ml artifacts/
   $ compile artifacts hidden_nested_contract.ml
   $ compile artifacts hidden_nested_contract_consumer.ml
   $ reject_without_consumer hidden-nested-contract artifacts/hidden_nested_contract_consumer.cmt --dependency artifacts/hidden_nested_contract.cmt
-  hidden-nested-contract: error[VERO_DEPENDENCY]
+  hidden-nested-contract: code=VERO_UNSUPPORTED_STRUCTURE_ITEM
   $ cp fixtures/failed_proof.ml fixtures/failed_consumer.ml artifacts/
   $ compile artifacts failed_proof.ml
   $ compile artifacts failed_consumer.ml
   $ reject_without_consumer failed-proof artifacts/failed_consumer.cmt --dependency artifacts/failed_proof.cmt
-  failed-proof: error[VERO_DEPENDENCY]
+  failed-proof: code=VERO_DEPENDENCY
 
 Handle construction is a graph-wide barrier. A valid Base snapshot is staged
 before the later dependency proof fails, but the instrumented exact

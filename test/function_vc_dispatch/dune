@@ -15,45 +15,13 @@
  (action
   (with-stdout-to %{targets} (echo "let ready = ()"))))
 
-(rule
- (targets vero075_structure_tool.ml)
- (action
-  (with-stdout-to
-   %{targets}
-   (echo
-    "open Parsetree\n\nlet rec is_function expression =\n  match expression.pexp_desc with\n  | Pexp_function _ -> true\n  | Pexp_constraint (inner, _, _) | Pexp_coerce (inner, _, _)\n  | Pexp_newtype (_, _, inner) -> is_function inner\n  | _ -> false\n\nlet check filename =\n  let channel = open_in_bin filename in\n  let lexbuf = Lexing.from_channel channel in\n  Location.init lexbuf filename;\n  let structure = Parse.implementation lexbuf in\n  close_in channel;\n  let maximum = ref (\"\", 0) in\n  let open Ast_iterator in\n  let iterator =\n    { default_iterator with\n      value_binding =\n        (fun self binding ->\n          (match binding.pvb_pat.ppat_desc with\n          | Ppat_var name when is_function binding.pvb_expr ->\n              let location = binding.pvb_loc in\n              let span =\n                location.loc_end.pos_lnum - location.loc_start.pos_lnum + 1\n              in\n              if span > snd !maximum then maximum := (name.txt, span);\n              if span > 200 then\n                failwith\n                  (Printf.sprintf \"%s:%d:%s spans %d lines\" filename\n                     location.loc_start.pos_lnum name.txt span)\n          | _ -> ());\n          default_iterator.value_binding self binding) }\n  in\n  iterator.structure iterator structure;\n  Printf.printf \"%s=%s:%d\\n\" (Filename.basename filename)\n    (fst !maximum) (snd !maximum)\n\nlet () =\n  Array.iteri (fun index filename -> if index > 0 then check filename) Sys.argv\n"))))
-
-(executable
- (name vero075_structure_tool)
- (modules vero075_structure_tool)
- (libraries compiler-libs.common))
-
 (cram
  (deps
   function_vc_dispatch_tool.exe
-  vero075_structure_tool.exe
   (glob_files fixtures/*.ml)
   ../private_receipt/fixtures/local_positive.ml
   ../private_receipt/fixtures/failing_callee.ml
   ../recursive_specifications/fixtures/structural_positive.ml
-  ../../src/interface_specification.mli
-  ../../src/interface_specification.ml
-  ../../src/interface_specification_environment_private.ml
-  ../../src/interface_specification_environment_private.mli
-  ../../src/interface_specification_candidate_private.ml
-  ../../src/interface_specification_candidate_private.mli
-  ../../src/interface_specification_loaded_private.ml
-  ../../src/verocaml.ml
-  ../../src/verocaml_bin.ml
-  ../../src/verocaml_bin_render.ml
-  ../../src/verifier_service.ml
-  ../../src/verifier_service.mli
-  ../../src/interface_specification_loaded_private.mli
-  ../../src/physical_core_count_private.ml
-  ../../src/physical_core_count_stubs.c
-  ../../src/function_vc_worker_private.ml
-  ../../src/function_vc_worker_private.mli
-  ../../src/dune
   ../../ppx/vero_ppx.exe
   ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
 

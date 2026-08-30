@@ -23,8 +23,8 @@ let descriptor_unit file =
   in
   let create ?(id = type_id) ?(ctor = type_constructor) ?(binders = [ binder ])
       ?(provenance = Parametric_adt.Local { compiler_uid = "local-box" }) kind =
-    Parametric_adt.create ~type_id:id ~type_constructor:ctor ~binders ~provenance
-      ~kind
+    Parametric_adt.create ~optional_carrier:false ~type_id:id
+      ~type_constructor:ctor ~binders ~provenance ~kind
   in
   let show label = function
     | Ok _ -> Printf.printf "%s accepted\n" label
@@ -54,25 +54,25 @@ let descriptor_unit file =
             {
               compiler_uid = "external-box";
               proxy_uid = "";
-              prelude = false;
             })
        (Parametric_adt.Variant [ constructor [ field () ] ]));
   let backend_before = Solver_backend.For_testing.solver_creation_count () in
   let z3_before = Z3_bridge.counters () in
   let descriptors = (load file).Sst.parametric_adts in
-  let standard_descriptor expected =
-    List.find
-      (fun descriptor ->
-        Parametric_type.compare_constructor
-          (Parametric_adt.type_constructor descriptor) expected
-        = 0)
-      descriptors
+  let external_descriptors =
+    descriptors
+    |> List.filter (fun descriptor ->
+           match Parametric_adt.provenance descriptor with
+           | Parametric_adt.External _ -> true
+           | Parametric_adt.Local _ -> false)
+    |> List.sort (fun left right ->
+           String.compare
+             (Parametric_adt.type_constructor left).constructor_path
+             (Parametric_adt.type_constructor right).constructor_path)
   in
-  let canonical_option = standard_descriptor Parametric_type.option_constructor in
-  let canonical_list = standard_descriptor Parametric_type.list_constructor in
-  let canonical_result = standard_descriptor Parametric_type.result_constructor in
   let recreate descriptor =
     Parametric_adt.create
+      ~optional_carrier:(Parametric_adt.is_optional_carrier descriptor)
       ~type_id:(Parametric_adt.type_id descriptor)
       ~type_constructor:(Parametric_adt.type_constructor descriptor)
       ~binders:(Parametric_adt.binders descriptor)
@@ -86,15 +86,19 @@ let descriptor_unit file =
         Printf.printf "%s name=%s uid=%s rejected: %s\n" label name uid
           error.Parametric_adt.message
   in
-  let canonical label descriptor =
+  let canonical descriptor =
     let type_id = Parametric_adt.type_id descriptor in
+    let label =
+      "canonical-"
+      ^ String.lowercase_ascii
+          (Filename.basename
+             (Parametric_adt.type_constructor descriptor).constructor_path)
+    in
     show_standard label ~name:type_id.type_name
       ~uid:(Parametric_adt.compiler_uid descriptor)
       (recreate descriptor)
   in
-  canonical "canonical-option" canonical_option;
-  canonical "canonical-list" canonical_list;
-  canonical "canonical-result" canonical_result;
+  List.iter canonical external_descriptors;
   let backend_after = Solver_backend.For_testing.solver_creation_count () in
   let z3_after = Z3_bridge.counters () in
   if backend_before <> backend_after || z3_before <> z3_after then
@@ -110,40 +114,6 @@ let () =
       (match Symbolic_executor_private.lower_program program with
        | Ok vir -> print_string (Vir.to_string vir)
        | Error error -> fail "%s" (Symbolic_executor_private.error_to_string error))
-  | [_; "standards"; file] ->
-      let cmt = Cmt_format.read_cmt file in
-      let structure =
-        match cmt.cmt_annots with
-        | Cmt_format.Implementation structure -> structure
-        | _ -> fail "implementation required"
-      in
-      let paths = ref [] in
-      let default = Tast_iterator.default_iterator in
-      let observe typ =
-        match Types.get_desc typ with
-        | Types.Tconstr (path, _, _)
-          when not (List.exists (Path.same path) !paths) ->
-            paths := path :: !paths
-        | _ -> ()
-      in
-      let iterator =
-        { default with
-          expr =
-            (fun self expression ->
-              observe expression.Typedtree.exp_type;
-              default.expr self expression);
-          pat =
-            (fun self pattern ->
-              observe pattern.Typedtree.pat_type;
-              default.pat self pattern) }
-      in
-      iterator.structure iterator structure;
-      (match
-         Parametric_adt_lowering_private.standard_sources ~observed_paths:!paths
-           structure.Typedtree.str_final_env
-       with
-       | Ok sources -> Printf.printf "%d\n" (List.length sources)
-       | Error message -> fail "%s" message)
   | [_; "env-types"; file] ->
       let cmt = Cmt_format.read_cmt file in
       let structure =

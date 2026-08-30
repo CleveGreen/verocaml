@@ -1,0 +1,7 @@
+(library
+ (name vstd)
+ (public_name verocaml.vstd)
+ (modules pervasive seq)
+ (libraries verocaml.ghost)
+ (flags (:standard -w -A -alert -all))
+ (preprocess (pps vero_ppx_driver)))

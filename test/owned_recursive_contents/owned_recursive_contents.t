@@ -99,8 +99,8 @@ PPX's single-binding boundary.
 
   $ if timeout --foreground --signal=TERM --kill-after=2s 15s env OCAML_COLOR=never ../../src/verocaml.exe verify fixtures/cyclic_topology.ml --timeout-ms 1000 > artifacts/cyclic.out 2>&1; then false; else echo 'cyclic-source=rejected-bounded'; fi
   cyclic-source=rejected-bounded
-  $ grep -o 'error\[VERO_[A-Z_]*\]' artifacts/cyclic.out | head -1
-  error[VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION]
+  $ actual=$(grep -Eo 'VERO_[A-Z_]+' artifacts/cyclic.out | head -1); test "$actual" = VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION; printf 'code=%s\n' "$actual"
+  code=VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION
   $ if timeout --signal=TERM --kill-after=2s 30s ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/grammar_mutual.cmo fixtures/grammar_mutual.ml > artifacts/grammar_mutual.out 2>&1; then false; else echo 'mutual-source=rejected'; fi
   mutual-source=rejected
   $ grep -F 'requires a single top-level binding' artifacts/grammar_mutual.out >/dev/null && echo 'mutual-boundary=single-binding'
@@ -122,7 +122,7 @@ authority to a consumer CMT.
   $ timeout --signal=TERM --kill-after=2s 30s sh -c 'cd artifacts/import && ocamlc -w -A -alert -all -bin-annot -I "$GHOST" -ppx "$PPX" -c provider.ml && ocamlc -w -A -alert -all -bin-annot -I . -I "$GHOST" -ppx "$PPX" -c consumer.ml'
   $ if timeout --foreground --signal=TERM --kill-after=2s 15s env OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/import/consumer.cmt --dependency artifacts/import/provider.cmt --dump-sst artifacts/import/consumer.sst --dump-vir artifacts/import/consumer.vir > artifacts/import/rejected 2>&1; then false; else echo 'cross-cmt=zero-output-rejected'; fi
   cross-cmt=zero-output-rejected
-  $ grep -o 'error\[VERO_[A-Z_]*\]' artifacts/import/rejected | head -1
-  error[VERO_MALFORMED_GHOST_CALL]
+  $ actual=$(grep -Eo 'VERO_[A-Z_]+' artifacts/import/rejected | head -1); test "$actual" = VERO_DEPENDENCY; printf 'code=%s\n' "$actual"
+  code=VERO_DEPENDENCY
   $ test ! -e artifacts/import/consumer.sst && test ! -e artifacts/import/consumer.vir && echo 'cross-cmt-sst-vir=absent'
   cross-cmt-sst-vir=absent

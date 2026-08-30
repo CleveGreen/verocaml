@@ -119,11 +119,7 @@ let classify_binder stats = function
         |> String.split_on_char '.'
         |> List.rev |> List.hd
       in
-      if
-        Parametric_type.compare_constructor constructor
-          Parametric_type.option_constructor
-        = 0
-      then
+      if String.equal leaf "option" then
         stats.option_binders <- stats.option_binders + 1
       else if String.equal leaf "seq" then
         stats.sequence_binders <- stats.sequence_binders + 1

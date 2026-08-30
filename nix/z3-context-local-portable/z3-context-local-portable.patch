@@ -4,7 +4,7 @@
  z3_ml_overrides = frozenset([
      'Z3_mk_config'])
  
-+# Vero-085: only context-bound operations needed by Vero worker solving.
++# Only context-bound operations needed by Vero worker solving.
 +# Do not add global parameters, logging/tracing, or memory controls here.
 +z3_ml_portable = frozenset([
 +    'Z3_mk_config', 'Z3_del_config', 'Z3_set_param_value',

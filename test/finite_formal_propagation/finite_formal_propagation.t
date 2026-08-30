@@ -118,13 +118,13 @@ before a production session, dump, or solver.
   $ for n in generic_partial generic_labelled; do accept_generic_spec "$n" || exit 1; done
   generic_partial source+cmt functions=1 obligations=1
   generic_labelled source+cmt functions=1 obligations=1
-  $ reject_generic () { n=$1; code=0; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$n.cmt" --timeout-ms 5000 --dump-sst "artifacts/$n.sst" --dump-vir "artifacts/$n.vir" >"artifacts/$n.out" 2>&1 || code=$?; test "$code" = 2; printf '%s: ' "$n"; grep -o 'error\[VERO_[A-Z_]*\]' "artifacts/$n.out"; test "$(grep -c 'private-receipt ' "artifacts/$n.out")" = 0; test ! -e "artifacts/$n.sst"; test ! -e "artifacts/$n.vir"; }
+  $ reject_generic () { n=$1; code=0; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$n.cmt" --timeout-ms 5000 --dump-sst "artifacts/$n.sst" --dump-vir "artifacts/$n.vir" >"artifacts/$n.out" 2>&1 || code=$?; test "$code" = 2; printf '%s: ' "$n"; grep -o 'VERO_[A-Z_]*' "artifacts/$n.out"; test "$(grep -c 'private-receipt ' "artifacts/$n.out")" = 0; test ! -e "artifacts/$n.sst"; test ! -e "artifacts/$n.vir"; }
   $ for n in generic_type_changing generic_higher_order generic_foreign_actual; do reject_generic "$n" || exit 1; done
-  generic_type_changing: error[VERO_UNSUPPORTED_POLYMORPHISM]
-  generic_higher_order: error[VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION]
-  generic_foreign_actual: error[VERO_UNSUPPORTED_TYPE]
+  generic_type_changing: VERO_UNSUPPORTED_POLYMORPHISM
+  generic_higher_order: VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION
+  generic_foreign_actual: VERO_UNSUPPORTED_TYPE
   $ separate () { name=$1; variant=$2; directory="artifacts/$name-$variant"; mkdir -p "$directory"; flag=; if test "$variant" = cmti; then flag=-bin-annot; fi; ocamlc -w -A -alert -all $flag -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "$directory/$name.cmi" "fixtures/$name.mli"; test -e "$directory/$name.cmi"; if test "$variant" = cmti; then test -e "$directory/$name.cmti"; else test ! -e "$directory/$name.cmti"; fi; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -I "$directory" -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "$directory/$name.cmo" "fixtures/$name.ml"; }
-  $ reject_public_generic () { label=$1; directory=$2; name=$3; code=0; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 VEROCAML_TEST_INSTANCE_MODE_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify "$directory/$name.cmt" --timeout-ms 5000 --dump-sst "$directory/rejected.sst" --dump-vir "$directory/rejected.vir" >"$directory/rejected.out" 2>&1 || code=$?; test "$code" = 2; printf '%s: ' "$label"; grep -o 'error\[VERO_[A-Z_]*\]' "$directory/rejected.out"; test "$(grep -Ec 'private-receipt |instance-mode ' "$directory/rejected.out")" = 0; test ! -e "$directory/rejected.sst"; test ! -e "$directory/rejected.vir"; }
+  $ reject_public_generic () { label=$1; directory=$2; name=$3; code=0; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 VEROCAML_TEST_INSTANCE_MODE_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify "$directory/$name.cmt" --timeout-ms 5000 --dump-sst "$directory/rejected.sst" --dump-vir "$directory/rejected.vir" >"$directory/rejected.out" 2>&1 || code=$?; test "$code" = 2; printf '%s: ' "$label"; grep -o 'VERO_[A-Z_]*' "$directory/rejected.out"; test "$(grep -Ec 'private-receipt |instance-mode ' "$directory/rejected.out")" = 0; test ! -e "$directory/rejected.sst"; test ! -e "$directory/rejected.vir"; }
   $ separate generic_explicit_interface cmti
   $ separate generic_explicit_interface cmi-only
   $ verify_public_generic () { label=$1; directory=$2; name=$3; OCAML_COLOR=never ../../src/verocaml.exe verify "$directory/$name.cmt" --timeout-ms 5000 --dump-sst "$directory/accepted.sst" --dump-vir "$directory/accepted.vir" >/dev/null; test "$(grep -c '^function seq_reflexive#0 binders=' "$directory/accepted.sst")" = 1; test "$(grep -c '^type seq<' "$directory/accepted.sst")" = 0; printf '%s: verified canonical-schema=true clones=0\n' "$label"; }
@@ -139,9 +139,9 @@ cannot hide an exported generic binding from the exact public-path match.
   $ separate generic_explicit_alias cmi-only
   $ separate generic_explicit_nested cmi-only
   $ reject_public_generic public-alias artifacts/generic_explicit_alias-cmi-only generic_explicit_alias
-  public-alias: error[VERO_UNSUPPORTED_AGGREGATE]
+  public-alias: VERO_UNSUPPORTED_AGGREGATE
   $ reject_public_generic nested-value artifacts/generic_explicit_nested-cmi-only generic_explicit_nested
-  nested-value: error[VERO_UNSUPPORTED_POLYMORPHISM]
+  nested-value: VERO_UNSUPPORTED_POLYMORPHISM
 
 A substituted same-unit CMI fails the CMT/CMI digest binding before lowering.
 
@@ -151,11 +151,11 @@ A substituted same-unit CMI fails the CMT/CMI digest binding before lowering.
   $ cp artifacts/generic_explicit_interface-cmi-only/generic_explicit_interface.cmt artifacts/generic-wrong-cmi/
   $ cp artifacts/generic-wrong-cmi-source/generic_explicit_interface.cmi artifacts/generic-wrong-cmi/
   $ reject_public_generic wrong-same-unit-cmi artifacts/generic-wrong-cmi generic_explicit_interface
-  wrong-same-unit-cmi: error[VERO_MALFORMED_INPUT]
+  wrong-same-unit-cmi: VERO_MALFORMED_INPUT
   $ mkdir -p artifacts/generic-missing-cmi
   $ cp artifacts/generic_explicit_interface-cmi-only/generic_explicit_interface.cmt artifacts/generic-missing-cmi/
   $ reject_public_generic missing-adjacent-cmi artifacts/generic-missing-cmi generic_explicit_interface
-  missing-adjacent-cmi: error[VERO_MALFORMED_INPUT]
+  missing-adjacent-cmi: VERO_MALFORMED_INPUT
 
 A constrained same-CMT module authenticates the exact signature vector.
 Adding, removing, or reordering the requirement rejects before execution.
@@ -166,12 +166,12 @@ Adding, removing, or reordering the requirement rejects before execution.
   $ trace artifacts/same_cmt_signature_positive.cmt
   formal-counters assumptions=1 batches=1 transfers=1 consumptions=1
   $ for n in same_cmt_signature_add same_cmt_signature_remove; do retained "$n"; OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$n.cmt" --timeout-ms 5000 2>&1 | grep 'VERO_UNSUPPORTED_STRUCTURE_ITEM'; done
-  verocaml: error[VERO_UNSUPPORTED_STRUCTURE_ITEM] structure item is outside the pure SST subset @ fixtures/same_cmt_signature_add.ml:7:2-7:28
-  verocaml: error[VERO_UNSUPPORTED_STRUCTURE_ITEM] structure item is outside the pure SST subset @ fixtures/same_cmt_signature_remove.ml:7:2-7:40
+  Error: [VERO_UNSUPPORTED_STRUCTURE_ITEM] This top-level declaration is not supported in a verified compilation unit.
+  Error: [VERO_UNSUPPORTED_STRUCTURE_ITEM] This top-level declaration is not supported in a verified compilation unit.
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/signature_reorder_provider.cmi fixtures/signature_reorder_provider.mli
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -I artifacts -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/signature_reorder_provider.cmo fixtures/signature_reorder_provider.ml
   $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/signature_reorder_provider.cmt --timeout-ms 5000 2>&1 | grep 'finite formals do not match'
-  verocaml: error[VERO_DEPENDENCY] unit Signature_reorder_provider: program: invalid semantic SST: retained implementation finite formals do not match the exact retained interface finite signature for value:checked at signature_reorder_provider.ml:2:0-2:55
+  Error: [VERO_INVALID_PROGRAM] VeroCaml could not validate this verification unit: retained implementation finite formals do not match the exact retained interface finite signature for value:checked
 
 Retained direct summaries substitute both simple formals in requires and both
 formals plus the simple result binder in ensures.  The provider also runs the

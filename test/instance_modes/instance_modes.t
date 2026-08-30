@@ -176,11 +176,11 @@ rejected during input authentication.
   $ cp artifacts/retained/signatures.cmt artifacts/mixed.cmt
   $ cp artifacts/ordinary/signatures.cmi artifacts/mixed.cmi
   $ ../../src/verocaml.exe verify artifacts/mixed.cmt 2>&1 | grep -E 'MALFORMED|digest mismatch|INPUT'
-  verocaml: error[VERO_MALFORMED_INPUT] input is not a complete typed-tree artifact @ artifacts/mixed.cmt:1:0-1:0
+  Error: [VERO_MALFORMED_INPUT] input is not a complete typed-tree artifact
   $ cp artifacts/ordinary/signatures.cmt artifacts/reverse-mixed.cmt
   $ cp artifacts/retained/signatures.cmi artifacts/reverse-mixed.cmi
   $ ../../src/verocaml.exe verify artifacts/reverse-mixed.cmt 2>&1 | grep -E 'MALFORMED|digest mismatch|INPUT'
-  verocaml: error[VERO_MALFORMED_INPUT] input is not a complete typed-tree artifact @ artifacts/reverse-mixed.cmt:1:0-1:0
+  Error: [VERO_MALFORMED_INPUT] input is not a complete typed-tree artifact
   $ ./instance_modes_tool.exe embed-ordinary-interface artifacts/retained/signatures.cmt artifacts/ordinary/signatures.cmi artifacts/embedded-mixed.cmt
   $ ./instance_modes_tool.exe reject-zero artifacts/embedded-mixed.cmt 2>/dev/null
   adapter rejection; solvers=0

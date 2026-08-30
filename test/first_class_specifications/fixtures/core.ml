@@ -1,3 +1,6 @@
+type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
 let apply (f : 'a -> 'b) (x : 'a) : 'b = f x [@@verocaml.spec]
 
 let compose (f : 'b -> 'c) (g : 'a -> 'b) : 'a -> 'c = fun x -> f (g x)

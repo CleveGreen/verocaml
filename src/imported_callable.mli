@@ -51,6 +51,12 @@ type provider_type = {
   rank_profile_digest : string option;
 }
 
+type provider_external_specification = {
+  definition : Sst.function_definition;
+  signature : Parametric_signature_private.t;
+  target_link : Sst.target_link;
+}
+
 type provider_description = {
   unit_name : string;
   interface_digest : string;
@@ -59,6 +65,7 @@ type provider_description = {
   import_digest : string;
   callables : provider_callable list;
   types : provider_type list;
+  external_specifications : provider_external_specification list;
 }
 
 type provider
@@ -90,6 +97,14 @@ type type_snapshot = {
   parametric_descriptor : Parametric_adt.t option;
 }
 
+type external_specification_snapshot = {
+  definition : Sst.function_definition;
+  signature : Parametric_signature_private.t;
+  target_link : Sst.target_link;
+  provider_unit : string;
+  provider_interface : string;
+}
+
 val seal_provider :
   provider_completion:Verified_provider_completion_private.t ->
   implementation:Cmt_input.implementation ->
@@ -107,6 +122,7 @@ val provider_matches :
 val create : provider list -> (environment, string) result
 val callables : environment -> callable_snapshot list
 val types : environment -> type_snapshot list
+val external_specifications : environment -> external_specification_snapshot list
 val empty : environment
 
 val seal_calls :

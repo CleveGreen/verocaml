@@ -191,7 +191,7 @@ reject at their assigned boundaries.
   $ retained_reject () { n=$1; retained_proof "$n"; OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$n.cmt" >"artifacts/$n.verify" 2>&1 && return 1; grep -F "$2" "artifacts/$n.verify" >/dev/null; }
   $ retained_reject proof_generic VERO_UNSUPPORTED_POLYMORPHISM
   $ retained_reject proof_nonunit VERO_MALFORMED_GHOST_CALL
-  $ retained_reject proof_wrong_stage VERO_DEPENDENCY
+  $ retained_reject proof_wrong_stage VERO_ERASED_CALL
   $ for n in proof_raw_attribute proof_counterfeit proof_foreign_carrier; do ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -c -o "artifacts/$n.cmo" "fixtures/$n.ml"; ./trusted_external_bodies_tool.exe reject "artifacts/$n.cmt"; done
   adapter rejected: VERO_MALFORMED_GHOST_CALL
   adapter rejected: VERO_MALFORMED_GHOST_CALL
@@ -200,12 +200,15 @@ reject at their assigned boundaries.
   $ ./trusted_external_bodies_tool.exe replay artifacts/proof_replay.cmt
   replayed combined-role carriers rejected in one process recursive=0/0 solver=0 z3=0/0
 
-Trusted Proof bodies cannot become an imported axiom library.
+Trusted Proof bodies can be exported by an ordinary library, but consumer
+verification must preserve and report the explicit axiom trust.
 
   $ mkdir artifacts/import
   $ (cd artifacts/import && ocamlc -w -A -alert -all -bin-annot -I ../../../../runtime/.vero_ghost.objs/byte -ppx "../../../../ppx/vero_ppx.exe --keep-ghost" -c -o proof_provider.cmo ../../fixtures/proof_provider.ml)
   $ (cd artifacts/import && ocamlc -w -A -alert -all -bin-annot -I . -I ../../../../runtime/.vero_ghost.objs/byte -ppx "../../../../ppx/vero_ppx.exe --keep-ghost" -c -o proof_consumer.cmo ../../fixtures/proof_consumer.ml)
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/import/proof_consumer.cmt --dependency artifacts/import/proof_provider.cmt > artifacts/import/rejected 2>&1; echo $?
-  2
-  $ grep -o 'error\[VERO_[A-Z_]*\]' artifacts/import/rejected | head -1
-  error[VERO_DEPENDENCY]
+  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/import/proof_consumer.cmt --dependency artifacts/import/proof_provider.cmt > artifacts/import/verified 2>&1; echo $?
+  0
+  $ test "$(grep -c '^verocaml: trusted external body .*function=Proof_provider.admit' artifacts/import/verified)" = 1; echo imported-trusted-proof=reported-once
+  imported-trusted-proof=reported-once
+  $ grep -q '^verocaml: verified-with-trusted-axioms ' artifacts/import/verified; echo imported-trusted-proof=verification-remains-trusted
+  imported-trusted-proof=verification-remains-trusted

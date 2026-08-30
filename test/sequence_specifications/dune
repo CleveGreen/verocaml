@@ -2,6 +2,7 @@
  (deps
   (glob_files fixtures/*.ml)
   ../../library/seq.ml
+  ../../library/seq.mli
   ../../src/verocaml.exe
   ../../ppx/vero_ppx.exe
   ../../runtime/vero_ghost.cma

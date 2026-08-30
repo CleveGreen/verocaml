@@ -172,7 +172,9 @@ let authenticate_with_policy ~solver_policy ~dependency_files ~consumer_file =
   with
   | Error _ as error -> error
   | Ok (consumer, dependencies) ->
-      Result.map fst (Loaded.authenticate ~solver_policy ~dependencies ~consumer)
+      Result.map fst
+        (Loaded.authenticate ~external_targets:[] ~solver_policy ~dependencies
+           ~consumer)
 
 let authenticate ~timeout_ms ~dependency_files ~consumer_file =
   match resolve_default_solver_policy ~timeout_ms with
@@ -202,12 +204,24 @@ let verify_with_policy ~threads ~solver_policy ~dependency_files ~consumer_file 
   with
   | Error _ as error -> error
   | Ok (consumer, dependencies) -> (
+      let external_targets =
+        List.filter
+          (fun candidate -> not (Cmt_input.retained_preprocessing candidate))
+          dependencies
+      in
       match
-        Loaded.verify ~threads ~solver_policy ~external_specifications:None
-          ~consumer ~dependencies
+        External_target_specification_private.environment ~consumer
+          ~targets:external_targets
       with
-      | Error _ as error -> error
-      | Ok result -> Ok { Environment.report_driver = Loaded.driver result })
+      | Error message -> Environment.error ~unit_name:consumer.unit_name message
+      | Ok external_specifications -> (
+          match
+            Loaded.verify ~threads ~solver_policy
+              ~external_specifications:(Some external_specifications)
+              ~external_targets ~consumer ~dependencies
+          with
+          | Error _ as error -> error
+          | Ok result -> Ok { Environment.report_driver = Loaded.driver result }))
 
 let verify_consumer ~timeout_ms ~dependency_files ~consumer_file =
   match resolve_default_solver_policy ~timeout_ms with

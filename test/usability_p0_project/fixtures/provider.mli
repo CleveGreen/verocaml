@@ -1,3 +1,12 @@
+type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
+type 'a list_specification = 'a list
+[@@verocaml.external_type_specification]
+
+type ('a, 'error) result_specification = ('a, 'error) result
+[@@verocaml.external_type_specification]
+
 type record_result = { value : int; unstated : int }
 type 'a box = { box_value : 'a }
 type 'a tree = Leaf | Node of 'a * 'a tree * 'a tree

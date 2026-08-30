@@ -1177,6 +1177,12 @@ type error_kind =
   | Invalid_clause of string
   | Invalid_body of string
   | Invalid_call of string
+  | Invalid_call_stage of {
+      callee : Sst.function_id;
+      stage : Sst.expression_stage;
+      callee_mode : Sst.verification_mode;
+    }
+  | Unannotated_erased_call of Instance_mode.unannotated_erased_call
   | Invalid_recursive_marker of string
   | Invalid_unique_return of string
   | Invalid_target_link of string
@@ -2056,8 +2062,12 @@ let rec validate_expression ~require_authenticated_owned_tree_roots ~types
               Ok ()
           | None ->
               fail ~function_id expression.span
-                (Invalid_call
-                   "callee mode is not available from this expression stage")
+                (Invalid_call_stage
+                   {
+                     callee = callee_definition.function_id;
+                     stage;
+                     callee_mode = callee_definition.mode;
+                   })
         in
         let* value_edges =
           let substitutions =
@@ -7689,8 +7699,17 @@ let validate_internal ?imports ?external_specifications (program : Sst.program) 
           |> List.map (fun (snapshot : Imported_callable.callable_snapshot) ->
                snapshot.definition)
   in
+  let adopted_external_specifications =
+    Option.fold ~none:[]
+      ~some:External_target_specification_private.adopted_definitions
+      external_specifications
+  in
   let semantic_program =
-    { program with Sst.functions = imported_callables @ program.functions }
+    {
+      program with
+      Sst.functions =
+        imported_callables @ adopted_external_specifications @ program.functions;
+    }
   in
   let policy_span =
     match (program.Sst.functions, program.types) with
@@ -7721,9 +7740,14 @@ let validate_internal ?imports ?external_specifications (program : Sst.program) 
   let validate_instance_modes () =
     match Instance_mode.validate program with
     | Ok environment -> Ok environment
-    | Error mode_error ->
-        fail ?function_id:mode_error.function_id mode_error.span
-          (Invalid_instance_mode mode_error.message)
+    | Error mode_error -> (
+        match mode_error.Instance_mode.unannotated_erased_call with
+        | Some call ->
+            fail ?function_id:mode_error.function_id mode_error.span
+              (Unannotated_erased_call call)
+        | None ->
+            fail ?function_id:mode_error.function_id mode_error.span
+              (Invalid_instance_mode mode_error.message))
   in
   let* early_instance_modes =
     if Instance_mode.has_sealed_registration program then
@@ -7890,9 +7914,8 @@ let policy_name = function
   | Sst.Default_linear_z3 -> "default-linear/default-z3"
   | Sst.Default_linear_cvc5 -> "default-linear/default-cvc5"
   | Sst.Nonlinear_z3 -> "nonlinear/default-z3"
-let error_to_string error =
-  let detail =
-    match error.kind with
+let error_detail error =
+  match error.kind with
     | Unsupported_policy policy -> "unsupported policy " ^ policy_name policy
     | Duplicate_type_id id ->
         Printf.sprintf "duplicate type id %s#%d" id.type_name id.type_index
@@ -7905,6 +7928,10 @@ let error_to_string error =
     | Unknown_function_id id ->
         Printf.sprintf "unknown function id %s#%d" id.function_name
           id.function_index
+    | Invalid_call_stage _ ->
+        "callee mode is not available from this expression stage"
+    | Unannotated_erased_call _ ->
+        "erased executable call result requires one explicit matching annotation"
     | Conflicting_identity detail | Invalid_clause detail | Invalid_body detail
     | Invalid_call detail | Invalid_recursive_marker detail
     | Invalid_unique_return detail | Invalid_target_link detail
@@ -7914,7 +7941,48 @@ let error_to_string error =
         detail
     | Unbound_binding binding ->
         Printf.sprintf "unbound binding %s#%d" binding.name binding.id
-  in
+
+let mode_name = function
+  | Sst.Spec -> "specification"
+  | Sst.Proof -> "proof"
+  | Sst.Exec -> "executable function"
+
+let to_diagnostic error =
+  match error.kind with
+  | Invalid_call_stage { callee; stage = Sst.Logical; callee_mode = Sst.Exec }
+    ->
+      Diagnostic.make
+        (Diagnostic.Executable_function_in_specification
+           { function_name = callee.function_name })
+        error.span
+  | Unannotated_erased_call { caller; callee; callee_mode } ->
+      Diagnostic.make
+        (Diagnostic.Unannotated_erased_call
+           {
+             caller_name = caller.function_name;
+             callee_name = callee.function_name;
+             callee_mode = mode_name callee_mode;
+           })
+        error.span
+  | Unsupported_policy _ | Duplicate_type_id _ | Duplicate_function_id _
+  | Duplicate_binding_id _ | Unknown_type_id _ | Unknown_function_id _
+  | Conflicting_identity _ | Invalid_clause _ | Invalid_body _
+  | Invalid_call _ | Invalid_call_stage _ | Invalid_recursive_marker _
+  | Invalid_unique_return _ | Invalid_target_link _
+  | Forged_abstract_evidence _ | Forged_rank_domain _
+  | Invalid_instance_mode _ | Invalid_finite_requirement _ | Unbound_binding _
+  | Malformed_expression _ ->
+      Diagnostic.make
+        (Diagnostic.Invalid_semantic_program
+           {
+             function_name =
+               Option.map (fun id -> id.Sst.function_name) error.function_id;
+             detail = error_detail error;
+           })
+        error.span
+
+let error_to_string error =
+  let detail = error_detail error in
   let function_name =
     Option.fold ~none:"program"
       ~some:(fun id -> id.Sst.function_name)

@@ -1,3 +1,6 @@
+type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
 let bool_option (option : bool option) : bool =
   match option with None -> false | Some _ -> true
 [@@verocaml.spec]

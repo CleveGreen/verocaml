@@ -91,15 +91,15 @@ VIR output exists.
   $ cp support/import_consumer.ml artifacts/import/consumer.ml
   $ (cd artifacts/import && ocamlc -w -A -alert -all -bin-annot -I "$GHOST" -ppx "$PPX" -c provider.ml && ocamlc -w -A -alert -all -bin-annot -I . -I "$GHOST" -ppx "$PPX" -c consumer.ml)
   $ if OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/import/consumer.cmt --dependency artifacts/import/provider.cmt --dump-sst artifacts/import/consumer.sst --dump-vir artifacts/import/consumer.vir > artifacts/import/rejected 2>&1; then false; fi
-  $ grep -o 'error\[VERO_[A-Z_]*\]' artifacts/import/rejected | head -1
-  error[VERO_DEPENDENCY]
+  $ grep -o 'VERO_[A-Z_]*' artifacts/import/rejected | head -1
+  VERO_UNSUPPORTED_STRUCTURE_ITEM
   $ test ! -e artifacts/import/consumer.sst && test ! -e artifacts/import/consumer.vir
   $ cp support/ordinary_provider.ml artifacts/ordinary/provider.ml
   $ cp support/ordinary_consumer.ml artifacts/ordinary/consumer.ml
   $ (cd artifacts/ordinary && ocamlc -w -A -alert -all -bin-annot -c provider.ml && ocamlc -w -A -alert -all -bin-annot -I . -I "$GHOST" -ppx "$PPX" -c consumer.ml)
   $ if OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/ordinary/consumer.cmt --dependency artifacts/ordinary/provider.cmt --dump-sst artifacts/ordinary/consumer.sst --dump-vir artifacts/ordinary/consumer.vir > artifacts/ordinary/rejected 2>&1; then false; fi
-  $ grep -o 'error\[VERO_[A-Z_]*\]' artifacts/ordinary/rejected | head -1
-  error[VERO_DEPENDENCY]
+  $ grep -o 'VERO_[A-Z_]*' artifacts/ordinary/rejected | head -1
+  VERO_UNSUPPORTED_TYPE
   $ test ! -e artifacts/ordinary/consumer.sst && test ! -e artifacts/ordinary/consumer.vir
 
 The private matrix uses the production driver for packaged rows and the

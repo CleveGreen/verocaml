@@ -15,9 +15,6 @@ type t =
 val owner : index:int -> name:string -> owner
 val binder : owner -> ordinal:int -> binder
 val binders : owner -> int -> binder list
-val option_constructor : constructor
-val list_constructor : constructor
-val result_constructor : constructor
 val spec_function_constructor : label:string option -> constructor
 val spec_function :
   label:string option -> domain:t -> range:t -> t
@@ -25,8 +22,6 @@ val spec_function_view : t -> (string option * t * t) option
 val is_spec_function : t -> bool
 val application : constructor -> t list -> (t, string) result
 val validate_application : constructor -> t list -> (unit, string) result
-val option : t -> t
-val list : t -> t
 val compare_owner : owner -> owner -> int
 val compare_binder : binder -> binder -> int
 val compare_constructor : constructor -> constructor -> int
@@ -37,8 +32,6 @@ val substitute : (binder * t) list -> t -> t
 val instantiate : binder list -> t list -> t -> (t, string) result
 val is_open : t -> bool
 val parameters : t -> binder list
-val is_option : t -> t option
-val is_list : t -> t option
 val owner_to_string : owner -> string
 val binder_to_string : binder -> string
 val to_string : t -> string

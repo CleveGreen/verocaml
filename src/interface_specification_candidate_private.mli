@@ -2,6 +2,7 @@ type public_surface = {
   public_type_names : string list;
   public_revealed_type_names : string list;
   public_callable_names : string list;
+  public_external_type_constructors : Parametric_type.constructor list;
 }
 
 val strict_candidate :
@@ -21,6 +22,7 @@ val embedded_public_surface :
   (public_surface, Interface_specification_environment_private.error) result
 
 val surface_has_type : public_surface -> Sst.type_id -> bool
+val surface_reveals_type : public_surface -> Sst.type_id -> bool
 val public_typ :
   public_surface -> Parametric_type.binder list -> Sst.typ -> bool
 val public_function : public_surface -> Sst.function_id -> bool

@@ -190,22 +190,6 @@ let lower_source_type ~substitutions ~binders
                 (Ok []) components
               |> Result.map (fun components ->
                      Parametric_type.Tuple (List.rev components))
-          | Types.Tconstr (path, [ argument ], _)
-            when Path.same path Predef.path_option -> (
-              match application path [ argument ] with
-              | Ok application -> Ok application
-              | Error Unsupported_source_type ->
-                  let* argument = lower [] argument in
-                  Ok (Parametric_type.option argument)
-              | Error _ as error -> error)
-          | Types.Tconstr (path, [ argument ], _)
-            when Path.same path Predef.path_list -> (
-              match application path [ argument ] with
-              | Ok application -> Ok application
-              | Error Unsupported_source_type ->
-                  let* argument = lower [] argument in
-                  Ok (Parametric_type.list argument)
-              | Error _ as error -> error)
           | Types.Tconstr (path, arguments, _) -> application path arguments
           | Types.Tvar _ | Types.Tunivar _ -> (
               match List.assoc_opt type_id binders with
@@ -230,7 +214,7 @@ let formal_label (label : Typedtree.arg_label) =
   | Optional label -> Some ("?" ^ label)
   | Position label -> Some ("@" ^ label)
 
-let lower_typedtree_formals ~lower parameters =
+let lower_typedtree_formals ~lower ~optional_carrier parameters =
   let rec collect types labels = function
     | [] -> Ok (List.rev types, List.rev labels)
     | parameter :: rest ->
@@ -239,7 +223,7 @@ let lower_typedtree_formals ~lower parameters =
           | Tparam_pat pattern -> lower pattern.pat_loc pattern.pat_type
           | Tparam_optional_default (pattern, _, _) ->
               let* payload = lower pattern.pat_loc pattern.pat_type in
-              Ok (Parametric_type.option payload)
+              optional_carrier pattern.pat_loc payload
         in
         collect (typ :: types)
           (formal_label parameter.fp_arg_label :: labels)
@@ -262,26 +246,6 @@ let infer_labeled_type_arguments_from_actuals ~binders ~formal_types
   else
     infer_type_arguments_from_actuals ~binders ~formals:formal_types
       ~actuals:actual_types
-
-type optional_shape =
-  | Absent
-  | Present of Parametric_type.t
-  | Forward of Parametric_type.t
-
-let validate_optional_shape ~carrier = function
-  | Absent ->
-      if Option.is_some (Parametric_type.is_option carrier) then Ok ()
-      else Error "optional absence has a non-option carrier type"
-  | Present payload -> (
-      match Parametric_type.is_option carrier with
-      | Some expected when Parametric_type.equal expected payload -> Ok ()
-      | Some _ | None -> Error "optional presence payload type mismatch")
-  | Forward forwarded ->
-      if
-        Parametric_type.equal carrier forwarded
-        && Option.is_some (Parametric_type.is_option carrier)
-      then Ok ()
-      else Error "optional forwarding carrier type mismatch"
 
 type call_argument = {
   argument_label : string option;
@@ -322,6 +286,11 @@ let validate_direct_call ~binders ~type_arguments ~formal_result ~actual_result
       | [], _ :: _ | _ :: _, [] -> assert false
     in
     validate 0 formals actuals
+
+type optional_shape =
+  | Absent
+  | Present of Parametric_type.t
+  | Forward of Parametric_type.t
 
 let validate_sst_optional ~descriptors (expression : Sst.expression) =
   let shape, child =

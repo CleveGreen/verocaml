@@ -403,11 +403,24 @@ let structural_attacks filename =
     (fun definition -> { definition with result_type = Sst.Parameter foreign })
     program
   |> validate_executor_boundary "unbound-binder";
+  let option_constructor =
+    program.parametric_adts
+    |> List.find_map (fun descriptor ->
+           let constructor = Parametric_adt.type_constructor descriptor in
+           if
+             String.equal
+               (Filename.basename constructor.constructor_path)
+               "option"
+             || String.equal constructor.constructor_path "option"
+           then Some constructor
+           else None)
+    |> Option.get
+  in
   rewrite_definition "pick"
     (fun definition ->
       {
         definition with
-        result_type = Sst.Application (Parametric_type.option_constructor, []);
+        result_type = Sst.Application (option_constructor, []);
       })
     program
   |> validate_executor_boundary "option-arity";
@@ -569,13 +582,20 @@ let owner_unit () =
   let right_owner = Parametric_type.owner ~index:11 ~name:"renamed" in
   let left = Parametric_type.binder left_owner ~ordinal:0 in
   let right = Parametric_type.binder right_owner ~ordinal:0 in
+  let constructor =
+    {
+      Parametric_type.constructor_path = "test.generic";
+      constructor_identity = "test:generic/1";
+    }
+  in
+  let application argument = Parametric_type.Application (constructor, [ argument ]) in
   let left_type =
-    Parametric_type.option
+    application
       (Parametric_type.Tuple
          [ (None, Parametric_type.Parameter left); (None, Parametric_type.Int) ])
   in
   let right_type =
-    Parametric_type.option
+    application
       (Parametric_type.Tuple
          [
            (None, Parametric_type.Parameter right); (None, Parametric_type.Int);
@@ -589,7 +609,7 @@ let owner_unit () =
   (match instantiated with
   | Ok typ
     when Parametric_type.equal typ
-           (Parametric_type.option
+           (application
               (Parametric_type.Tuple
                  [ (None, Parametric_type.Bool); (None, Parametric_type.Int) ]))
     ->

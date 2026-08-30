@@ -21,6 +21,7 @@ val candidate_has_compatible_compiler_modes : candidate -> Types.type_expr -> bo
 val seal :
   environment ->
   candidate:candidate ->
+  resolve_application:(Path.t -> Parametric_adt.t option) ->
   wrapper:Sst.function_definition ->
   signature:Parametric_signature_private.t ->
   target_span:Diagnostic.span ->
@@ -40,6 +41,7 @@ val bind_definition :
 val complete_summary :
   environment ->
   candidate:candidate ->
+  resolve_application:(Path.t -> Parametric_adt.t option) ->
   wrapper_id:Sst.function_id ->
   type_binders:Parametric_type.binder list ->
   parameter_nodes:Typedtree.function_param list ->
@@ -64,6 +66,17 @@ val witness_span : summary -> Diagnostic.span
 val call_is_after_summary : summary -> Diagnostic.span -> bool
 
 val has_mode_bearing_syntax : Typedtree.value_binding -> bool
+
+val adopt_imported :
+  environment ->
+  provider_unit:string ->
+  provider_interface:string ->
+  definition:Sst.function_definition ->
+  signature:Parametric_signature_private.t ->
+  target_link:Sst.target_link ->
+  (unit, string) result
+
+val adopted_definitions : registration -> Sst.function_definition list
 
 val register :
   environment ->

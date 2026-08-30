@@ -1,10 +1,19 @@
 type environment
 
+type unannotated_erased_call = {
+  caller : Sst.function_id;
+  callee : Sst.function_id;
+  callee_mode : Sst.verification_mode;
+}
+
 type error = {
   function_id : Sst.function_id option;
   span : Diagnostic.span;
   message : string;
+  unannotated_erased_call : unannotated_erased_call option;
 }
+
+val to_diagnostic : error -> Diagnostic.t
 
 val prepare :
   structure:Typedtree.structure -> program:Sst.program -> unit

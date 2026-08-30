@@ -11,6 +11,11 @@ let sorted_imports imports =
          | 0 -> Option.compare String.compare left_crc right_crc
          | comparison -> comparison)
 
+let imports_cover ~implementation interface =
+  let implementation = sorted_imports implementation in
+  sorted_imports interface
+  |> List.for_all (fun required -> List.mem required implementation)
+
 let duplicate_import imports =
   let rec loop seen = function
     | [] -> None
@@ -20,33 +25,8 @@ let duplicate_import imports =
   in
   loop [] (Array.to_list imports)
 
-let argument_after flag arguments =
-  let rec loop = function
-    | [] | [ _ ] -> []
-    | candidate :: value :: rest ->
-        if String.equal candidate flag then value :: loop rest else loop (value :: rest)
-  in
-  loop (Array.to_list arguments)
-
 let has_argument argument arguments =
   Array.exists (String.equal argument) arguments
-
-let supported_ppx command =
-  match String.split_on_char ' ' command |> List.filter (( <> ) "") with
-  | executable :: arguments ->
-      let executable =
-        String.trim executable
-        |> String.map (fun character ->
-               if Char.equal character '\'' || Char.equal character '"' then
-                 ' '
-               else character)
-        |> String.trim
-      in
-      let basename = Filename.basename executable in
-      (String.equal basename "vero_ppx.exe"
-      || String.equal basename "verocaml-ppx")
-      && List.exists (String.equal "--keep-ghost") arguments
-  | [] -> false
 
 type canonical_carrier = {
   carrier_unit : string;
@@ -143,25 +123,25 @@ let strict_candidate ~require_public_interface
             reject
               "dependency implementation and embedded interface artifact \
                families differ"
-          else if
-            candidate.embedded_interface
-            && candidate.interface_unit_name <> Some unit_name
-          then
-            reject "embedded interface unit identity mismatch"
-          else if
-            candidate.embedded_interface
-            && candidate.interface_implementation_unit_name <> Some unit_name
-          then reject "embedded interface implementation identity mismatch"
-          else if
-            candidate.embedded_interface
-            && candidate.interface_parameter_count <> 0
-          then
+          else if Option.is_some (duplicate_import candidate.interface_imports)
+          then reject "interface contains a duplicate import slot"
+          else if candidate.interface_unit_name <> Some unit_name then
+            reject "interface unit identity mismatch"
+          else if candidate.interface_implementation_unit_name <> Some unit_name
+          then reject "interface implementation identity mismatch"
+          else if candidate.interface_parameter_count <> 0 then
             reject "parameterized compilation units are unsupported"
           else if
             candidate.embedded_interface
-            &&sorted_imports candidate.imports
+            && sorted_imports candidate.imports
             <> sorted_imports candidate.interface_imports
           then reject "CMT and embedded interface import slots differ"
+          else if
+            candidate.explicit_interface
+            && not
+                 (imports_cover ~implementation:candidate.imports
+                    candidate.interface_imports)
+          then reject "CMT imports do not cover explicit interface import slots"
           else if Option.is_none candidate.source_digest then
             reject "missing source digest"
           else if not candidate.has_implementation_shape then
@@ -169,8 +149,7 @@ let strict_candidate ~require_public_interface
           else if not (has_argument "-bin-annot" candidate.compiler_arguments)
           then reject "CMT was not produced with binary annotations enabled"
           else
-            let ppx = argument_after "-ppx" candidate.compiler_arguments in
-            if List.length ppx <> 1 || not (supported_ppx (List.hd ppx)) then
+            if not (Cmt_input.retained_preprocessing candidate) then
               reject "unsupported retained VeroCaml PPX identity"
             else if
               List.exists
@@ -180,7 +159,6 @@ let strict_candidate ~require_public_interface
                   "-nopervasives";
                   "-nostdlib";
                   "-no-check-prims";
-                  "-opaque";
                 ]
             then reject "unsupported compiler compatibility option"
             else
@@ -216,9 +194,9 @@ let strict_candidate ~require_public_interface
 let custom_imports (candidate : Cmt_input.implementation) =
   Array.to_list candidate.Cmt_input.imports
   |> List.filter (fun (import : Cmt_input.import) ->
-      (
-         not (String.equal import.Cmt_input.unit_name candidate.unit_name))
-         && not (canonical_import import))
+      Option.is_some import.Cmt_input.crc
+      && not (String.equal import.Cmt_input.unit_name candidate.unit_name)
+      && not (canonical_import import))
 
 let find_candidate (candidates : Cmt_input.implementation list) unit_name =
   List.find_opt
@@ -262,6 +240,25 @@ let graph_order (candidates : Cmt_input.implementation list)
                digest left right)
       | None -> (
           let all_nodes = consumer :: candidates in
+          let mismatched =
+            List.find_map
+              (fun (candidate : Cmt_input.implementation) ->
+                custom_imports candidate
+                |> List.find_map (fun (import : Cmt_input.import) ->
+                       match find_candidate candidates import.unit_name with
+                       | Some dependency
+                         when dependency.interface_digest <> import.crc ->
+                           Some (candidate.unit_name, import.unit_name)
+                       | Some _ | None -> None))
+              all_nodes
+          in
+          match mismatched with
+          | Some (owner, dependency) ->
+              reject ~unit_name:owner
+                (Printf.sprintf
+                   "import CRC does not match the supplied interface for unit %s"
+                   dependency)
+          | None ->
           let missing =
             List.find_map
               (fun (candidate : Cmt_input.implementation) ->
@@ -276,7 +273,7 @@ let graph_order (candidates : Cmt_input.implementation list)
                        else Some (candidate.unit_name, import.unit_name)))
               all_nodes
           in
-          match missing with
+          (match missing with
           | Some (owner, missing) ->
               reject ~unit_name:owner
                 (Printf.sprintf
@@ -288,27 +285,7 @@ let graph_order (candidates : Cmt_input.implementation list)
                 |> List.filter_map (fun (import : Cmt_input.import) ->
                        find_candidate candidates import.unit_name)
               in
-              let reachable =
-                let rec visit seen candidate =
-                  if List.mem candidate.Cmt_input.unit_name seen then seen
-                  else
-                    List.fold_left visit
-                      (candidate.unit_name :: seen)
-                      (dependencies candidate)
-                in
-                List.fold_left visit [] (dependencies consumer)
-              in
-              match
-                 List.find_opt
-                   (fun (candidate : Cmt_input.implementation) ->
-                     not (List.mem candidate.Cmt_input.unit_name reachable))
-                   candidates
-               with
-              | Some unused ->
-                  reject ~unit_name:unused.unit_name
-                    "supplied dependency is not in the consumer import closure"
-              | None ->
-                  let rec visit temporary permanent ordered candidate =
+              let rec visit temporary permanent ordered candidate =
                     let name = candidate.Cmt_input.unit_name in
                     if List.mem name permanent then Ok (temporary, permanent, ordered)
                     else if List.mem name temporary then
@@ -341,12 +318,13 @@ let graph_order (candidates : Cmt_input.implementation list)
                         | Ok (temporary, permanent, ordered) ->
                             order temporary permanent ordered rest)
                   in
-                  order [] [] [] candidates)))
+              order [] [] [] candidates))))
 
 type public_surface = {
   public_type_names : string list;
   public_revealed_type_names : string list;
   public_callable_names : string list;
+  public_external_type_constructors : Parametric_type.constructor list;
 }
 
 let embedded_public_surface ~unit_name
@@ -480,6 +458,7 @@ let embedded_public_surface ~unit_name
                     public_type_names;
                     public_revealed_type_names;
                     public_callable_names;
+                    public_external_type_constructors = [];
                   })
       with Cmi_format.Error _ | Invalid_argument _ | Failure _ ->
           reject "malformed embedded public signature")
@@ -493,16 +472,13 @@ let surface_reveals_type surface type_id =
   List.mem (surface_type_name type_id) surface.public_revealed_type_names
 
 let public_type_constructor surface constructor =
-  Parametric_type.compare_constructor constructor
-    Parametric_type.option_constructor = 0
-  || Parametric_type.compare_constructor constructor
-       Parametric_type.list_constructor = 0
-  || Parametric_type.compare_constructor constructor
-       Parametric_type.result_constructor = 0
+  List.exists
+    (fun candidate ->
+      Parametric_type.compare_constructor candidate constructor = 0)
+    surface.public_external_type_constructors
   ||
   let path = constructor.Parametric_type.constructor_path in
-  not (String.contains path '.')
-  && List.mem path surface.public_type_names
+  not (String.contains path '.') && List.mem path surface.public_type_names
 
 let rec public_typ surface binders = function
   | Sst.Unit | Bool | Int -> true
@@ -510,6 +486,11 @@ let rec public_typ surface binders = function
       List.for_all (fun (_, typ) -> public_typ surface binders typ) components
   | Aggregate type_id -> surface_has_type surface type_id
   | Parameter binder -> List.mem binder binders
+  | Application _ as typ when Parametric_type.is_spec_function typ -> (
+      match Parametric_type.spec_function_view typ with
+      | Some (_, domain, range) ->
+          public_typ surface binders domain && public_typ surface binders range
+      | None -> false)
   | Application (constructor, arguments) ->
       public_type_constructor surface constructor
       && List.for_all (public_typ surface binders) arguments
@@ -596,7 +577,8 @@ let surface_callable_name (function_id : Sst.function_id) =
   function_id.Sst.function_name
 
 let public_function surface function_id =
-  List.mem (surface_callable_name function_id) surface.public_callable_names
+  Spec_function_sst_private.is_application_id function_id
+  || List.mem (surface_callable_name function_id) surface.public_callable_names
 
 let rec public_expression surface binders (expression : Sst.expression) =
   public_typ surface binders expression.Sst.typ
@@ -687,8 +669,32 @@ let rec public_expression surface binders (expression : Sst.expression) =
              public_expression surface binders
                (snd (Sst.require_value_argument argument)))
            arguments
-  | Symbolic_application _ ->
-      false
+  | Symbolic_application application ->
+      let declaration =
+        Symbolic_application_private.declaration application
+      in
+      let declaration_binders =
+        Symbolic_application_private.type_binders declaration
+      in
+      List.mem
+        (Symbolic_application_private.canonical_path declaration)
+        surface.public_callable_names
+      && public_typ surface declaration_binders
+           (Symbolic_application_private.declaration_result_type declaration)
+      && List.for_all
+           (public_typ surface declaration_binders)
+           (Symbolic_application_private.parameter_types declaration)
+      && List.for_all
+           (public_typ surface binders)
+           (Symbolic_application_private.type_arguments application)
+      && List.for_all
+           (public_typ surface binders)
+           (Symbolic_application_private.argument_types application)
+      && public_typ surface binders
+           (Symbolic_application_private.result_type application)
+      && List.for_all
+           (public_expression surface binders)
+           (Symbolic_application_private.arguments application)
   | Callback_call _ | Callback_requires _ | Callback_ensures _
   | Optional_absent | Optional_present _ | Optional_forward _ | Reveal _ | Reveal_with_fuel _ | Use_type_invariant _
   | Local_assert _ ->

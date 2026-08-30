@@ -40,8 +40,8 @@ carry ordered type arguments; no closed source function identity is emitted.
 Nonuniform polymorphic recursion and higher-order generic values reject before
 portable SST/VIR artifacts or solver work.
 
-  $ reject () { name=$1; code=0; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$name.cmt" --timeout-ms 5000 --dump-sst "artifacts/$name.sst" --dump-vir "artifacts/$name.vir" >"artifacts/$name.out" 2>&1 || code=$?; test "$code" = 2; grep -o 'error\[VERO_[A-Z_]*\]' "artifacts/$name.out"; test ! -e "artifacts/$name.sst"; test ! -e "artifacts/$name.vir"; test "$(grep -c 'private-receipt ' "artifacts/$name.out")" = 0; }
-  $ reject polymorphic_recursion
-  error[VERO_UNSUPPORTED_POLYMORPHISM]
-  $ reject generic_higher_order
-  error[VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION]
+  $ reject () { name=$1; expected=$2; code=0; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$name.cmt" --timeout-ms 5000 --dump-sst "artifacts/$name.sst" --dump-vir "artifacts/$name.vir" >"artifacts/$name.out" 2>&1 || code=$?; test "$code" = 2; actual=$(grep -Eo 'VERO_[A-Z_]+' "artifacts/$name.out" | head -1); test "$actual" = "$expected"; printf 'code=%s\n' "$actual"; test ! -e "artifacts/$name.sst"; test ! -e "artifacts/$name.vir"; test "$(grep -c 'private-receipt ' "artifacts/$name.out")" = 0; }
+  $ reject polymorphic_recursion VERO_UNSUPPORTED_POLYMORPHISM
+  code=VERO_UNSUPPORTED_POLYMORPHISM
+  $ reject generic_higher_order VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION
+  code=VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION

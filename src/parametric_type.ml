@@ -16,18 +16,6 @@ let owner ~index ~name = { owner_index = index; owner_name = name }
 let binder owner ~ordinal = { owner; ordinal }
 let binders owner count = List.init count (fun ordinal -> binder owner ~ordinal)
 
-let option_constructor =
-  {
-    constructor_path = "Stdlib.option";
-    constructor_identity = "builtin:option/1";
-  }
-
-let list_constructor =
-  { constructor_path = "Stdlib.list"; constructor_identity = "builtin:list/1" }
-
-let result_constructor =
-  { constructor_path = "Stdlib.result"; constructor_identity = "builtin:result/2" }
-
 let spec_function_path = "$verocaml.spec-function"
 let spec_function_identity_prefix = "verocaml:spec-function/2:"
 
@@ -139,12 +127,7 @@ let equal left right = compare left right = 0
 
 let application constructor arguments =
   let expected_arity =
-    if
-      compare_constructor constructor option_constructor = 0
-      || compare_constructor constructor list_constructor = 0
-    then Some 1
-    else if compare_constructor constructor result_constructor = 0 then Some 2
-    else if Option.is_some (spec_function_label constructor) then Some 2
+    if Option.is_some (spec_function_label constructor) then Some 2
     else None
   in
   match expected_arity with
@@ -155,19 +138,12 @@ let application constructor arguments =
   | Some _ | None -> Ok (Application (constructor, arguments))
 
 let validate_application constructor arguments =
-  if
-    compare_constructor constructor option_constructor <> 0
-    && compare_constructor constructor list_constructor <> 0
-    && compare_constructor constructor result_constructor <> 0
-    && Option.is_none (spec_function_label constructor)
+  if Option.is_none (spec_function_label constructor)
   then
     Error
       (Printf.sprintf "unsupported type constructor identity %s"
          constructor.constructor_path)
   else Result.map (fun _ -> ()) (application constructor arguments)
-
-let option argument = Application (option_constructor, [ argument ])
-let list argument = Application (list_constructor, [ argument ])
 
 let rec alpha_equal left right =
   match (left, right) with
@@ -235,15 +211,6 @@ let parameters typ =
     | Unit | Bool | Int | Aggregate _ -> found
   in
   collect [] typ |> List.sort compare_binder
-
-let is_application expected = function
-  | Application (constructor, [ argument ])
-    when compare_constructor constructor expected = 0 ->
-      Some argument
-  | _ -> None
-
-let is_option = is_application option_constructor
-let is_list = is_application list_constructor
 
 let owner_to_string owner =
   Printf.sprintf "%s#%d" owner.owner_name owner.owner_index

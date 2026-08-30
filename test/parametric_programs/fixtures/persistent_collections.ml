@@ -1,5 +1,11 @@
 [@@@verocaml.verify]
 
+type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
+type ('a, 'error) result_specification = ('a, 'error) result
+[@@verocaml.external_type_specification]
+
 type 'a chain = End | Link of 'a * 'a chain
 type 'a queue = { front : 'a chain; back : 'a chain }
 type 'a queue_step = Queue_empty | Queue_item of 'a * 'a queue

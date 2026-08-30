@@ -402,6 +402,8 @@ let make_definition ~source_file ~function_id ~recursive ~parameters
 type ('bindings, 'error) parameter_services = {
   normalized_type :
     Location.t -> Types.type_expr -> (Parametric_type.t, 'error) result;
+  optional_carrier :
+    Location.t -> Parametric_type.t -> (Parametric_type.t, 'error) result;
   lower_expression :
     'bindings -> Typedtree.expression -> (Sst.expression, 'error) result;
   lower_pattern :
@@ -432,7 +434,9 @@ let lower_parameters services initial parameters =
                 services.normalized_type source_pattern.pat_loc
                   source_pattern.pat_type
               in
-              let carrier_type = Parametric_type.option payload_type in
+              let* carrier_type =
+                services.optional_carrier source_pattern.pat_loc payload_type
+              in
               let carrier_pattern =
                 {
                   Sst.pattern_desc = Sst.Wildcard;

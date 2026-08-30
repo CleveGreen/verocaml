@@ -87,7 +87,7 @@ and exact manifests continue to bind every installed path and interface.
   $ find "$install_root" \( -type f -o -type l \) -name '*.cmi' ! -path '*/.private/*' -printf '%f\n' | sed 's/\.cmi$//' | LC_ALL=C sort > artifacts/installed-public-modules.manifest
   $ cmp manifests/installed-public-modules.manifest artifacts/installed-public-modules.manifest
   $ printf 'installed manifests paths=%s interfaces=%s public-modules=%s\n' "$(wc -l < artifacts/installed-paths.manifest)" "$(wc -l < artifacts/installed-interfaces.manifest)" "$(wc -l < artifacts/installed-public-modules.manifest)"
-  installed manifests paths=920 interfaces=222 public-modules=21
+  installed manifests paths=1000 interfaces=236 public-modules=27
 
 An installed cold verification is snapshotted before and after under the
 declared isolated working directory and HOME/XDG/TMP roots.  This check proves

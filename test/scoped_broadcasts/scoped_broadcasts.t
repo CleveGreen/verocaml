@@ -408,6 +408,7 @@ wrong-kind, wrong-type, and incomplete-trigger forms.
   > from pathlib import Path
   > types = [("int" if i % 2 == 0 else "bool") + " option" * (i // 2) for i in range(17)]
   > lines = [
+  > "type 'a option_specification = 'a option", "[@@verocaml.external_type_specification]", "",
   > "let observed (_value : 'a) : bool = true [@@verocaml.spec]", "",
   > "let lemma (value : 'a) : unit =",
   > "  [%verocaml.ensures fun _ -> ((observed value) [@trigger]) || value = value];",

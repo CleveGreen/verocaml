@@ -65,13 +65,32 @@ type classification =
   | Invalid_symbolic_declaration of string
   | Invalid_symbolic_application of string
   | Invalid_symbolic_authentication of string
+  | Executable_function_in_specification of { function_name : string }
+  | Unannotated_erased_call of {
+      caller_name : string;
+      callee_name : string;
+      callee_mode : string;
+    }
+  | Invalid_imported_specification of string
+  | Invalid_semantic_program of {
+      function_name : string option;
+      detail : string;
+    }
   | Unsupported_construct of unsupported_construct
+
+type submessage =
+  | Hint of string
+  | Note of {
+      span : span;
+      message : string;
+    }
 
 type t = {
   classification : classification;
   code : string;
   message : string;
   span : span;
+  submessages : submessage list;
 }
 
 let position_of_lexing_position position =
@@ -100,6 +119,21 @@ let span_of_location ~fallback_file location =
       start_pos = position_of_lexing_position location.Location.loc_start;
       end_pos = position_of_lexing_position location.Location.loc_end;
     }
+
+let location_of_span span =
+  let position position =
+    {
+      Lexing.pos_fname = span.file;
+      pos_lnum = position.line;
+      pos_bol = 0;
+      pos_cnum = position.column;
+    }
+  in
+  {
+    Location.loc_start = position span.start_pos;
+    loc_end = position span.end_pos;
+    loc_ghost = false;
+  }
 
 let code_and_message = function
   | Unsupported_target { expected_int_size; actual_int_size } ->
@@ -137,16 +171,39 @@ let code_and_message = function
       ("VERO_SYMBOLIC_APPLICATION", detail)
   | Invalid_symbolic_authentication detail ->
       ("VERO_SYMBOLIC_AUTHENTICATION", detail)
+  | Executable_function_in_specification { function_name } ->
+      ( "VERO_EXEC_IN_SPEC",
+        Printf.sprintf
+          "Executable function %S cannot be used in a specification."
+          function_name )
+  | Unannotated_erased_call { caller_name; callee_name; callee_mode } ->
+      ( "VERO_ERASED_CALL",
+        Printf.sprintf
+          "Executable function %S uses %s-only function %S without marking that call as ghost."
+          caller_name callee_mode callee_name )
+  | Invalid_imported_specification detail ->
+      ( "VERO_DEPENDENCY",
+        "Imported specification authentication failed: " ^ detail )
+  | Invalid_semantic_program { function_name; detail } ->
+      let subject =
+        Option.fold ~none:"this verification unit"
+          ~some:(fun name -> Printf.sprintf "function %S" name)
+          function_name
+      in
+      ( "VERO_INVALID_PROGRAM",
+        Printf.sprintf "VeroCaml could not validate %s: %s" subject detail )
   | Unsupported_construct construct -> (
       match construct with
       | Unsupported_type ->
-          ("VERO_UNSUPPORTED_TYPE", "type is outside the pure SST subset")
+          ( "VERO_UNSUPPORTED_TYPE",
+            "This type is not supported in verified code." )
       | Unsupported_structure_item ->
           ( "VERO_UNSUPPORTED_STRUCTURE_ITEM",
-            "structure item is outside the pure SST subset" )
+            "This top-level declaration is not supported in a verified compilation unit."
+          )
       | Unsupported_top_level_binding ->
           ( "VERO_UNSUPPORTED_TOP_LEVEL_BINDING",
-            "top-level binding is not a supported direct function" )
+            "This top-level value is not a supported function definition." )
       | Partial_match ->
           ("VERO_UNSUPPORTED_PARTIAL_MATCH", "partial matches are not supported")
       | Partial_function_parameter ->
@@ -191,12 +248,15 @@ let code_and_message = function
       | Mutation ->
           ("VERO_UNSUPPORTED_MUTATION", "mutation is reserved for unique-state lowering")
       | Unsupported_pattern ->
-          ("VERO_UNSUPPORTED_PATTERN", "pattern is outside the pure SST subset")
+          ( "VERO_UNSUPPORTED_PATTERN",
+            "VeroCaml cannot verify this pattern." )
       | Unsupported_expression ->
-          ("VERO_UNSUPPORTED_EXPRESSION", "expression is outside the pure SST subset")
+          ( "VERO_UNSUPPORTED_EXPRESSION",
+            "VeroCaml cannot verify this expression." )
       | Malformed_ghost_call ->
           ( "VERO_MALFORMED_GHOST_CALL",
-            "resolved ghost call does not have the PPX-generated shape" )
+            "This retained ghost call does not match the output of the VeroCaml PPX."
+          )
       | Callback_authentication ->
           ( "VERO_CALLBACK_AUTHENTICATION",
             "callback identity, shape, certificate, session, or call edge is not authenticated"
@@ -223,6 +283,96 @@ let code_and_message = function
           ( "VERO_UNSUPPORTED_LOGICAL_QUANTIFIER",
             "forall and exists are authenticated but unavailable here" ))
 
+let default_submessages = function
+  | Executable_function_in_specification { function_name } ->
+      [
+        Hint
+          (Printf.sprintf
+             "If %S is a logical definition, add [@@verocaml.spec] after its definition."
+             function_name);
+      ]
+  | Unannotated_erased_call { caller_name; callee_name; _ } ->
+      [
+        Hint
+          (Printf.sprintf
+             "If %S is a proof, add [@@verocaml.proof] after its definition."
+             caller_name);
+        Hint
+          (Printf.sprintf
+             "Otherwise, explicitly mark the call to %S as ghost code."
+             callee_name);
+      ]
+  | Invalid_imported_specification _ ->
+      [
+        Hint
+          "Rebuild the provider and consumer together, and ensure the consumer directly imports every specification provider and external target it uses.";
+      ]
+  | Unsupported_construct Unsupported_type ->
+      [
+        Hint
+          "Use a supported scalar or immutable algebraic data type, or provide an external type specification.";
+      ]
+  | Unsupported_construct Unsupported_structure_item ->
+      [
+        Hint
+          "Move this declaration to an unverified dependency, or rewrite it as a supported type or function declaration.";
+      ]
+  | Unsupported_construct Unsupported_top_level_binding ->
+      [
+        Hint
+          "Define a direct function, or move the value to an unverified dependency.";
+      ]
+  | Unsupported_construct Unsupported_pattern ->
+      [ Hint "Rewrite the match using supported variable and constructor patterns." ]
+  | Unsupported_construct Unsupported_expression ->
+      [ Hint "Rewrite this expression using supported pure VeroCaml operations." ]
+  | Unsupported_construct Malformed_ghost_call ->
+      [
+        Hint
+          "Recompile the source with the matching VeroCaml PPX and verify the newly generated CMT.";
+      ]
+  | Unsupported_target _ | Unsupported_input _ | Malformed_input
+  | Incompatible_magic | Input_io_error | Invalid_recursive_rank _
+  | Invalid_broadcast _ | Invalid_symbolic_declaration _
+  | Invalid_symbolic_application _ | Invalid_symbolic_authentication _
+  | Invalid_semantic_program _ | Unsupported_construct _ ->
+      []
+
 let make classification span =
   let code, message = code_and_message classification in
-  { classification; code; message; span }
+  {
+    classification;
+    code;
+    message;
+    span;
+    submessages = default_submessages classification;
+  }
+
+let with_message message diagnostic = { diagnostic with message }
+
+let with_hint hint diagnostic =
+  {
+    diagnostic with
+    submessages = diagnostic.submessages @ [ Hint hint ];
+  }
+
+let with_note ~span message diagnostic =
+  {
+    diagnostic with
+    submessages = diagnostic.submessages @ [ Note { span; message } ];
+  }
+
+let report diagnostic =
+  let main =
+    Location.msg ~loc:(location_of_span diagnostic.span) "[%s] %s"
+      diagnostic.code diagnostic.message
+  in
+  let sub =
+    List.map
+      (function
+        | Hint message -> Location.msg "%s" ("Hint: " ^ message)
+        | Note { span; message } ->
+            Location.msg ~loc:(location_of_span span) "%s" message)
+      diagnostic.submessages
+  in
+  { Location.kind = Location.Report_error; main; sub }

@@ -25,13 +25,7 @@
   ../../src/verocaml.exe
   ../../ppx/vero_ppx.exe
   ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi
-  ../../src/vc_solver_job_private.ml
-  ../../src/vc_solver_job_private.mli
-  ../../src/verification_solver_private.ml
-  ../../src/solver_backend_counter_private.ml
-  ../../src/recursive_spec_encoding.ml
-  ../../src/z3_bridge.ml))
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
 
 (alias
  (name prepared-vc-jobs-check)

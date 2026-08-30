@@ -22,7 +22,8 @@ let descriptor ~index ~name ~kind =
       constructor_identity = "uid:" ^ name }
   in
   let descriptor =
-    Parametric_adt.create ~type_id ~type_constructor ~binders:[ binder ]
+    Parametric_adt.create ~optional_carrier:false ~type_id ~type_constructor
+      ~binders:[ binder ]
       ~provenance:(Parametric_adt.Local { compiler_uid = "uid:" ^ name })
       ~kind:(kind binder type_constructor)
     |> function

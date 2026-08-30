@@ -1,12 +1,10 @@
-type standard = Option | List | Result
-
 type source = {
   paths : Path.t list;
   type_id : Sst.type_id;
   name : string;
   declaration : Types.type_declaration;
   provenance : Parametric_adt.provenance;
-  standard : standard option;
+  optional_carrier : bool;
 }
 
 type lowered = {
@@ -16,17 +14,6 @@ type lowered = {
   fields : (Types.Uid.t * Sst.type_id * Sst.field_id) list;
   constructors : (Types.Uid.t * Sst.type_id * Sst.constructor_id) list;
 }
-
-let is_stdlib_result_path = function
-  | Path.Pdot (Path.Pident root, "result") ->
-      Ident.same root (Ident.create_persistent "Stdlib")
-  | Path.Pident _ | Path.Pdot _ | Path.Papply _ | Path.Pextra_ty _ -> false
-
-let standard_of_path path =
-  if Path.same path Predef.path_option then Some Option
-  else if Path.same path Predef.path_list then Some List
-  else if is_stdlib_result_path path then Some Result
-  else None
 
 let ( let* ) result continuation =
   match result with Ok value -> continuation value | Error _ as error -> error
@@ -41,7 +28,7 @@ let local_source ~paths ~type_id declaration =
     name = declaration.typ_name.txt;
     declaration = declaration.typ_type;
     provenance = Parametric_adt.Local { compiler_uid };
-    standard = None;
+    optional_carrier = false;
   }
 
 let direct_type_parameters parameters arguments =
@@ -76,11 +63,16 @@ let direct_compiler_parameters parameters arguments =
        parameters arguments
 
 let load_path_mutex = Mutex.create ()
+let load_path_depth = Domain.Safe.DLS.new_key (fun () -> 0)
 
 let with_load_path ~visible ~hidden action =
-  Mutex.lock load_path_mutex;
+  let depth = Domain.Safe.DLS.get load_path_depth in
+  if depth = 0 then Mutex.lock load_path_mutex;
+  Domain.Safe.DLS.set load_path_depth (depth + 1);
   Fun.protect
-    ~finally:(fun () -> Mutex.unlock load_path_mutex)
+    ~finally:(fun () ->
+      Domain.Safe.DLS.set load_path_depth depth;
+      if depth = 0 then Mutex.unlock load_path_mutex)
     (fun () ->
       let saved = Load_path.get_paths () in
       let restore () =
@@ -90,7 +82,9 @@ let with_load_path ~visible ~hidden action =
       in
       Fun.protect ~finally:restore (fun () ->
           let visible =
-            Config.standard_library :: visible |> List.sort_uniq String.compare
+            if List.exists (String.equal Config.standard_library) visible then
+              visible
+            else visible @ [ Config.standard_library ]
           in
           Load_path.init ~auto_include:Load_path.no_auto_include ~visible
             ~hidden;
@@ -185,8 +179,8 @@ let external_source ~paths ~type_id ~load_path_visible ~load_path_hidden _env
                 declaration = target;
                 provenance =
                   Parametric_adt.External
-                    { compiler_uid = target_uid; proxy_uid; prelude = false };
-                standard = standard_of_path canonical_path;
+                    { compiler_uid = target_uid; proxy_uid };
+                optional_carrier = Path.same canonical_path Predef.path_option;
               }
         | Ok (_, target, _)
           when target.Types.type_private <> Asttypes.Public ->
@@ -200,105 +194,12 @@ let external_source ~paths ~type_id ~load_path_visible ~load_path_hidden _env
 let covers_path (source : source) path =
   List.exists (fun candidate -> Path.same candidate path) source.paths
 
-let standard_proxy_uid = function
-  | Option -> "verocaml-pervasive:option_specification"
-  | List -> "verocaml-pervasive:list_specification"
-  | Result -> "verocaml-pervasive:result_specification"
-
-let standard_source env standard type_id path name =
-  let declaration = Env.find_type path env in
-  let compiler_uid = compiler_uid declaration.Types.type_uid in
-  let provenance =
-    Parametric_adt.External
-      {
-        compiler_uid;
-        proxy_uid = standard_proxy_uid standard;
-        prelude = true;
-      }
-  in
-  { paths = [ path ]; type_id; name; declaration; provenance; standard = Some standard }
-
-let standard_sources ?(observed_paths = []) env =
-  let predef_env =
-    Predef.build_initial_env
-      (Env.add_type ~check:false)
-      (Env.add_extension ~check:false ~rebind:false)
-      Env.empty
-  in
-  let option =
-    standard_source predef_env Option
-      { Sst.type_index = -1; type_name = "Stdlib.option" }
-      Predef.path_option "Stdlib.option"
-      |> fun source -> { source with declaration = Env.find_type Predef.path_option predef_env }
-  in
-  let list =
-    standard_source predef_env List
-      { Sst.type_index = -2; type_name = "Stdlib.list" }
-      Predef.path_list "Stdlib.list"
-      |> fun source -> { source with declaration = Env.find_type Predef.path_list predef_env }
-  in
-  let observed path = List.exists (Path.same path) observed_paths in
-  let result =
-    match
-      List.find_opt
-        is_stdlib_result_path
-        observed_paths
-    with
-    | None -> []
-    | Some path ->
-        let declaration =
-          try Env.find_type path env
-          with Not_found | Env.Error _ ->
-            let cmi =
-              Cmi_format.read_cmi
-                (Filename.concat Config.standard_library "stdlib.cmi")
-            in
-            if
-              not
-                (Compilation_unit.Name.equal cmi.Cmi_format.cmi_name
-                   (Compilation_unit.Name.of_string "Stdlib"))
-            then raise Not_found;
-            cmi.cmi_sign
-            |> List.find_map (function
-                 | Types.Sig_type (id, declaration, _, _)
-                   when String.equal (Ident.name id) "result" ->
-                     Some declaration
-                 | _ -> None)
-            |> Option.get
-        in
-        let compiler_uid = compiler_uid declaration.Types.type_uid in
-        [
-          {
-            paths = [ path ];
-            type_id = { Sst.type_index = -3; type_name = "Stdlib.result" };
-            name = "Stdlib.result";
-            declaration;
-            provenance =
-              Parametric_adt.External
-                {
-                  compiler_uid;
-                  proxy_uid = standard_proxy_uid Result;
-                  prelude = true;
-                };
-            standard = Some Result;
-          };
-        ]
-  in
-  Ok
-    ((if observed Predef.path_option then [ option ] else [])
-    @ (if observed Predef.path_list then [ list ] else [])
-    @ result)
-
 let type_constructor source =
-  match source.standard with
-  | Some Option -> Parametric_type.option_constructor
-  | Some List -> Parametric_type.list_constructor
-  | Some Result -> Parametric_type.result_constructor
-  | None ->
-      {
-        Parametric_type.constructor_path = source.name;
-        constructor_identity = "compiler-uid:" ^ compiler_uid source.declaration.type_uid;
-      }
+  {
+    Parametric_type.constructor_path = source.name;
+    constructor_identity =
+      "compiler-uid:" ^ compiler_uid source.declaration.type_uid;
+  }
 
 let find_source (sources : source list) path =
   List.find_opt (fun (source : source) -> List.exists (Path.same path) source.paths) sources
@@ -422,6 +323,7 @@ let lower_source ~span ~aggregate ~modalities sources source =
       let* descriptor =
         Parametric_adt.create ~type_id:source.type_id ~type_constructor:constructor
           ~binders:descriptor_binders ~provenance:source.provenance
+          ~optional_carrier:source.optional_carrier
           ~kind:(Parametric_adt.Record descriptor_fields)
         |> Result.map_error (descriptor_error span source.declaration.type_loc)
       in
@@ -486,6 +388,7 @@ let lower_source ~span ~aggregate ~modalities sources source =
       let* descriptor =
         Parametric_adt.create ~type_id:source.type_id ~type_constructor:constructor
           ~binders:descriptor_binders ~provenance:source.provenance
+          ~optional_carrier:source.optional_carrier
           ~kind:(Parametric_adt.Variant descriptor_constructors)
         |> Result.map_error (descriptor_error span source.declaration.type_loc)
       in

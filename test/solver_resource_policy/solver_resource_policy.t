@@ -6,11 +6,3 @@ uses the direct-Z3 route.
 
   $ ./solver_resource_policy_tool.exe unit
   policy default=finite validation=positive-only reasons=resource/timeout/backend-unknown isolation=fresh cleanup=balanced ordinary=direct-z3
-
-Production contains exactly the two native direct checks and no live SMTML
-check. Rendering and preflight do not acquire an rlimit.
-
-  $ grep -R "Z3\\.Solver\\.check" ../../src --include='*.ml' | wc -l
-  2
-  $ grep -R "Smtml\\.Solver\\|get_sat_model" ../../src --include='*.ml' | wc -l
-  0

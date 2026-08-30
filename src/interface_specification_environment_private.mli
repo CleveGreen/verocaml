@@ -60,6 +60,7 @@ type handle = {
   mode_signature_digest : string;
   types : public_type list;
   callables : public_callable list;
+  external_specifications : public_callable list;
   models : public_model list;
   invariants : public_invariant list;
   direct_dependencies : handle list;
@@ -88,6 +89,7 @@ type staged_dependency = {
   mode_signature_digest : string;
   types : public_type list;
   callables : public_callable list;
+  external_specifications : public_callable list;
   models : public_model list;
   invariants : public_invariant list;
   semantic_snapshot : Sst_validation.validated_program;

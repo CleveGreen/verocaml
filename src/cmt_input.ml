@@ -35,6 +35,41 @@ type implementation = {
   identifier_occurrence_count : int;
 }
 
+let argument_after flag arguments =
+  let rec loop = function
+    | [] | [ _ ] -> []
+    | candidate :: value :: rest ->
+        if String.equal candidate flag then value :: loop rest
+        else loop (value :: rest)
+  in
+  loop (Array.to_list arguments)
+
+let retained_ppx_command command =
+  match String.split_on_char ' ' command |> List.filter (( <> ) "") with
+  | executable :: arguments ->
+      let executable =
+        String.trim executable
+        |> String.map (fun character ->
+               if Char.equal character '\'' || Char.equal character '"' then
+                 ' '
+               else character)
+        |> String.trim
+      in
+      let basename = Filename.basename executable in
+      (String.equal basename "vero_ppx.exe"
+      || String.equal basename "verocaml-ppx")
+      && List.exists (String.equal "--keep-ghost") arguments
+  | [] -> false
+
+let retained_preprocessing implementation =
+  let ppx = argument_after "-ppx" implementation.compiler_arguments in
+  (List.length ppx = 1 && retained_ppx_command (List.hd ppx))
+  ||
+  (implementation.implementation_metadata_valid
+  && implementation.implementation_family_markers = [ "retained-v1" ]
+  && Filename.check_suffix implementation.source_file ".pp.ml"
+  && Array.exists (String.equal "-impl") implementation.compiler_arguments)
+
 let diagnostic_for_location classification ~source_file location =
   Diagnostic.make classification
     (Diagnostic.span_of_location ~fallback_file:source_file location)
@@ -412,27 +447,28 @@ let implementation_interface_digest info =
   match info.Cmt_format.cmt_interface_digest with
   | Some digest -> Some digest
   | None ->
-      Array.find_map
-        (fun imported ->
-          if
-            Compilation_unit.Name.equal
-              (Import_info.name imported)
-              (Compilation_unit.name info.Cmt_format.cmt_modname)
-          then Import_info.crc imported
-          else None)
-        info.Cmt_format.cmt_imports
+      let self = Compilation_unit.name info.Cmt_format.cmt_modname in
+      let matching =
+        Array.to_list info.Cmt_format.cmt_imports
+        |> List.filter (fun imported ->
+               Compilation_unit.Name.equal (Import_info.name imported) self)
+      in
+      (match matching with [ imported ] -> Import_info.crc imported | _ -> None)
 
 let interface_digest_matches info interface =
   match implementation_interface_digest info with
   | None -> false
   | Some expected ->
-      Array.exists
-        (fun imported ->
-          Compilation_unit.Name.equal
-            (Import_info.name imported)
-            interface.Cmi_format.cmi_name
-          && Import_info.crc imported = Some expected)
-        interface.Cmi_format.cmi_crcs
+      let matching =
+        Array.to_list interface.Cmi_format.cmi_crcs
+        |> List.filter (fun imported ->
+               Compilation_unit.Name.equal
+                 (Import_info.name imported)
+                 interface.Cmi_format.cmi_name)
+      in
+      (match matching with
+      | [ imported ] -> Import_info.crc imported = Some expected
+      | _ -> false)
 
 let explicit_interface_identity_matches info interface =
   let implementation_name =
@@ -450,8 +486,124 @@ let explicit_interface_identity_matches info interface =
   String.equal implementation_name interface_name
   && interface_implementation_name = Some implementation_name
 
-let load_internal ?int_size ?interface_info
-    ?(authenticate_explicit_identity = false) filename =
+let explicit_interface_unsupported interface =
+  if interface.Cmi_format.cmi_params <> [] then
+    Some (Diagnostic.Unsupported_input Explicit_cmi_parameters)
+  else
+    match interface.Cmi_format.cmi_kind with
+    | Cmi_format.Normal { cmi_arg_for = Some _; _ } ->
+        Some (Unsupported_input Explicit_cmi_argument_for)
+    | Normal { cmi_arg_for = None; _ } | Parameter -> None
+
+exception Unsupported_interface_metadata of Diagnostic.classification
+
+type lexical_path = {
+  absolute : bool;
+  components : string list;
+}
+
+let lexical_path path =
+  let absolute = not (Filename.is_relative path) in
+  let separator = Filename.dir_sep.[0] in
+  let components =
+    String.split_on_char separator path
+    |> List.fold_left
+         (fun components -> function
+           | "" | "." -> components
+           | ".." -> (
+               match components with
+               | component :: rest when not (String.equal component "..") ->
+                   rest
+               | _ when absolute -> components
+               | _ -> ".." :: components)
+           | component -> component :: components)
+         []
+    |> List.rev
+  in
+  { absolute; components }
+
+let lexical_path_string path =
+  let body = String.concat Filename.dir_sep path.components in
+  if path.absolute then Filename.dir_sep ^ body
+  else if String.equal body "" then "."
+  else body
+
+let append_lexical base relative =
+  lexical_path
+    (Filename.concat (lexical_path_string base) (lexical_path_string relative))
+
+let path_from_build_directory build_directory path =
+  let path = lexical_path path in
+  if path.absolute then path else append_lexical build_directory path
+
+let rec drop_common left right =
+  match (left, right) with
+  | left :: lefts, right :: rights when String.equal left right ->
+      drop_common lefts rights
+  | _ -> (left, right)
+
+let path_relative_to ~from target =
+  if from.absolute <> target.absolute then
+    raise
+      (Failure
+         (Printf.sprintf "relocated load-path roots differ: from=%s target=%s"
+            (lexical_path_string from) (lexical_path_string target)))
+  else
+    let remaining_from, remaining_target =
+      drop_common from.components target.components
+    in
+    {
+      absolute = false;
+      components =
+        List.init (List.length remaining_from) (Fun.const "..")
+        @ remaining_target;
+    }
+
+let path_has_prefix ~prefix path =
+  prefix.absolute = path.absolute
+  &&
+  let rec loop prefix path =
+    match (prefix, path) with
+    | [], _ -> true
+    | prefix :: prefixes, path :: paths when String.equal prefix path ->
+        loop prefixes paths
+    | _ -> false
+  in
+  loop prefix.components path.components
+
+let relocated_paths ~filename ~build_directory ~compiler_arguments load_path =
+  let absolute_filename =
+    if Filename.is_relative filename then Filename.concat (Sys.getcwd ()) filename
+    else filename
+  in
+  let artifact_directory = lexical_path (Filename.dirname absolute_filename) in
+  let build_directory = lexical_path build_directory in
+  let output_directories =
+    argument_after "-o" compiler_arguments
+    |> List.map Filename.dirname |> List.sort_uniq String.compare
+  in
+  let output_directory =
+    match output_directories with
+    | [] -> build_directory
+    | [ output ] -> path_from_build_directory build_directory output
+    | _ -> raise (Failure "ambiguous compiler output directories")
+  in
+  let relocate original =
+    if original = output_directory then artifact_directory
+    else if path_has_prefix ~prefix:build_directory original then
+      append_lexical artifact_directory
+        (path_relative_to ~from:output_directory original)
+    else original
+  in
+  let resolve path =
+    path_from_build_directory build_directory path |> relocate
+    |> lexical_path_string
+  in
+  ( relocate build_directory |> lexical_path_string,
+    List.map resolve load_path.Load_path.visible,
+    List.map resolve load_path.Load_path.hidden )
+
+let load_internal ?int_size ?interface_info filename =
   match Int_bounds.check_target ?int_size () with
   | Error _ as error -> error
   | Ok () -> (
@@ -474,6 +626,8 @@ let load_internal ?int_size ?interface_info
               | embedded_interface, Some info -> (embedded_interface, info)
               | _, None -> raise (Failure "missing CMT metadata")
             in
+            if not (String.equal raw_artifact_digest (artifact_digest filename))
+            then raise (Failure "CMT changed while it was being loaded");
             let embedded_interface =
               Option.is_some embedded_interface_info
             in
@@ -495,14 +649,15 @@ let load_internal ?int_size ?interface_info
                         (Failure
                            "separate implementation interface has no adjacent CMI"))
             in
-            if
-              authenticate_explicit_identity
-              &&
-              match interface_info with
-              | Some interface ->
-                  not (explicit_interface_identity_matches info interface)
-              | None -> true
-            then raise (Failure "explicit CMT/CMI identity mismatch");
+            (match interface_info with
+            | Some interface -> (
+                match explicit_interface_unsupported interface with
+                | Some classification ->
+                    raise (Unsupported_interface_metadata classification)
+                | None ->
+                    if not (explicit_interface_identity_matches info interface)
+                    then raise (Failure "explicit CMT/CMI identity mismatch"))
+            | None -> raise (Failure "missing implementation interface"));
             if
               match interface_info with
               | Some interface -> not (interface_digest_matches info interface)
@@ -523,7 +678,12 @@ let load_internal ?int_size ?interface_info
                       interface_finite_signatures ) =
                   embedded_interface_metadata interface_info
                 in
-                let load_path = info.Cmt_format.cmt_loadpath in
+                let build_directory, load_path_visible, load_path_hidden =
+                  relocated_paths ~filename
+                    ~build_directory:info.Cmt_format.cmt_builddir
+                    ~compiler_arguments:info.Cmt_format.cmt_args
+                    info.Cmt_format.cmt_loadpath
+                in
                 Ok
                   {
                     metadata = info;
@@ -541,9 +701,9 @@ let load_internal ?int_size ?interface_info
                     compiler_arguments =
                       Array.copy info.Cmt_format.cmt_args;
                     source_digest = info.Cmt_format.cmt_source_digest;
-                    build_directory = info.Cmt_format.cmt_builddir;
-                    load_path_visible = load_path.Load_path.visible;
-                    load_path_hidden = load_path.Load_path.hidden;
+                    build_directory;
+                    load_path_visible;
+                    load_path_hidden;
                     embedded_interface;
                     explicit_interface;
                     interface_unit_name;
@@ -573,20 +733,13 @@ let load_internal ?int_size ?interface_info
           | Failure _
           | Invalid_argument _ ->
               input_error Malformed_input
+          | Unsupported_interface_metadata classification ->
+              input_error classification
           | Sys_error _ -> input_error Input_io_error)
       | exception End_of_file -> input_error Malformed_input
       | exception Sys_error _ -> input_error Input_io_error)
 
 let load ?int_size filename = load_internal ?int_size filename
-
-let explicit_interface_unsupported interface =
-  if interface.Cmi_format.cmi_params <> [] then
-    Some (Diagnostic.Unsupported_input Explicit_cmi_parameters)
-  else
-    match interface.Cmi_format.cmi_kind with
-    | Cmi_format.Normal { cmi_arg_for = Some _; _ } ->
-        Some (Unsupported_input Explicit_cmi_argument_for)
-    | Normal { cmi_arg_for = None; _ } | Parameter -> None
 
 let load_with_interface ?int_size ~cmt ~cmi () =
   match Int_bounds.check_target ?int_size () with
@@ -604,8 +757,7 @@ let load_with_interface ?int_size ~cmt ~cmi () =
             match explicit_interface_unsupported interface_info with
             | Some classification -> input_error classification
             | None ->
-                load_internal ?int_size ~interface_info
-                  ~authenticate_explicit_identity:true cmt
+                load_internal ?int_size ~interface_info cmt
           with
           | Cmi_format.Error _ | End_of_file | Failure _ | Invalid_argument _ ->
               input_error Malformed_input)

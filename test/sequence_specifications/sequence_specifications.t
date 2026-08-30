@@ -1,6 +1,6 @@
-The verification client is concatenated with the provider because symbolic
-declarations are same-unit-only.  The retained artifact and direct source
-routes therefore verify the same complete Seq unit.
+This implementation-level law corpus verifies the sequence implementation and
+its internal clients as one complete unit. Public cross-unit use through
+=verocaml.vstd= and =Vstd.Seq= is covered separately by =vstd_integration=.
 
   $ mkdir -p artifacts/source artifacts/cmt artifacts/negative artifacts/ordinary artifacts/tmp
   $ cat ../../library/seq.ml fixtures/positive_client.ml > artifacts/source/seq.ml
@@ -29,16 +29,11 @@ snapshot digests; all other source SST content is stable.
   verocaml: verified-with-trusted-axioms file=<retained-cmt> functions=21 obligations=118 trusted-external-bodies=15 trusted-external-body-uses=3 trusted-external-spec-uses=0
 
 The stable retained dumps pin the complete logical surface, proof/VC totals,
-trusted law declarations, and the three explicit extensionality calls.  The
-group itself has fourteen members and intentionally omits extensionality.
+trusted law declarations, and the three explicit extensionality calls.
 
   $ sst=artifacts/cmt.1.1.sst; vir=artifacts/cmt.1.1.vir; printf 'sst functions=%s symbolic=%s axiomatic=%s extensionality-calls=%s\n' "$(grep -c '^function ' "$sst")" "$(grep -c 'body symbolic-declaration ' "$sst")" "$(grep -c 'body trusted-external-body trust=axiomatic' "$sst")" "$(grep -c 'proof-call axiom_extensionality#' "$sst")"; printf 'vir proofs=%s obligations=%s\n' "$(grep -c '^function ' "$vir")" "$(grep -c '^  vc ' "$vir")"
   sst functions=74 symbolic=8 axiomatic=15 extensionality-calls=3
   vir proofs=21 obligations=118
-  $ awk '/broadcast_group \(group_seq_axioms/{inside=1} inside{print} inside && /^\]\)\]$/{exit}' ../../library/seq.ml > artifacts/group.txt
-  $ printf 'group laws=%s extensionality-members=%s explicit-calls=%s\n' "$(grep -c '^  axiom_' artifacts/group.txt)" "$(grep -c 'axiom_extensionality' artifacts/group.txt)" "$(grep -c 'proof-call axiom_extensionality#' "$sst")"
-  group laws=14 extensionality-members=0 explicit-calls=3
-
 Invalid init lengths, empty and upper-bound gets, updates, and subranges remain
 unconstrained beyond the universal length domain.  Each deliberately false
 claim has a concrete model rather than verifying or becoming inconclusive, and
@@ -55,18 +50,19 @@ the retained negative route is repeat-stable.
   verocaml: counterexample function=invalid_update_is_not_constrained#ID vc=local-assertion[0] result=counterexample
   verocaml: counterexample function=invalid_subrange_is_not_constrained#ID vc=local-assertion[0] result=counterexample
 
-Ordinary PPX output exposes only the covariant private token carrier.  It is
-not a list representation: content and length remain entirely symbolic.
-External OCaml code can name and pass [Seq.t], but cannot fabricate its token.
+The public interface keeps the representation fully abstract. It is not a
+list representation: content and length remain entirely symbolic. External
+OCaml code can name and pass [Seq.t], but cannot fabricate a value.
 
-  $ ocamlc -w -A -alert -all -bin-annot -ppx ../../ppx/vero_ppx.exe -c -o artifacts/ordinary/seq.cmo ../../library/seq.ml
+  $ ocamlc -w -A -alert -all -bin-annot -ppx ../../ppx/vero_ppx.exe -c -o artifacts/ordinary/seq.cmi ../../library/seq.mli
+  $ ocamlc -w -A -alert -all -bin-annot -I artifacts/ordinary -ppx ../../ppx/vero_ppx.exe -c -o artifacts/ordinary/seq.cmo ../../library/seq.ml
   $ ocamlc -w -A -alert -all -I artifacts/ordinary -c -o artifacts/ordinary/type_consumer.cmo fixtures/type_consumer.ml
   $ ocamlc -i -I artifacts/ordinary fixtures/type_consumer.ml
   val identity : 'a Seq.t -> 'a Seq.t
   val keep_two : int Seq.t -> bool Seq.t -> int Seq.t * bool Seq.t
-  $ ocamlc -i -w -A -alert -all -ppx ../../ppx/vero_ppx.exe ../../library/seq.ml
-  type +'a t = private Sequence_token of int
-  $ code=0; ocamlc -w -A -alert -all -I artifacts/ordinary -c -o artifacts/ordinary/private_token.cmo fixtures/private_token_consumer.ml >artifacts/ordinary/private_token.out 2>&1 || code=$?; test "$code" = 2; grep -q 'Cannot create values of the private type "int Seq.t"' artifacts/ordinary/private_token.out
+  $ ocamlc -i -w -A -alert -all -ppx ../../ppx/vero_ppx.exe ../../library/seq.mli | head -1
+  type +'a t
+  $ code=0; ocamlc -w -A -alert -all -I artifacts/ordinary -c -o artifacts/ordinary/private_token.cmo fixtures/private_token_consumer.ml >artifacts/ordinary/private_token.out 2>&1 || code=$?; test "$code" = 2; grep -q 'Unbound constructor "Seq.Sequence_token"' artifacts/ordinary/private_token.out
   $ test ! -e artifacts/ordinary/private_token.cmo
-  $ echo 'ordinary consumers type-use=accepted carrier=private symbolic-content=true'
-  ordinary consumers type-use=accepted carrier=private symbolic-content=true
+  $ echo 'ordinary consumers type-use=accepted carrier=abstract symbolic-content=true'
+  ordinary consumers type-use=accepted carrier=abstract symbolic-content=true

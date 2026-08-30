@@ -82,7 +82,7 @@ publication. Mutual recursion remains an explicit production negative.
   mutual=frontend-rejected
   $ grep -F "VERO_MALFORMED_GHOST_CALL" external.frontend >/dev/null
   $ grep -F "VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION" partial.frontend >/dev/null
-  $ grep -F "VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION" higher-order.frontend >/dev/null
+  $ grep -F "VERO_CALLBACK_CONTRACT" higher-order.frontend >/dev/null
   $ grep -F "VERO_UNSUPPORTED_TOP_LEVEL_BINDING" runtime-cycle.frontend >/dev/null
   $ grep -F "VERO_UNSUPPORTED_MUTUAL_RECURSION" indirect-cycle.frontend >/dev/null
   $ grep -F "VERO_UNSUPPORTED_MUTUAL_RECURSION" mutual.frontend >/dev/null

@@ -18,4 +18,10 @@ typedtree_adapter
 typedtree_lowering
 verifier_service
 vero_ghost
+vero_ppx_driver
+vero_ppx_rewriter
+vero_ppx_rewriter__
 vir
+vstd
+vstd__Pervasive
+vstd__Seq

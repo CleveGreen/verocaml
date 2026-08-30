@@ -744,6 +744,7 @@ let remap_descriptor_type_id descriptor (type_id : Parametric_type.type_id) =
       ~type_constructor:(Parametric_adt.type_constructor descriptor)
       ~binders
       ~provenance:(Parametric_adt.provenance descriptor)
+      ~optional_carrier:(Parametric_adt.is_optional_carrier descriptor)
       ~kind
   with
   | Ok descriptor -> Ok descriptor

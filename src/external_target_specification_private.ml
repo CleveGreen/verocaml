@@ -110,11 +110,26 @@ let stable_type_variables typ =
          if List.mem id variables then variables else variables @ [ id ])
        []
 
-let lower_target_type binders typ =
-  Parametric_lowering_private.lower_source_type ~substitutions:[] ~binders
-    ~application:(fun _ _ ->
-      Error Parametric_lowering_private.Unsupported_source_type)
-    typ
+let lower_target_type binders ~resolve_application typ =
+  let rec lower typ =
+    Parametric_lowering_private.lower_source_type ~substitutions:[] ~binders
+      ~application:(fun path arguments ->
+        match resolve_application path with
+        | None -> Error Parametric_lowering_private.Unsupported_source_type
+        | Some descriptor ->
+            let rec lower_arguments lowered = function
+              | [] -> Ok (List.rev lowered)
+              | argument :: rest ->
+                  let* argument = lower argument in
+                  lower_arguments (argument :: lowered) rest
+            in
+            let* arguments = lower_arguments [] arguments in
+            Parametric_adt.application descriptor arguments
+            |> Result.map_error (fun _ ->
+                   Parametric_lowering_private.Unsupported_source_type))
+      typ
+  in
+  lower typ
   |> Result.map_error (function
        | Parametric_lowering_private.Polymorphic_source_type ->
            "imported external target has an unsupported polymorphic ABI"
@@ -129,11 +144,19 @@ type target = {
   import_crc : string;
 }
 
+type target_identity = {
+  identity_unit : string;
+  identity_interface : string;
+  identity_path : string;
+  identity_uid : string;
+}
+
 type environment = {
   token : unit ref;
   consumer : Cmt_input.implementation;
   consumer_digest : string;
   targets : target list;
+  mutable reserved_targets : target_identity list;
   mutable summaries : summary list;
 }
 
@@ -145,18 +168,22 @@ and candidate = {
   value_uid : string;
   labels : string option list;
   compiler_modes : compiler_callable_modes;
-  type_binders : Parametric_type.binder list;
-  formal_types : Parametric_type.t list;
-  result_type : Parametric_type.t;
+  type_binders : (int * Parametric_type.binder) list;
+  formal_source_types : Types.type_expr list;
+  result_source_type : Types.type_expr;
 }
 
 and sealed_summary = {
   sealed_token : unit ref;
   sealed_environment : environment;
   sealed_candidate : candidate;
+  sealed_definition : Sst.function_definition;
   sealed_signature : Parametric_signature_private.t;
   sealed_link : Sst.target_link;
+  mutable sealed_bound : bool;
 }
+
+and summary_origin = Local_summary | Imported_provider_summary
 
 and summary = {
   summary_token : unit ref;
@@ -165,6 +192,7 @@ and summary = {
   summary_definition : Sst.function_definition;
   summary_signature : Parametric_signature_private.t;
   summary_link : Sst.target_link;
+  summary_origin : summary_origin;
 }
 
 type registration = {
@@ -176,11 +204,11 @@ type registration = {
   mutable valid : bool;
 }
 
-let direct_import consumer target =
-  Array.find_opt
+let direct_imports consumer target =
+  Array.to_list consumer.Cmt_input.imports
+  |> List.filter
     (fun (import : Cmt_input.import) ->
       String.equal import.unit_name target.Cmt_input.unit_name)
-    consumer.Cmt_input.imports
 
 let target consumer implementation =
   let* digest = interface_digest implementation in
@@ -196,19 +224,28 @@ let target consumer implementation =
       ("imported external target " ^ implementation.unit_name
      ^ " has a nonordinary target CMI family")
   else
-    match direct_import consumer implementation with
-    | None -> Error "target is not a direct compiler import of the consumer"
-    | Some { crc = Some import_crc; _ } when String.equal import_crc digest ->
+    match direct_imports consumer implementation with
+    | [] -> Error "target is not a direct compiler import of the consumer"
+    | [ { crc = Some import_crc; _ } ] when String.equal import_crc digest ->
         Ok { implementation; interface_digest = digest; import_crc }
-    | Some _ ->
+    | [ _ ] ->
         Error
           ("consumer import CRC does not match imported external target "
+         ^ implementation.unit_name)
+    | _ ->
+        Error
+          ("consumer has duplicate import slots for external target "
          ^ implementation.unit_name)
 
 let environment ~consumer ~targets =
   let direct =
     List.filter
-      (fun implementation -> Option.is_some (direct_import consumer implementation))
+      (fun implementation ->
+        direct_imports consumer implementation <> []
+        && implementation.Cmt_input.implementation_family_markers
+           = [ "ordinary-v1" ]
+        && (implementation.interface_family_markers = []
+           || implementation.interface_family_markers = [ "ordinary-v1" ]))
       targets
   in
   let rec collect result = function
@@ -225,6 +262,7 @@ let environment ~consumer ~targets =
       consumer;
       consumer_digest = artifact_digest consumer;
       targets;
+      reserved_targets = [];
       summaries = [];
     }
 
@@ -272,16 +310,6 @@ let resolve_candidate environment ~canonical_path ~value_uid =
           |> List.mapi (fun ordinal id ->
                  (id, Parametric_type.binder owner ~ordinal))
         in
-        let* formal_types =
-          let rec lower lowered = function
-            | [] -> Ok (List.rev lowered)
-            | (_, typ) :: rest ->
-                let* typ = lower_target_type binders typ in
-                lower (typ :: lowered) rest
-          in
-          lower [] formals
-        in
-        let* result_type = lower_target_type binders result in
         let labels = List.map fst formals in
         if
           not (compiler_target_modes_are_exact_default compiler_modes)
@@ -301,9 +329,9 @@ let resolve_candidate environment ~canonical_path ~value_uid =
               value_uid;
               labels;
               compiler_modes = copy_compiler_modes compiler_modes;
-              type_binders = List.map snd binders;
-              formal_types;
-              result_type;
+              type_binders = binders;
+              formal_source_types = List.map snd formals;
+              result_source_type = result;
             }
     | [] ->
         Error
@@ -351,20 +379,41 @@ let same_link left right =
   | _, (Sst.Same_unit_target _ | Sst.Unresolved_target _) ->
       false
 
-let seal environment ~candidate ~wrapper ~signature ~target_span
-    ~declaration_span ~witness_span ~wrapper_is_unannotated_exec =
+let target_identity candidate =
+  {
+    identity_unit = candidate.target.implementation.unit_name;
+    identity_interface = candidate.target.interface_digest;
+    identity_path = candidate.canonical_path;
+    identity_uid = candidate.value_uid;
+  }
+
+let same_target_identity left right =
+  String.equal left.identity_unit right.identity_unit
+  && String.equal left.identity_interface right.identity_interface
+  && (String.equal left.identity_path right.identity_path
+     || String.equal left.identity_uid right.identity_uid)
+
+let target_is_reserved environment candidate =
+  let identity = target_identity candidate in
+  List.exists (same_target_identity identity) environment.reserved_targets
+
+let target_has_summary environment candidate =
+  let identity = target_identity candidate in
+  List.exists
+    (fun summary ->
+      same_target_identity identity (target_identity summary.summary_candidate))
+    environment.summaries
+
+let seal environment ~candidate ~resolve_application ~wrapper ~signature
+    ~target_span ~declaration_span ~witness_span ~wrapper_is_unannotated_exec =
   if
     environment.token != issuer
     || candidate.candidate_token != issuer
     || candidate.candidate_environment != environment
   then Error "raw or copied external target candidate"
   else if
-    List.exists
-      (fun summary ->
-        String.equal summary.summary_candidate.canonical_path
-          candidate.canonical_path
-        && String.equal summary.summary_candidate.value_uid candidate.value_uid)
-      environment.summaries
+    target_is_reserved environment candidate
+    || target_has_summary environment candidate
   then Error "duplicate or competing verified external specification"
   else if not wrapper_is_unannotated_exec then
     Error "mode-bearing verified external specifications are unsupported"
@@ -386,6 +435,21 @@ let seal environment ~candidate ~wrapper ~signature ~target_span
         formals
     in
     let expected_kinds = List.map kind_for_label candidate.labels in
+    let* target_formals =
+      let rec lower lowered = function
+        | [] -> Ok (List.rev lowered)
+        | typ :: rest ->
+            let* typ =
+              lower_target_type candidate.type_binders ~resolve_application typ
+            in
+            lower (typ :: lowered) rest
+      in
+      lower [] candidate.formal_source_types
+    in
+    let* target_result =
+      lower_target_type candidate.type_binders ~resolve_application
+        candidate.result_source_type
+    in
     let signature_binders = Parametric_signature_private.binders signature
     and signature_formals = Parametric_signature_private.formals signature
     and signature_result = Parametric_signature_private.result_type signature in
@@ -396,13 +460,13 @@ let seal environment ~candidate ~wrapper ~signature ~target_span
       Error "verified external specification differs from the complete compiler ABI"
     else if
       List.length signature_binders <> List.length candidate.type_binders
-      || List.length signature_formals <> List.length candidate.formal_types
+      || List.length signature_formals <> List.length target_formals
       || not
            (List.for_all2
               (fun (formal : Parametric_signature_private.formal) typ ->
                 Parametric_type.alpha_equal formal.typ typ)
-              signature_formals candidate.formal_types)
-      || not (Parametric_type.alpha_equal signature_result candidate.result_type)
+              signature_formals target_formals)
+      || not (Parametric_type.alpha_equal signature_result target_result)
     then
       Error
         "verified external specification type/binder ABI differs from its target CMI"
@@ -448,14 +512,30 @@ let seal environment ~candidate ~wrapper ~signature ~target_span
             witness_span;
           }
       in
-      Ok
+      let sealed_definition =
+        {
+          wrapper with
+          Sst.body = Sst.External_specification sealed_link;
+        }
+      in
+      let* sealed_signature =
+        Parametric_signature_private.rebind_definition signature
+          sealed_definition
+      in
+      let sealed =
         {
           sealed_token = issuer;
           sealed_environment = environment;
           sealed_candidate = candidate;
-          sealed_signature = signature;
+          sealed_definition;
+          sealed_signature;
           sealed_link;
+          sealed_bound = false;
         }
+      in
+      environment.reserved_targets <-
+        target_identity candidate :: environment.reserved_targets;
+      Ok sealed
 
 let link sealed = sealed.sealed_link
 
@@ -463,28 +543,27 @@ let bind_definition environment sealed ~definition =
   if
     sealed.sealed_token != issuer || sealed.sealed_environment != environment
   then Error "raw or replayed verified external specification"
-  else if
-    definition.Sst.body <> Sst.External_specification sealed.sealed_link
-  then Error "verified external specification definition does not carry its exact seal"
+  else if sealed.sealed_bound then
+    Error "verified external specification seal was already bound"
+  else if definition <> sealed.sealed_definition then
+    Error "verified external specification definition differs from its exact seal"
   else
-    let* signature =
-      Parametric_signature_private.rebind_definition sealed.sealed_signature
-        definition
-    in
     let summary =
       {
         summary_token = issuer;
         summary_environment = environment;
         summary_candidate = sealed.sealed_candidate;
         summary_definition = definition;
-        summary_signature = signature;
+        summary_signature = sealed.sealed_signature;
         summary_link = sealed.sealed_link;
+        summary_origin = Local_summary;
       }
     in
+    sealed.sealed_bound <- true;
     environment.summaries <- summary :: environment.summaries;
     Ok summary
 
-let complete_summary environment ~candidate ~wrapper_id ~type_binders
+let complete_summary environment ~candidate ~resolve_application ~wrapper_id ~type_binders
     ~parameter_nodes ~parameters ~contracts ~terminal_arguments ~result_type
     ~target_span ~declaration_span ~witness_span
     ~wrapper_is_unannotated_exec =
@@ -552,7 +631,8 @@ let complete_summary environment ~candidate ~wrapper_id ~type_binders
         ~result_mode:Sst.Exec_instance ~recursive_evidence:None
     in
     let* sealed =
-      seal environment ~candidate ~wrapper:provisional ~signature ~target_span
+      seal environment ~candidate ~resolve_application ~wrapper:provisional
+        ~signature ~target_span
         ~declaration_span ~witness_span ~wrapper_is_unannotated_exec
     in
     let definition =
@@ -591,7 +671,9 @@ let position_before (left : Diagnostic.span) (right : Diagnostic.span) =
      && left.end_pos.column <= right.start_pos.column))
 
 let call_is_after_summary summary call_span =
-  position_before (witness_span summary) call_span
+  match summary.summary_origin with
+  | Local_summary -> position_before (witness_span summary) call_span
+  | Imported_provider_summary -> true
 
 let mode_prefix = "verocaml.internal.instance_mode."
 let compiler_mode_marker = "verocaml.internal.compiler_mode_syntax"
@@ -628,12 +710,133 @@ let has_mode_bearing_syntax binding =
   in
   iterator.value_binding iterator binding;
   !found
+
+let adopt_imported environment ~provider_unit ~provider_interface ~definition
+    ~signature ~target_link =
+  if environment.token != issuer then
+    Error "foreign target-specification environment"
+  else if
+    not
+      (Array.exists
+         (fun (import : Cmt_input.import) ->
+           String.equal import.unit_name provider_unit
+           && import.crc = Some provider_interface)
+         environment.consumer.imports)
+  then Error "consumer does not directly import the external-specification provider"
+  else
+    match target_link with
+    | Sst.Same_unit_target _ | Sst.Unresolved_target _ ->
+        Error "provider external specification has a nonportable target link"
+    | Sst.Imported_unverified_target source ->
+        let* candidate =
+          resolve_candidate environment ~canonical_path:source.canonical_path
+            ~value_uid:source.value_uid
+        in
+        if
+          not
+            (String.equal candidate.target.implementation.unit_name
+               source.target_unit
+            && String.equal candidate.target.interface_digest
+                 source.target_interface_digest
+            && String.equal candidate.target.import_crc source.import_crc)
+        then Error "consumer target identity differs from the provider specification"
+        else if
+          definition.Sst.body <> Sst.External_specification target_link
+        then Error "provider external specification body does not match its descriptor"
+        else
+          let formals = Parametric_signature_private.formals signature in
+          let labels =
+            List.map
+              (fun (formal : Parametric_signature_private.formal) -> formal.label)
+              formals
+          and kinds =
+            List.map
+              (fun (formal : Parametric_signature_private.formal) -> formal.kind)
+              formals
+          in
+          let formal_modes, result_mode =
+            Parametric_signature_private.modes signature
+          in
+          let fingerprint =
+            Parametric_signature_private.semantic_fingerprint signature
+          in
+          if
+            labels <> candidate.labels
+            || kinds <> List.map kind_for_label candidate.labels
+            || List.length (Parametric_signature_private.binders signature)
+               <> List.length candidate.type_binders
+            || List.exists (( <> ) Sst.Exec_instance) formal_modes
+            || result_mode <> Sst.Exec_instance
+          then Error "provider external specification ABI differs from the target"
+          else if
+            target_is_reserved environment candidate
+            || target_has_summary environment candidate
+          then Error "overlapping external function specifications"
+          else
+            let summary_digest =
+              digest
+                (String.concat "\000"
+                   [
+                     "imported-provider-external-target-specification-v1";
+                     environment.consumer_digest;
+                     provider_unit;
+                     provider_interface;
+                     candidate.target.implementation.unit_name;
+                     candidate.target.interface_digest;
+                     candidate.canonical_path;
+                     candidate.value_uid;
+                     fingerprint;
+                     source.summary_digest;
+                   ])
+            in
+            let link =
+              Sst.Imported_unverified_target
+                {
+                  wrapper = definition.function_id;
+                  consumer_artifact_digest = environment.consumer_digest;
+                  target_unit = candidate.target.implementation.unit_name;
+                  target_interface_digest = candidate.target.interface_digest;
+                  import_crc = candidate.target.import_crc;
+                  canonical_path = candidate.canonical_path;
+                  value_uid = candidate.value_uid;
+                  callable_abi_digest = fingerprint;
+                  summary_digest;
+                  target_span = source.target_span;
+                  declaration_span = source.declaration_span;
+                  witness_span = source.witness_span;
+                }
+            in
+            let definition =
+              { definition with Sst.body = Sst.External_specification link }
+            in
+            let* signature =
+              Parametric_signature_private.rebind_definition signature definition
+            in
+            environment.summaries <-
+              {
+                summary_token = issuer;
+                summary_environment = environment;
+                summary_candidate = candidate;
+                summary_definition = definition;
+                summary_signature = signature;
+                summary_link = link;
+                summary_origin = Imported_provider_summary;
+              }
+              :: environment.summaries;
+            Ok ()
+
+let adopted_definitions registration =
+  List.filter_map
+    (fun summary ->
+      match summary.summary_origin with
+      | Imported_provider_summary -> Some summary.summary_definition
+      | Local_summary -> None)
+    registration.registration_summaries
+
 let rebind_program_summary program summary =
   let matches =
     List.filter
-      (fun definition ->
-        definition.Sst.function_id = summary.summary_definition.function_id
-        && definition.body = Sst.External_specification summary.summary_link)
+      (fun definition -> definition = summary.summary_definition)
       program.Sst.functions
   in
   match matches with
@@ -642,7 +845,12 @@ let rebind_program_summary program summary =
         Parametric_signature_private.rebind_definition
           summary.summary_signature definition
       in
-      Ok { summary with summary_definition = definition; summary_signature = signature }
+      Ok
+        {
+          summary with
+          summary_definition = definition;
+          summary_signature = signature;
+        }
   | [] -> Error "verified external specification definition is absent from the program"
   | _ -> Error "competing verified external specification definitions"
 
@@ -655,7 +863,11 @@ let register environment ~consumer ~program =
       let rec rebind rebound = function
         | [] -> Ok (List.rev rebound)
         | summary :: rest ->
-            let* summary = rebind_program_summary program summary in
+            let* summary =
+              match summary.summary_origin with
+              | Local_summary -> rebind_program_summary program summary
+              | Imported_provider_summary -> Ok summary
+            in
             rebind (summary :: rebound) rest
       in
       rebind [] environment.summaries
@@ -707,8 +919,7 @@ let authenticate_call registration ~program ~caller:_ ~callee
     match find_definition_summary registration callee with
     | None -> Error "call has no exact verified external specification"
     | Some summary ->
-        let witness = witness_span summary in
-        if not (position_before witness expression.Sst.span) then
+        if not (call_is_after_summary summary expression.Sst.span) then
           Error "external target call occurs before its summary"
         else
           match expression.expression_desc with

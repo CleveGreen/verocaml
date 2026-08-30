@@ -669,6 +669,115 @@ let trigger_structure filename =
   List.iter inspect expected;
   Symbolic_declaration_private.destroy authenticated.program
 
+let imported_issuance () =
+  let span = Diagnostic.file_span "imported_symbolic_test.ml" in
+  let function_id : Sst.function_id =
+    { function_index = 701; function_name = "Imported_symbol.image" }
+  in
+  let declaration () =
+    match
+      Symbolic_application_private.declare ~marker_id:"provider-marker"
+        ~declaration_index:function_id.function_index
+        ~declaration_name:function_id.function_name
+        ~canonical_path:"Provider.image" ~value_uid:"Provider.image.uid"
+        ~source_file:"provider.ml" ~compilation_identity:"provider-cmt"
+        ~declaration_span:span ~type_binders:[]
+        ~parameter_types:[ Sst.Int ] ~result_type:Sst.Int
+    with
+    | Ok declaration -> declaration
+    | Error message -> fail "%s" message
+  in
+  let issued = declaration () in
+  let definition : Sst.function_definition =
+    {
+      function_id;
+      type_binders = [];
+      mode = Sst.Spec;
+      recursive = false;
+      parameters =
+        [
+          Sst.Value_parameter
+            {
+              label = None;
+              pattern = { pattern_desc = Sst.Wildcard; typ = Sst.Int; span };
+              optional_default = None;
+            };
+        ];
+      contracts = Sst.empty_contracts;
+      body = Sst.Symbolic_declaration issued;
+      policy = Sst.Default_linear_z3;
+      result_type = Sst.Int;
+      returns_unique_parameter = None;
+      span;
+    }
+  in
+  let program : Sst.program =
+    {
+      policy = Sst.Default_linear_z3;
+      parametric_adts = [];
+      types = [];
+      functions = [];
+    }
+  in
+  let expect_error name = function
+    | Ok _ -> fail "%s unexpectedly succeeded" name
+    | Error _ -> ()
+  in
+  (match
+     Symbolic_declaration_private.authenticate_imported
+       ~canonical_path:"Provider.image" ~value_uid:"Provider.image.uid"
+       definition
+   with
+  | Ok authenticated when authenticated == issued -> ()
+  | Ok _ -> fail "imported authentication copied the declaration identity"
+  | Error message -> fail "%s" message);
+  expect_error "wrong imported path"
+    (Symbolic_declaration_private.authenticate_imported
+       ~canonical_path:"Provider.other" ~value_uid:"Provider.image.uid"
+       definition);
+  expect_error "wrong imported UID"
+    (Symbolic_declaration_private.authenticate_imported
+       ~canonical_path:"Provider.image" ~value_uid:"Provider.other.uid"
+       definition);
+  (match
+     Symbolic_declaration_private.seal ~program
+       ~imported_definitions:[ definition ]
+   with
+  | Ok () -> ()
+  | Error message -> fail "%s" message);
+  let argument : Sst.expression =
+    { expression_desc = Sst.Int_constant (Z.of_int 7); typ = Sst.Int; span }
+  in
+  let application declaration =
+    match
+      Symbolic_declaration_private.application ~declaration ~type_arguments:[]
+        ~arguments:[ argument ] ~result_type:Sst.Int ~span
+    with
+    | Ok application -> application
+    | Error message -> fail "%s" message
+  in
+  (match
+     Symbolic_declaration_private.validate_application ~program ~logical:true
+       ~expression_type:Sst.Int (application issued)
+   with
+  | Ok [ authenticated_argument ] when authenticated_argument == argument -> ()
+  | Ok _ -> fail "imported symbolic application arguments changed"
+  | Error message -> fail "%s" message);
+  expect_error "executable imported symbolic use"
+    (Symbolic_declaration_private.validate_application ~program ~logical:false
+       ~expression_type:Sst.Int (application issued));
+  expect_error "unissued equal imported declaration"
+    (Symbolic_declaration_private.validate_application ~program ~logical:true
+       ~expression_type:Sst.Int (application (declaration ())));
+  let duplicate_program = { program with Sst.functions = [] } in
+  expect_error "duplicate imported symbolic identity"
+    (Symbolic_declaration_private.seal ~program:duplicate_program
+       ~imported_definitions:[ definition; definition ]);
+  Symbolic_declaration_private.destroy program;
+  Symbolic_declaration_private.destroy duplicate_program;
+  print_endline
+    "imported-symbolic path=exact uid=exact issuance=consumer-bound ambiguity=rejected"
+
 let () =
   match Array.to_list Sys.argv with
   | [ _; "structural"; filename ] -> structural filename
@@ -677,6 +786,7 @@ let () =
   | [ _; "diagnostic"; filename ] -> diagnostic filename
   | [ _; "declarations"; filename ] -> declaration_identities filename
   | [ _; "trigger-structure"; filename ] -> trigger_structure filename
+  | [ _; "imported-issuance" ] -> imported_issuance ()
   | [ _; "wrong-artifact"; target; donor ] -> wrong_artifact target donor
   | [ _; "wrong-use"; filename; attack; source_name ] ->
       wrong_use filename attack source_name
@@ -686,5 +796,5 @@ let () =
   | _ ->
       fail
         "usage: symbolic_specifications_tool \
-         (structural|semantic|route-parity|diagnostic|declarations|trigger-structure|wrong-artifact|wrong-use|wrong-binding|wrong-program) \
+         (structural|semantic|route-parity|diagnostic|declarations|trigger-structure|imported-issuance|wrong-artifact|wrong-use|wrong-binding|wrong-program) \
          CMT [DONOR]"

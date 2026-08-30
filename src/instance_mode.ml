@@ -85,11 +85,44 @@ type environment = {
   mutable standalone_proof_binding_traces : string list;
 }
 
+type unannotated_erased_call = {
+  caller : Sst.function_id;
+  callee : Sst.function_id;
+  callee_mode : Sst.verification_mode;
+}
+
 type error = {
   function_id : Sst.function_id option;
   span : Diagnostic.span;
   message : string;
+  unannotated_erased_call : unannotated_erased_call option;
 }
+
+let verification_mode_name = function
+  | Sst.Spec -> "specification"
+  | Sst.Proof -> "proof"
+  | Sst.Exec -> "executable function"
+
+let to_diagnostic error =
+  match error.unannotated_erased_call with
+  | Some { caller; callee; callee_mode } ->
+      Diagnostic.make
+        (Diagnostic.Unannotated_erased_call
+           {
+             caller_name = caller.function_name;
+             callee_name = callee.function_name;
+             callee_mode = verification_mode_name callee_mode;
+           })
+        error.span
+  | None ->
+      Diagnostic.make
+        (Diagnostic.Invalid_semantic_program
+           {
+             function_name =
+               Option.map (fun id -> id.Sst.function_name) error.function_id;
+             detail = error.message;
+           })
+        error.span
 
 let process_issuer = ref ()
 let registrations : registration list ref = ref []
@@ -391,17 +424,6 @@ let has_sealed_registration program =
       String.equal raw_snapshot (Sst.to_string program)
   | Some _ | None -> false
 
-let ppx_is_retained arguments =
-  let rec loop = function
-    | [] | [ _ ] -> false
-    | "-ppx" :: command :: rest ->
-        String.split_on_char ' ' command
-        |> List.exists (String.equal "--keep-ghost")
-        || loop rest
-    | _ :: rest -> loop rest
-  in
-  loop (Array.to_list arguments)
-
 let digest value = Digest.string value |> Digest.to_hex
 
 let span_string (span : Diagnostic.span) =
@@ -436,7 +458,9 @@ let signature_snapshot registration identity =
        ])
 
 let seal implementation program =
-  let fail ?function_id span message = Error { function_id; span; message } in
+  let fail ?function_id span message =
+    Error { function_id; span; message; unannotated_erased_call = None }
+  in
   let fallback = Diagnostic.file_span implementation.Cmt_input.source_file in
   match find_registration program with
   | None ->
@@ -451,7 +475,7 @@ let seal implementation program =
       fail fallback "instance-mode authority rejected a changed SST snapshot"
   | Some registration
     when
-      (not (ppx_is_retained implementation.compiler_arguments))
+      (not (Cmt_input.retained_preprocessing implementation))
       && registration.requests = []
       && registration.family_markers = [] ->
       (* Legacy/default-only CMTs may still pass through ordinary semantic
@@ -459,7 +483,7 @@ let seal implementation program =
          mode-sensitive or invariant-authority query can authenticate them. *)
       Ok ()
   | Some _registration
-    when not (ppx_is_retained implementation.compiler_arguments) ->
+    when not (Cmt_input.retained_preprocessing implementation) ->
       fail fallback
         "instance-mode authority requires the retained artifact family"
   | Some registration
@@ -587,7 +611,8 @@ let issue (environment : environment) ~identity ~subject ~mode ~request
   add_descriptor environment descriptor;
   descriptor
 
-let error ?function_id span message = Error { function_id; span; message }
+let error ?function_id ?unannotated_erased_call span message =
+  Error { function_id; span; message; unannotated_erased_call }
 
 let ( let* ) result continuation =
   match result with Ok value -> continuation value | Error _ as error -> error
@@ -838,8 +863,9 @@ let validate program =
       (fun definition -> definition.Sst.function_id = function_id)
       program.functions
   in
-  let fail definition span message =
-    error ~function_id:definition.Sst.function_id span message
+  let fail ?unannotated_erased_call definition span message =
+    error ~function_id:definition.Sst.function_id ?unannotated_erased_call span
+      message
   in
   let rec issue_pattern (definition : Sst.function_definition) expected
       (pattern : Sst.pattern) =
@@ -1459,7 +1485,14 @@ let validate program =
                   && erased callee_result
                   && selected = None
                 then
-                  fail definition expression.span
+                  fail
+                    ~unannotated_erased_call:
+                      {
+                        caller = definition.function_id;
+                        callee = callee.function_id;
+                        callee_mode = callee.mode;
+                      }
+                    definition expression.span
                     "erased executable call result requires one explicit \
                      matching annotation"
                 else Ok ()
@@ -1860,6 +1893,12 @@ let validate program =
       |> Option.map type_signature
     else None
   in
+  let default_only_type_signature signature =
+    String.equal signature ""
+    ||
+    (String.split_on_char ';' signature
+    |> List.for_all (String.ends_with ~suffix:"=default"))
+  in
   let* () =
     match registration with
     | Some
@@ -1879,6 +1918,10 @@ let validate program =
             match (expected, actual_interface_signature key) with
             | Some expected, Some actual when String.equal expected actual ->
                 Ok ()
+            | Some "", Some actual
+              when String.starts_with ~prefix:"type:" key
+                   && default_only_type_signature actual ->
+                Ok ()
             | Some _, Some _ ->
                 Error
                   {
@@ -1891,6 +1934,7 @@ let validate program =
                       "retained implementation modes do not match the exact \
                        retained interface mode signature for "
                       ^ key;
+                    unannotated_erased_call = None;
                   }
             | None, Some _ ->
                 Error
@@ -1904,6 +1948,7 @@ let validate program =
                       "retained interface is missing an authenticated mode \
                        signature for "
                       ^ key;
+                    unannotated_erased_call = None;
                   }
             | Some _, None | None, None -> Ok ())
           (Ok ()) interface_mode_signatures

@@ -14,6 +14,7 @@ depends: [
   "smtml" {= "0.25.0"}
   "zarith" {= "1.14"}
   "parallel" {= "v0.18~preview.130.83+317+verocaml.1"}
+  "ppxlib" {>= "0.33.0"}
   "z3" {= "4.15.2+verocaml.1"}
 ]
 build: [

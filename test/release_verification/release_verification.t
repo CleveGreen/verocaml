@@ -99,14 +99,17 @@ Known unsupported input and exact command-line shape errors are exit 2. These
 remain distinct from counterexamples and supported-path internal failures.
 
   $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/aliased_write.cmt --timeout-ms 60000 2>&1
-  verocaml: error[VERO_UNSUPPORTED_MUTATION] mutation is reserved for unique-state lowering @ fixtures/aliased_write.ml:2:42-2:56
+  File "fixtures/aliased_write.ml", line 2, characters 42-56:
+  Error: [VERO_UNSUPPORTED_MUTATION] mutation is reserved for unique-state lowering
   [2]
   $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/input_signature.cmti --timeout-ms 60000 2>&1
-  verocaml: error[VERO_UNSUPPORTED_INTERFACE] interface typed trees are not supported @ fixtures/input_signature.mli:1:0-1:15
+  File "fixtures/input_signature.mli", line 1, characters 0-15:
+  Error: [VERO_UNSUPPORTED_INTERFACE] interface typed trees are not supported
   [2]
   $ printf 'not a cmt\n' > artifacts/malformed.cmt
   $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/malformed.cmt --timeout-ms 60000 2>&1
-  verocaml: error[VERO_MALFORMED_INPUT] input is not a complete typed-tree artifact @ artifacts/malformed.cmt:1:0-1:0
+  File "artifacts/malformed.cmt", line 1, characters 0-0:
+  Error: [VERO_MALFORMED_INPUT] input is not a complete typed-tree artifact
   [2]
   $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/stack_demo.cmt --timeout-ms 60000 --solver cvc5 2>&1
   verocaml: error[VERO_CLI] unsupported solver "cvc5"; expected z3
@@ -124,7 +127,8 @@ remain distinct from counterexamples and supported-path internal failures.
   verocaml: error[VERO_CLI] unknown or incomplete option --rlimit
   [2]
   $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/does-not-exist.cmt --timeout-ms 0x10 2>&1
-  verocaml: error[VERO_INPUT_IO] input could not be read @ artifacts/does-not-exist.cmt:1:0-1:0
+  File "artifacts/does-not-exist.cmt", line 1, characters 0-0:
+  Error: [VERO_INPUT_IO] input could not be read
   [2]
   $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/stack_demo.cmt --timeout-ms 60000 --unknown 2>&1
   verocaml: error[VERO_CLI] unknown or incomplete option --unknown

@@ -1,5 +1,14 @@
 [@@@verocaml.verify]
 
+type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
+type 'a list_specification = 'a list
+[@@verocaml.external_type_specification]
+
+type ('a, 'error) result_specification = ('a, 'error) result
+[@@verocaml.external_type_specification]
+
 type 'a batch = { ready : 'a list; deferred : 'a list }
 type ('a, 'error) outcome = Accepted of 'a | Rejected of 'error
 type 'a tree = Leaf | Branch of 'a * 'a tree * 'a tree

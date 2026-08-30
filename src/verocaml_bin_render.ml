@@ -116,8 +116,8 @@ let internal_error message =
   Printf.sprintf "verocaml: %s[VERO_INTERNAL] %s" (error_label ()) message
 
 let frontend_error (diagnostic : Diagnostic.t) =
-  Printf.sprintf "verocaml: %s[%s] %s @ %s" (error_label ()) diagnostic.code
-    diagnostic.message (span diagnostic.span)
+  Format.asprintf "%a" Location.print_report (Diagnostic.report diagnostic)
+  |> String.trim
 
 let dependency_error ~unit_name ~message =
   let message =

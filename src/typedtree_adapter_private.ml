@@ -1624,6 +1624,7 @@ module Public = struct
   }
   type imported_type = {
     imported_type_path : string;
+    imported_type_uid : string;
     imported_type_definition : Sst.type_definition;
     imported_parametric_descriptor : Parametric_adt.t option;
   }
@@ -1661,6 +1662,7 @@ module Public = struct
   let empty_callback_lowering_state = Typedtree_callback_private.create_state
   type lowering_context = {
     source_file : string;
+    typing_environment : Env.t;
     proof_capture_artifact : proof_capture_artifact option;
     broadcast_scan : Typedtree_broadcast_private.t option;
     symbolic_scan : Typedtree_symbolic_private.t option;
@@ -1697,6 +1699,11 @@ module Public = struct
       fields = [];
       constructors = [];
     }
+  let function_environment function_ =
+    function_.value_binding.Typedtree.vb_expr.Typedtree.exp_env
+  let functions_environment = function
+    | function_ :: _ -> function_environment function_
+    | [] -> Env.empty
   let ranked_deeply_immutable_type aggregates type_id =
     let descriptors =
       List.map
@@ -1824,6 +1831,12 @@ module Public = struct
     Spec_function_type_private.resolves_to_spec_carrier
   let type_has_path = Callback_shape_private.compiler_type_has_path
   let compiler_uid uid = Format.asprintf "%a" Types.Uid.print uid
+  let normalized_type_path environment path =
+    try Env.normalize_type_path None environment path with Env.Error _ -> path
+  let type_uid environment path =
+    let path = normalized_type_path environment path in
+    try Some (compiler_uid (Env.find_type path environment).Types.type_uid)
+    with Not_found | Env.Error _ -> None
   let symbolic_context_is_logical context =
     context.logical_ghost_depth > 0
     ||
@@ -1860,18 +1873,52 @@ module Public = struct
               Spec_function_type_private.Aggregate_application local.type_id
           | Some _ -> Spec_function_type_private.Polymorphic_application
           | None -> (
-              match
-                List.find_opt
+              let path_name = Path.name path in
+              let normalized_path_name =
+                Path.name
+                  (normalized_type_path context.typing_environment path)
+              in
+              let path_uid = type_uid context.typing_environment path in
+              let imported_matches =
+                List.filter
                   (fun imported ->
-                    String.equal imported.imported_type_path (Path.name path))
+                    let target_match =
+                      match imported.imported_parametric_descriptor with
+                      | Some descriptor -> (
+                          match Parametric_adt.provenance descriptor with
+                          | Parametric_adt.External _ ->
+                              let constructor =
+                                Parametric_adt.type_constructor descriptor
+                              in
+                              String.equal constructor.constructor_path
+                                path_name
+                              || String.equal constructor.constructor_path
+                                   normalized_path_name
+                              || Option.fold ~none:false
+                                   ~some:
+                                     (String.equal
+                                        (Parametric_adt.compiler_uid descriptor))
+                                   path_uid
+                          | Parametric_adt.Local _ -> false)
+                      | None -> false
+                    in
+                    target_match
+                    || String.equal imported.imported_type_path path_name
+                    || String.equal imported.imported_type_path
+                         normalized_path_name
+                    || Option.fold ~none:false
+                         ~some:(String.equal imported.imported_type_uid)
+                         path_uid)
                   context.imported.imported_types
-              with
-              | Some { imported_parametric_descriptor = Some descriptor; _ } ->
+              in
+              match imported_matches with
+              | [ { imported_parametric_descriptor = Some descriptor; _ } ] ->
                   Spec_function_type_private.Parametric_application descriptor
-              | Some imported ->
+              | [ imported ] ->
                   Spec_function_type_private.Aggregate_application
                     imported.imported_type_definition.type_id
-              | None ->
+              | [] -> Spec_function_type_private.Unsupported_application
+              | _ :: _ :: _ ->
                   Spec_function_type_private.Unsupported_application))
     in
     match
@@ -1892,6 +1939,18 @@ module Public = struct
         context.current_function
     in
     normalized_type_with_substitutions context substitutions location typ
+  let optional_carrier context location payload =
+    let descriptors =
+      List.map
+        (fun item -> item.Parametric_adt_lowering_private.descriptor)
+        context.aggregates.parametric_adts
+      @ List.filter_map
+          (fun imported -> imported.imported_parametric_descriptor)
+          context.imported.imported_types
+    in
+    match Parametric_adt.option_application descriptors payload with
+    | Some carrier -> Ok carrier
+    | None -> unsupported context location Diagnostic.Unsupported_type
   module Imported_specialization_for_testing = struct
     let accepts ~imported_path:_ ~definition_name:_ _argument_names = false
   end
@@ -2239,6 +2298,71 @@ module Public = struct
                  List.assoc_opt function_.function_id.function_index
                    context.symbolic_definitions ))
              (symbolic_source context function_))
+  let imported_symbolic_candidates context path =
+    let canonical_path = Path.name path in
+    List.filter
+      (fun imported ->
+        String.equal imported.imported_path canonical_path
+        && Symbolic_declaration_private.is_symbolic
+             imported.imported_definition)
+      context.imported.imported_callables
+  let has_symbolic_candidate context path =
+    symbolic_candidates context path <> []
+    || imported_symbolic_candidates context path <> []
+  let symbolic_use_diagnostic context kind location message =
+    let classification =
+      match kind with
+      | `Authentication -> Diagnostic.Invalid_symbolic_authentication message
+      | `Declaration -> Diagnostic.Invalid_symbolic_declaration message
+      | `Application -> Diagnostic.Invalid_symbolic_application message
+    in
+    Diagnostic.make classification (span context location)
+  let authenticate_symbolic_candidate context location path description =
+    let local = symbolic_candidates context path in
+    let imported = imported_symbolic_candidates context path in
+    match (local, imported) with
+    | _ :: _, _ :: _ ->
+        Error
+          (symbolic_use_diagnostic context `Authentication location
+             "symbolic use resolves to both local and imported declarations")
+    | [], [ imported ] ->
+        if not (symbolic_context_is_logical context) then
+          Error
+            (symbolic_use_diagnostic context `Application location
+               "symbolic declarations are unavailable to executable code")
+        else
+          Symbolic_declaration_private.authenticate_imported
+            ~canonical_path:(Path.name path)
+            ~value_uid:(compiler_uid description.Types.val_uid)
+            imported.imported_definition
+          |> Result.map (fun declaration ->
+                 (imported.imported_definition.function_id, declaration))
+          |> Result.map_error (fun message ->
+                 symbolic_use_diagnostic context `Authentication location
+                   message)
+    | [], [] ->
+        Error
+          (symbolic_use_diagnostic context `Authentication location
+             "symbolic use does not resolve to a declaration")
+    | [], _ :: _ :: _ ->
+        Error
+          (symbolic_use_diagnostic context `Authentication location
+             "symbolic use resolves to multiple imported declarations")
+    | _ :: _, [] ->
+        Typedtree_symbolic_private.authenticate_candidate
+          ~logical:(symbolic_context_is_logical context)
+          ~candidates:(fun _ -> local) ~path
+          ~value_uid:(compiler_uid description.Types.val_uid) ~location
+        |> Result.map (fun (function_, declaration) ->
+               (function_.function_id, declaration))
+        |> Result.map_error (fun error ->
+               let kind =
+                 match error.Typedtree_symbolic_private.use_error_kind with
+                 | Authentication -> `Authentication
+                 | Declaration -> `Declaration
+                 | Application -> `Application
+               in
+               symbolic_use_diagnostic context kind error.location error.message)
   let normalize_value_path expression path =
     try
       Env.normalize_value_path (Some expression.exp_loc) expression.exp_env path
@@ -2248,7 +2372,7 @@ module Public = struct
       Typedtree_spec_function_private.logical =
         symbolic_context_is_logical context;
       normalize = normalize_value_path;
-      symbolic = (fun path -> symbolic_candidates context path <> []);
+      symbolic = has_symbolic_candidate context;
       resolves_to =
         (fun path module_name name ->
           path_resolves_to context path module_name name);
@@ -3013,7 +3137,7 @@ module Public = struct
     && Option.is_some implementation.interface_digest
     && Option.is_some implementation.source_digest
     && implementation.has_implementation_shape
-    && retained_ppx_arguments implementation.compiler_arguments
+    && Cmt_input.retained_preprocessing implementation
     && exact_retained_family function_.value_binding.vb_attributes
   let proof_definition_body function_ =
     match function_.function_kind with
@@ -3617,11 +3741,8 @@ module Public = struct
           (fun callee arguments ->
             Option.map
               (fun (path, _, description, arguments) ->
-                Typedtree_symbolic_private.authenticate_candidate
-                  ~logical:(symbolic_context_is_logical context)
-                  ~candidates:(symbolic_candidates context) ~path
-                  ~value_uid:(compiler_uid description.Types.val_uid)
-                  ~location:callee.exp_loc
+                authenticate_symbolic_candidate context callee.exp_loc path
+                  description
                 |> Result.to_option
                 |> Option.map (fun (_, declaration) ->
                        (declaration, arguments)))
@@ -3978,20 +4099,25 @@ module Public = struct
   let callback_diagnostic context construct location =
     Diagnostic.make (Diagnostic.Unsupported_construct construct)
       (span context location)
+  let callback_diagnostic_with_message context construct location message =
+    callback_diagnostic context construct location
+    |> Diagnostic.with_message message
   let callback_authentication_error context location message =
-    let () = ignore message in
     Error
-      (callback_diagnostic context Diagnostic.Callback_authentication location)
+      (callback_diagnostic_with_message context Diagnostic.Callback_authentication
+         location message)
   let callback_policy_error context location message =
-    let () = ignore message in
-    Error (callback_diagnostic context Diagnostic.Callback_policy location)
+    Error
+      (callback_diagnostic_with_message context Diagnostic.Callback_policy
+         location message)
   let explicit_top_level_callback_contract context function_ =
     Typedtree_callback_private.validate_top_level_contract
       ~retained_pair:(retained_ghost_pair context)
       ~application:(fun retained -> retained.contract_application)
       ~resolves:(path_resolves_to context)
-      ~error:(fun location _ ->
-        callback_diagnostic context Diagnostic.Callback_contract location)
+      ~error:(fun location message ->
+        callback_diagnostic_with_message context Diagnostic.Callback_contract
+          location message)
       function_.value_binding
   let callback_caller_identity context =
     Typedtree_callback_private.caller_identity
@@ -4028,10 +4154,9 @@ module Public = struct
     Typedtree_spec_function_private.admissible_capture_type
       ~aggregate:(ranked_deeply_immutable_type context.aggregates)
   let issue_callback_formal context parameter pattern =
-    let policy_error location _ =
-      Diagnostic.make
-        (Diagnostic.Unsupported_construct Diagnostic.Callback_policy)
-        (span context location)
+    let policy_error location message =
+      callback_diagnostic_with_message context Diagnostic.Callback_policy
+        location message
     in
     Typedtree_callback_private.issue_formal
       {
@@ -4185,7 +4310,9 @@ module Public = struct
                 | Ok (`Int value) -> finish (Sst.Int_constant value)
                 | Error _ as error -> error)
             | Texp_ident (path, _, description, _, _)
-              when symbolic_candidates context path <> [] ->
+              when
+                has_symbolic_candidate context
+                  (normalize_value_path expression path) ->
                 lower_symbolic_identifier context expression typ path
                   description
             | Texp_ident (path, _, _, _, _)
@@ -5577,9 +5704,10 @@ module Public = struct
                       lowered)
             | _ -> malformed retained.contract_application.exp_loc)
   and local_callback_services context bindings =
-    let diagnostic construct location =
+    let diagnostic construct location message =
       Diagnostic.make (Diagnostic.Unsupported_construct construct)
         (span context location)
+      |> Diagnostic.with_message message
     in
     {
       Typedtree_callback_private.shape = callback_shape context;
@@ -5629,21 +5757,24 @@ module Public = struct
           context.current_function;
       span = span context;
       policy_error =
-        (fun location _ -> diagnostic Diagnostic.Callback_policy location);
+        (fun location message ->
+          diagnostic Diagnostic.Callback_policy location message);
       authentication_error =
-        (fun location _ ->
-          diagnostic Diagnostic.Callback_authentication location);
+        (fun location message ->
+          diagnostic Diagnostic.Callback_authentication location message);
       contract_error =
-        (fun location _ -> diagnostic Diagnostic.Callback_contract location);
+        (fun location message ->
+          diagnostic Diagnostic.Callback_contract location message);
     }
   and lower_local_callback context bindings ?ident ~name expression =
     Typedtree_callback_private.lower_local
       (local_callback_services context bindings)
       context.callbacks bindings ?ident ~name expression
   and quantifier_lower_services context bindings =
-    let diagnostic construct location _ =
+    let diagnostic construct location message =
       Diagnostic.make (Diagnostic.Unsupported_construct construct)
         (span context location)
+      |> Diagnostic.with_message message
     in
     let bind pattern =
       match pattern.pat_desc with
@@ -5740,15 +5871,17 @@ module Public = struct
       parameter_label;
       span = span context;
       policy_error =
-        (fun location _ ->
+        (fun location message ->
           Diagnostic.make
             (Diagnostic.Unsupported_construct Diagnostic.Callback_policy)
-            (span context location));
+            (span context location)
+          |> Diagnostic.with_message message);
       authentication_error =
-        (fun location _ ->
+        (fun location message ->
           Diagnostic.make
             (Diagnostic.Unsupported_construct Diagnostic.Callback_authentication)
-            (span context location));
+            (span context location)
+          |> Diagnostic.with_message message);
       unsupported_quantifier =
         (fun location ->
           Diagnostic.make
@@ -5967,6 +6100,7 @@ module Public = struct
                 ~lower:(fun location typ ->
                   normalized_type_with_substitutions candidate_context
                     candidate.type_substitutions location typ)
+                ~optional_carrier:(optional_carrier candidate_context)
                   candidate.value_binding.vb_expr
               with
               | Some result -> result
@@ -6008,7 +6142,7 @@ module Public = struct
           let uid = compiler_uid description.Types.val_uid in
           let is_stdlib name = path_resolves_to context path "Stdlib" name in
           let is_ghost name = path_resolves_to context path "Vero_ghost" name in
-          if symbolic_candidates context path <> [] then
+          if has_symbolic_candidate context path then
             lower_symbolic_application context bindings application result_type
               path description arguments
           else if is_ghost "reveal" then
@@ -6106,6 +6240,7 @@ module Public = struct
               ~lower:(fun location typ ->
                 normalized_type_with_substitutions candidate_context
                   candidate.type_substitutions location typ)
+              ~optional_carrier:(optional_carrier candidate_context)
               candidate.value_binding.vb_expr
           with
           | Some result -> result
@@ -6129,24 +6264,10 @@ module Public = struct
                  current.function_id = candidate.function_id)
                context.current_function)
   and authenticate_symbolic_use context location path description =
-    Typedtree_symbolic_private.authenticate_candidate
-      ~logical:(symbolic_context_is_logical context)
-      ~candidates:(symbolic_candidates context) ~path
-      ~value_uid:(compiler_uid description.Types.val_uid) ~location
-    |> Result.map_error (fun error ->
-           let classification =
-             match error.Typedtree_symbolic_private.use_error_kind with
-             | Authentication ->
-                 Diagnostic.Invalid_symbolic_authentication error.message
-             | Declaration ->
-                 Diagnostic.Invalid_symbolic_declaration error.message
-             | Application ->
-                 Diagnostic.Invalid_symbolic_application error.message
-           in
-           Diagnostic.make classification (span context error.location))
+    authenticate_symbolic_candidate context location path description
   and lower_symbolic_identifier context expression result_type path description =
     let path = normalize_value_path expression path in
-    let* function_, declaration =
+    let* function_id, declaration =
       authenticate_symbolic_use context expression.exp_loc path description
     in
     if
@@ -6158,7 +6279,7 @@ module Public = struct
           Diagnostic.make (Diagnostic.Invalid_symbolic_application message)
             (span context expression.exp_loc))
         ~span:(span context expression.exp_loc) ~result_type
-        ~function_id:function_.function_id
+        ~function_id
         ~type_binders:(Symbolic_application_private.type_binders declaration)
         ~formal_types:
           (Symbolic_application_private.parameter_types declaration
@@ -6390,12 +6511,13 @@ module Public = struct
             compiler_mode = Typedtree_callback_private.type_evidence;
             span = span context;
             policy_error =
-              (fun location _ ->
-                callback_diagnostic context Diagnostic.Callback_policy location);
+              (fun location message ->
+                callback_diagnostic_with_message context
+                  Diagnostic.Callback_policy location message);
             authentication_error =
-              (fun location _ ->
-                callback_diagnostic context Diagnostic.Callback_authentication
-                  location);
+              (fun location message ->
+                callback_diagnostic_with_message context
+                  Diagnostic.Callback_authentication location message);
           }
         in
         let callback_actual expected_shape label source =
@@ -6415,13 +6537,13 @@ module Public = struct
                   Printf.sprintf "$callback%d"
                     context.callbacks.next_callback_id);
               policy_error =
-                (fun location _ ->
-                  callback_diagnostic context Diagnostic.Callback_policy
-                    location);
+                (fun location message ->
+                  callback_diagnostic_with_message context
+                    Diagnostic.Callback_policy location message);
               authentication_error =
-                (fun location _ ->
-                  callback_diagnostic context Diagnostic.Callback_authentication
-                    location);
+                (fun location message ->
+                  callback_diagnostic_with_message context
+                    Diagnostic.Callback_authentication location message);
             }
             expected_shape label source
         in
@@ -6431,19 +6553,16 @@ module Public = struct
               (fun _ location typ ->
                 normalized_type_with_substitutions callee_context
                   callee_function.type_substitutions location typ);
+            optional_carrier = optional_carrier callee_context;
             lower_expression = lower_authenticated_expression context bindings;
             callback_actual;
-            verified_callback_candidate =
-              Result.is_ok
-                (explicit_top_level_callback_contract context callee_function);
-            unverified_callback_error =
-              (fun location ->
-                callback_diagnostic context Diagnostic.Higher_order_function
-                  location);
+            callback_candidate_contract =
+              explicit_top_level_callback_contract context callee_function;
             parameter_label;
             policy_error =
-              (fun location _ ->
-                callback_diagnostic context Diagnostic.Callback_policy location);
+              (fun location message ->
+                callback_diagnostic_with_message context
+                  Diagnostic.Callback_policy location message);
             polymorphic_error =
               (fun location ->
                 callback_diagnostic context Diagnostic.Polymorphic_function
@@ -7054,6 +7173,7 @@ module Public = struct
     let context =
       {
         source_file;
+        typing_environment = structure.str_final_env;
         proof_capture_artifact = None;
         broadcast_scan = Some broadcast_scan;
         symbolic_scan = Some symbolic_scan;
@@ -9433,11 +9553,12 @@ module Public = struct
             local_types
         in
         analyze_rank_profiles source_file structure local_types
-  let lower_type_registry source_file imports env ~standard_paths
+  let lower_type_registry source_file imports env ~imported_parametric_adts
       ~load_path_visible ~load_path_hidden ~proof_capture_artifact local_types =
     let base_context =
       {
         source_file;
+        typing_environment = env;
         proof_capture_artifact = None;
         broadcast_scan = None;
         symbolic_scan = None;
@@ -9549,27 +9670,8 @@ module Public = struct
       in
       lower [] external_types
     in
-    let standard_paths =
-      List.filter
-        (fun path ->
-          not
-            (List.exists
-               (fun source ->
-                 Parametric_adt_lowering_private.covers_path source path)
-               external_sources))
-        standard_paths
-    in
-    let* standard_sources =
-      match
-        Parametric_adt_lowering_private.standard_sources
-          ~observed_paths:standard_paths env
-      with
-      | Ok sources -> Ok sources
-      | Error _ ->
-          unsupported base_context Location.none Diagnostic.Unsupported_type
-    in
     let parametric_sources =
-      standard_sources @ external_sources
+      external_sources
       @ List.filter_map
           (fun (local : local_type) ->
             if local.declaration.typ_params = [] then None
@@ -9588,6 +9690,50 @@ module Public = struct
     let* parametric_adts =
       Parametric_adt_lowering_private.lower ~span:(span base_context) ~aggregate
         ~modalities:normalize_field_modalities parametric_sources
+    in
+    let local_external_specifications =
+      parametric_adts
+      |> List.filter_map (fun item ->
+             let descriptor =
+               item.Parametric_adt_lowering_private.descriptor
+             in
+             match Parametric_adt.provenance descriptor with
+             | Parametric_adt.External _ -> Some descriptor
+             | Parametric_adt.Local _ -> None)
+    in
+    let* () =
+      match
+        List.find_map
+          (fun local ->
+            let local_constructor = Parametric_adt.type_constructor local in
+            imported_parametric_adts
+            |> List.find_opt (fun imported ->
+                   let imported_constructor =
+                     Parametric_adt.type_constructor imported
+                   in
+                   String.equal (Parametric_adt.compiler_uid local)
+                     (Parametric_adt.compiler_uid imported)
+                   || String.equal local_constructor.constructor_path
+                        imported_constructor.constructor_path)
+            |> Option.map (fun imported ->
+                   ( local_constructor.constructor_path,
+                     (Parametric_adt.type_constructor imported).constructor_path
+                   )))
+          local_external_specifications
+      with
+      | None -> Ok ()
+      | Some (local_path, imported_path) ->
+          Error
+            (Diagnostic.make
+               (Diagnostic.Invalid_semantic_program
+                  {
+                    function_name = None;
+                    detail =
+                      Printf.sprintf
+                        "local and imported external type specifications overlap for %s / %s"
+                        local_path imported_path;
+                  })
+               (Diagnostic.file_span source_file))
     in
     let base_context =
       {
@@ -9874,6 +10020,7 @@ module Public = struct
     let context =
       {
         source_file;
+        typing_environment = functions_environment functions;
         proof_capture_artifact = None;
         broadcast_scan = None;
         symbolic_scan = None;
@@ -9956,11 +10103,12 @@ module Public = struct
                               External_target_specification_private
                               .resolve_candidate environment
                                 ~canonical_path:(Path.name path) ~value_uid:uid
-                              |> Result.map_error (fun _ ->
+                              |> Result.map_error (fun message ->
                                   Diagnostic.make
                                     (Diagnostic.Unsupported_construct
                                        Diagnostic.Malformed_ghost_call)
-                                    (span context tail.exp_loc))
+                                    (span context tail.exp_loc)
+                                  |> Diagnostic.with_message message)
                             in
                             let* () =
                               if
@@ -10145,6 +10293,7 @@ module Public = struct
     let context =
       {
         source_file;
+        typing_environment = function_environment wrapper;
         proof_capture_artifact;
         broadcast_scan = None;
         symbolic_scan = Some symbolic_scan;
@@ -10313,6 +10462,7 @@ module Public = struct
     let context =
       {
         source_file;
+        typing_environment = function_environment wrapper;
         proof_capture_artifact;
         broadcast_scan = None;
         symbolic_scan = Some symbolic_scan;
@@ -10386,9 +10536,36 @@ module Public = struct
       | _ -> malformed terminal.exp_loc
     in
     let declaration_span = span context wrapper.value_binding.vb_loc in
+    let resolve_application path =
+      let path_name = Path.name path in
+      let normalized_path_name =
+        Path.name (normalized_type_path context.typing_environment path)
+      in
+      let path_uid = type_uid context.typing_environment path in
+      let descriptors =
+        List.map
+          (fun item -> item.Parametric_adt_lowering_private.descriptor)
+          context.aggregates.parametric_adts
+        @ List.filter_map
+            (fun imported -> imported.imported_parametric_descriptor)
+            context.imported.imported_types
+      in
+      let matches =
+        List.filter
+          (fun descriptor ->
+            let constructor = Parametric_adt.type_constructor descriptor in
+            String.equal constructor.constructor_path path_name
+            || String.equal constructor.constructor_path normalized_path_name
+            || Option.fold ~none:false
+                 ~some:(String.equal (Parametric_adt.compiler_uid descriptor))
+                 path_uid)
+          descriptors
+      in
+      match matches with [ descriptor ] -> Some descriptor | [] | _ :: _ :: _ -> None
+    in
     External_target_specification_private.complete_summary
       (Option.get imported.external_target_specifications)
-      ~candidate ~wrapper_id:wrapper.function_id
+      ~candidate ~resolve_application ~wrapper_id:wrapper.function_id
       ~type_binders:(List.map snd wrapper.parametric_type_binders)
       ~parameter_nodes ~parameters ~contracts ~terminal_arguments ~result_type
       ~target_span:(span context target_location)
@@ -10398,10 +10575,11 @@ module Public = struct
         (not
            (External_target_specification_private.has_mode_bearing_syntax
               wrapper.value_binding))
-    |> Result.map_error (fun _ ->
+    |> Result.map_error (fun message ->
         Diagnostic.make
           (Diagnostic.Unsupported_construct Diagnostic.Malformed_ghost_call)
-          declaration_span)
+          declaration_span
+        |> Diagnostic.with_message message)
   let trusted_unique_return context parameters result_type location =
     let unique_parameters =
       List.filter_map
@@ -10427,6 +10605,7 @@ module Public = struct
     let context =
       {
         source_file;
+        typing_environment = function_environment function_;
         proof_capture_artifact;
         broadcast_scan;
         symbolic_scan = Some symbolic_scan;
@@ -10613,6 +10792,7 @@ module Public = struct
       symbolic_scan symbolic_definitions callbacks function_ =
     {
       source_file;
+      typing_environment = function_environment function_;
       proof_capture_artifact;
       broadcast_scan;
       symbolic_scan = Some symbolic_scan;
@@ -10665,6 +10845,7 @@ module Public = struct
       Callback_contract_private.lower_parameters
         {
           normalized_type = normalized_type context;
+          optional_carrier = optional_carrier context;
           lower_expression = lower_authenticated_expression context;
           lower_pattern = lower_pattern context;
           issue_callback =
@@ -10758,6 +10939,7 @@ module Public = struct
                   Callback_contract_private.lower_parameters
                     {
                       normalized_type = normalized_type context;
+                      optional_carrier = optional_carrier context;
                       lower_expression = lower_authenticated_expression context;
                       lower_pattern = lower_pattern context;
                       issue_callback = issue_callback_formal context;
@@ -10878,6 +11060,7 @@ module Public = struct
     let context =
       {
         source_file;
+        typing_environment = functions_environment functions;
         proof_capture_artifact = None;
         broadcast_scan = None;
         symbolic_scan = None;
@@ -12276,6 +12459,7 @@ module Public = struct
           let context =
             {
               source_file;
+              typing_environment = function_environment function_;
               proof_capture_artifact = artifact;
               broadcast_scan = None;
               symbolic_scan = None;
@@ -12443,7 +12627,7 @@ module Public = struct
     List.map
       (fun function_ -> (function_.value_binding, function_.function_id))
       functions
-  let lower_with_imports ?(allow_imported_opens = false)
+  let lower_with_imports_unscoped ?(allow_imported_opens = false)
       ?(explicit_interface = false) ?(interface_value_paths = [])
       ?(imported = empty_imported_environment) ?proof_capture_artifact
       ?compilation_identity ?authenticated_source_text
@@ -12474,33 +12658,6 @@ module Public = struct
     with
     | Error _ as error -> error
     | Ok (local_types, functions, constrained_modules) -> (
-        let standard_paths = ref [] in
-        let observe typ =
-          match Types.get_desc typ with
-          | Types.Tconstr (path, _, _)
-            when not (List.exists (Path.same path) !standard_paths) ->
-              standard_paths := path :: !standard_paths
-          | _ -> ()
-        in
-        let default = Tast_iterator.default_iterator in
-        let iterator =
-          {
-            default with
-            expr =
-              (fun self expression ->
-                observe expression.exp_type;
-                default.expr self expression);
-            pat =
-              (fun self pattern ->
-                observe pattern.pat_type;
-                default.pat self pattern);
-            typ =
-              (fun self core_type ->
-                observe core_type.ctyp_type;
-                default.typ self core_type);
-          }
-        in
-        iterator.structure iterator structure;
         let* functions =
           prepare_function_proof_captures ~source_file ~imports
             ~artifact:proof_capture_artifact functions
@@ -12560,9 +12717,15 @@ module Public = struct
         let* linkages =
           resolve_external_linkages source_file imports imported functions
         in
+        let imported_parametric_adts =
+          imported.imported_types
+          |> List.filter_map (fun imported ->
+                 imported.imported_parametric_descriptor)
+        in
         match
           lower_type_registry source_file imports structure.str_final_env
-            ~standard_paths:!standard_paths ~load_path_visible
+            ~imported_parametric_adts
+            ~load_path_visible
             ~load_path_hidden ~proof_capture_artifact local_types
         with
         | Error _ as error -> error
@@ -12657,43 +12820,47 @@ module Public = struct
               match
                 List.find_map
                   (fun (definition : Sst.function_definition) ->
-                    if
-                      definition.mode = Sst.Exec
-                      && Result.is_error
-                           (Callback_contract_private.validate_explicit
-                              definition.contracts)
-                    then
-                      List.find_map
-                        (function
-                          | Sst.Callback_parameter { binding; _ } ->
-                              Some binding.callback_span
-                          | Sst.Value_parameter _ -> None)
-                        definition.parameters
-                    else None)
+                    if definition.mode <> Sst.Exec then None
+                    else
+                      match
+                        Callback_contract_private.validate_explicit
+                          definition.contracts
+                      with
+                      | Ok () -> None
+                      | Error message ->
+                          List.find_map
+                            (function
+                              | Sst.Callback_parameter { binding; _ } ->
+                                  Some (binding.callback_span, message)
+                              | Sst.Value_parameter _ -> None)
+                            definition.parameters)
                   lowered_definitions
               with
               | None -> Ok ()
-              | Some callback_span ->
+              | Some (callback_span, message) ->
                   Error
                     (Diagnostic.make
                        (Diagnostic.Unsupported_construct
-                          Diagnostic.Higher_order_function) callback_span)
+                          Diagnostic.Callback_contract) callback_span
+                    |> Diagnostic.with_message message)
             in
             let imported_parametric_adts =
               imported.imported_types
               |> List.filter_map (fun imported ->
                   imported.imported_parametric_descriptor)
             in
+            let local_parametric_adts =
+              List.map
+                (fun item ->
+                  item.Parametric_adt_lowering_private.descriptor)
+                aggregates.parametric_adts
+            in
             let normalized =
               Sst_normalize.classify_typedtree_program
                 {
                   Sst.policy = Sst.Default_linear_z3;
                   parametric_adts =
-                    List.map
-                      (fun item ->
-                        item.Parametric_adt_lowering_private.descriptor)
-                      aggregates.parametric_adts
-                    @ imported_parametric_adts;
+                    local_parametric_adts @ imported_parametric_adts;
                   Sst.types =
                     aggregates.definitions
                     @ List.map
@@ -12725,7 +12892,17 @@ module Public = struct
               }
             in
             let* () =
+              let imported_definitions =
+                imported.imported_callables
+                |> List.filter_map (fun imported ->
+                       if
+                         Symbolic_declaration_private.is_symbolic
+                           imported.imported_definition
+                       then Some imported.imported_definition
+                       else None)
+              in
               Symbolic_declaration_private.seal ~program:authenticated
+                ~imported_definitions
               |> Result.map_error (fun message ->
                      Diagnostic.make
                        (Diagnostic.Invalid_symbolic_authentication message)
@@ -13022,6 +13199,18 @@ module Public = struct
                   :: !issued_shared_scalar_programs)
               authenticated_source_text;
             Ok authenticated)
+  let lower_with_imports ?(allow_imported_opens = false)
+      ?(explicit_interface = false) ?(interface_value_paths = [])
+      ?(imported = empty_imported_environment) ?proof_capture_artifact
+      ?compilation_identity ?authenticated_source_text
+      ?(load_path_visible = [ Config.standard_library ])
+      ?(load_path_hidden = []) ~source_file ~imports structure =
+    Parametric_adt_lowering_private.with_load_path
+      ~visible:load_path_visible ~hidden:load_path_hidden (fun () ->
+        lower_with_imports_unscoped ~allow_imported_opens ~explicit_interface
+          ~interface_value_paths ~imported ?proof_capture_artifact
+          ?compilation_identity ?authenticated_source_text ~load_path_visible
+          ~load_path_hidden ~source_file ~imports structure)
   let lower_with_capture_artifact ?allow_imported_opens ~proof_capture_artifact
       ?authenticated_source_text ?compilation_identity ~source_file ~imports
       structure =

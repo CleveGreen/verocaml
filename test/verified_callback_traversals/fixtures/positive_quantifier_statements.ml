@@ -1,3 +1,6 @@
+type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
 type 'a box = Box of 'a
 type 'a sequence = Empty | Item of 'a * 'a sequence
 type ('a, 'b) pair = { left : 'a; right : 'b }

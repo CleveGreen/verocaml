@@ -48,8 +48,8 @@ solver work.  Its marked copy reaches the ordinary verifier rejection path.
   skip-counters retained=0 typed-lowering=0 semantic=0 vc=0 backend=0 private-driver=0 provider-reverification=0 solver=0 z3=0/0/0/0/0/0
   $ project --root artifacts/marked_legacy.cmt artifacts/marked_legacy.cmi --threads 1 > artifacts/marked.out 2>&1; echo $?
   2
-  $ grep -o 'error\[VERO_[A-Z_]*\]' artifacts/marked.out | head -1
-  error[VERO_UNSUPPORTED_STRUCTURE_ITEM]
+  $ grep -o 'VERO_[A-Z_]*' artifacts/marked.out | head -1
+  VERO_UNSUPPORTED_STRUCTURE_ITEM
 
 Source/CMT, copied and reloaded artifacts, and serial/threaded paths preserve
 semantic outcomes.  The rendered copied path remains intentionally distinct.
@@ -85,8 +85,8 @@ the complete deterministic report and exits nonzero.
   $ for name in direct_bypass external_mode_negative; do reject_before_trust "$name" || exit 1; done
   direct_bypass=rejected-before-trust
   external_mode_negative=rejected-before-trust
-  $ grep -o 'error\[VERO_[A-Z_]*\]' artifacts/external_mode_negative.out | head -1
-  error[VERO_MALFORMED_GHOST_CALL]
+  $ grep -o 'VERO_[A-Z_]*' artifacts/external_mode_negative.out | head -1
+  VERO_MALFORMED_GHOST_CALL
   $ project --root artifacts/failure.cmt artifacts/failure.cmi --root artifacts/consumer.cmt artifacts/consumer.cmi --dependency artifacts/provider.cmt artifacts/provider.cmi --root artifacts/legacy.cmt artifacts/legacy.cmi --threads 2 > artifacts/failure.out 2>&1; echo $?
   1
   $ grep '^verocaml: verified unit=\|^verocaml: verified-dependency unit=\|^verocaml: skipped unit=' artifacts/failure.out

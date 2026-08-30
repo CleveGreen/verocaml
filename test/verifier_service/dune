@@ -11,8 +11,6 @@
   ../trusted_external_bodies/fixtures/positive.ml
   ../verified_interfaces/fixtures/model_dependency.ml
   ../verified_interfaces/fixtures/model_consumer.ml
-  ../../src/verifier_service.mli
-  verifier_service_tool.ml
   ../../ppx/vero_ppx.exe
   ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
 

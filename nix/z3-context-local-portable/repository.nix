@@ -8,7 +8,7 @@ let
   packageDirectory = "z3.${version}";
   packageMetadata = ./opam-repository/packages/z3/${packageDirectory}/opam;
   patch = ./z3-context-local-portable.patch;
-  patchSha256 = "f7c7a575809e1f6a939d9e6f2e0544f84411bce9d9993149feed20f7e7903671";
+  patchSha256 = "b4de1d37a7dd6356cd1adf068f31cacad5ed0237e7a130e26b2163cdb7eddace";
 
   metadataRepository = opam-nix.lib.${system}.makeOpamRepoRec ./opam-repository;
 

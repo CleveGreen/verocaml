@@ -62,6 +62,7 @@ type handle = {
   mode_signature_digest : string;
   types : public_type list;
   callables : public_callable list;
+  external_specifications : public_callable list;
   models : public_model list;
   invariants : public_invariant list;
   direct_dependencies : handle list;
@@ -163,6 +164,7 @@ type staged_dependency = {
   mode_signature_digest : string;
   types : public_type list;
   callables : public_callable list;
+  external_specifications : public_callable list;
   models : public_model list;
   invariants : public_invariant list;
   semantic_snapshot : Sst_validation.validated_program;
@@ -210,6 +212,7 @@ let construct_handle staged direct_dependencies transitive_dependencies =
     mode_signature_digest = staged.mode_signature_digest;
     types = staged.types;
     callables = staged.callables;
+    external_specifications = staged.external_specifications;
     models = staged.models;
     invariants = staged.invariants;
     direct_dependencies;
@@ -249,6 +252,9 @@ and root_completion = function
 and root_callables = function
   | Handle_root handle -> handle.callables
   | Staged_root staged -> staged.callables
+and root_external_specifications = function
+  | Handle_root handle -> handle.external_specifications
+  | Staged_root staged -> staged.external_specifications
 and root_types = function
   | Handle_root handle -> handle.types
   | Staged_root staged -> staged.types
@@ -351,13 +357,15 @@ let binding_uid implementation kind path =
            Some uid
          else None)
 
-let parameter_kinds implementation (definition : Sst.function_definition) =
+let parameter_kinds implementation ~canonical_path
+    (definition : Sst.function_definition) =
   let open Typedtree in
-  let function_name = definition.function_id.function_name in
-  let leaf_name =
-    match List.rev (String.split_on_char '.' function_name) with
-    | name :: _ -> name
-    | [] -> function_name
+  let unit_prefix = implementation.Cmt_input.unit_name ^ "." in
+  let relative_path =
+    if String.starts_with ~prefix:unit_prefix canonical_path then
+      String.sub canonical_path (String.length unit_prefix)
+        (String.length canonical_path - String.length unit_prefix)
+    else canonical_path
   in
   let kind (parameter : function_param) =
     match parameter.fp_kind with
@@ -378,20 +386,36 @@ let parameter_kinds implementation (definition : Sst.function_definition) =
         Some (List.map kind params)
     | _ -> None
   in
-  let binding (binding : value_binding) =
+  let binding prefix (binding : value_binding) =
     match binding.vb_pat.pat_desc with
     | Tpat_var (_, name, _, _, _)
-      when String.equal name.txt leaf_name ->
+      when String.equal
+             (String.concat "." (prefix @ [ name.txt ]))
+             relative_path ->
         expression binding.vb_expr
     | _ -> None
   in
-  let rec items = function
+  let rec module_expression prefix expression =
+    match expression.mod_desc with
+    | Tmod_structure structure -> items prefix structure.str_items
+    | Tmod_constraint (inner, _, _, _) -> module_expression prefix inner
+    | Tmod_ident _ | Tmod_functor _ | Tmod_apply _ | Tmod_apply_unit _
+    | Tmod_unpack _ -> None
+  and items prefix = function
     | [] -> None
     | { str_desc = Tstr_value (_, bindings); _ } :: rest -> (
-        match List.find_map binding bindings with
+        match List.find_map (binding prefix) bindings with
         | Some _ as kinds -> kinds
-        | None -> items rest)
-    | _ :: rest -> items rest
+        | None -> items prefix rest)
+    | { str_desc = Tstr_module binding; _ } :: rest -> (
+        let nested =
+          Option.bind binding.mb_name.txt (fun name ->
+              module_expression (prefix @ [ name ]) binding.mb_expr)
+        in
+        match nested with
+        | Some _ as kinds -> kinds
+        | None -> items prefix rest)
+    | _ :: rest -> items prefix rest
   in
   Option.value
     ~default:
@@ -404,7 +428,7 @@ let parameter_kinds implementation (definition : Sst.function_definition) =
                Imported_callable.Optional_parameter
            | Some _ -> Imported_callable.Labelled_parameter)
          definition.parameters)
-    (items implementation.Cmt_input.structure.str_items)
+    (items [] implementation.Cmt_input.structure.str_items)
 
 let snapshot_requirement validated descriptor ordinal =
   match
@@ -465,7 +489,17 @@ let rec provider_of_root root =
     root_callables root
     |> List.filter_map (fun (callable : public_callable) ->
            let definition = callable.definition in
-           let kinds = parameter_kinds implementation definition in
+           let binding_path =
+             unit_name ^ "." ^ definition.function_id.function_name
+           in
+           let callable_binding_uid =
+             Option.value ~default:""
+               (binding_uid implementation `Value binding_path)
+           in
+           let kinds =
+             parameter_kinds implementation
+               ~canonical_path:definition.function_id.function_name definition
+           in
            let simple pattern =
              match pattern.Sst.pattern_desc with
              | Sst.Bind _ -> true
@@ -485,8 +519,23 @@ let rec provider_of_root root =
                    parameter.pattern.pattern_desc = Sst.Wildcard
                    && simple default.optional_pattern
            in
+           let symbolic_parameter = function
+             | Sst.Value_parameter
+                 { pattern = { pattern_desc = Sst.Wildcard; _ };
+                   optional_default = None;
+                   _ } ->
+                 true
+             | Sst.Value_parameter _ | Sst.Callback_parameter _ -> false
+           in
+           let symbolic =
+             match definition.body with
+             | Sst.Symbolic_declaration _ -> true
+             | _ -> false
+           in
            let eligible_abi =
-             List.for_all simple_parameter definition.parameters
+             (if symbolic then
+                List.for_all symbolic_parameter definition.parameters
+              else List.for_all simple_parameter definition.parameters)
              && List.for_all
                   (fun clause ->
                     Option.fold ~none:true ~some:simple clause.Sst.binder)
@@ -499,7 +548,9 @@ let rec provider_of_root root =
            | false, _, _, _ -> None
            | true, Sst.Exec, _, Sst.Checked_exec _
            | true, Sst.Proof, _, Sst.Proof_body _
+           | true, (Sst.Exec | Sst.Proof), false, Sst.Trusted_external_body _
            | true, Sst.Spec, false, Sst.Spec_definition _
+           | true, Sst.Spec, false, Sst.Symbolic_declaration _
            | true, Sst.Spec, true, Sst.Recursive_spec_definition _ ->
                let descriptor =
                  List.find_opt
@@ -515,9 +566,6 @@ let rec provider_of_root root =
                      unit_name ^ "."
                      ^ definition.function_id.function_name
                    in
-                   let binding_path =
-                     unit_name ^ "." ^ definition.function_id.function_name
-                   in
                    match
                      Parametric_interface_provider_private.signature
                        ~definition ~parameter_kinds:kinds
@@ -529,9 +577,7 @@ let rec provider_of_root root =
                    | Ok signature ->
                    Some {
                      Imported_callable.resolved_path;
-                     binding_uid =
-                       Option.value ~default:""
-                         (binding_uid implementation `Value binding_path);
+                     binding_uid = callable_binding_uid;
                      definition;
                      signature;
                      finite_requirements =
@@ -555,6 +601,36 @@ let rec provider_of_root root =
                               });
                    })
            | true, _, _, _ -> None)
+  in
+  let external_specifications =
+    root_external_specifications root
+    |> List.filter_map (fun (callable : public_callable) ->
+           let definition = callable.definition in
+           match definition.Sst.body with
+           | Sst.External_specification
+               (Sst.Imported_unverified_target _ as target_link) -> (
+               match
+                 Parametric_interface_provider_private.signature ~definition
+                   ~parameter_kinds:
+                     (parameter_kinds implementation
+                        ~canonical_path:definition.function_id.function_name
+                        definition)
+                   ~parameter_modes:callable.parameter_modes
+                   ~result_mode:callable.result_mode ~provider_completion
+               with
+               | Error _ -> None
+               | Ok signature ->
+                   Some
+                     {
+                       Imported_callable.definition;
+                       signature;
+                       target_link;
+                     })
+           | Sst.Checked_exec _ | Sst.Spec_definition _
+           | Sst.Recursive_spec_definition _ | Sst.Proof_body _
+           | Sst.External_specification _ | Sst.Trusted_external_spec_target _
+           | Sst.Trusted_external_body _ | Sst.Symbolic_declaration _ ->
+               None)
   in
   let types =
     let rank_domains =
@@ -617,6 +693,7 @@ let rec provider_of_root root =
     import_digest = root_import_digest root;
     callables;
     types;
+    external_specifications;
   }
   in
   let rec seal_dependencies sealed = function

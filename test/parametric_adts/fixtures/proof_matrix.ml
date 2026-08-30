@@ -1,3 +1,6 @@
+type 'a list_specification = 'a list
+[@@verocaml.external_type_specification]
+
 type 'a option = None | Some of 'a
 
 type token = Stop | Amount of int

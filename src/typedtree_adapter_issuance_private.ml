@@ -52,25 +52,13 @@ let authenticate_shared_scalar_function ~program ~definition =
   issued_shared_scalar_programs := List.rev live;
   authenticated
 
-let retained_ppx_arguments arguments =
-  let rec loop = function
-    | [] | [ _ ] -> false
-    | "-ppx" :: command :: rest ->
-        List.exists
-          (String.equal "--keep-ghost")
-          (String.split_on_char ' ' command)
-        || loop rest
-    | _ :: rest -> loop rest
-  in
-  loop (Array.to_list arguments)
-
 let authenticate_logical_builtin_artifact artifact ~source_file =
   let implementation = artifact.proof_capture_implementation in
   artifact.proof_capture_artifact_issuer == proof_capture_artifact_issuer
   && String.equal implementation.Cmt_input.source_file source_file
   && implementation.implementation_metadata_valid
   && implementation.has_implementation_shape
-  && retained_ppx_arguments implementation.compiler_arguments
+  && Cmt_input.retained_preprocessing implementation
   && List.exists
        (String.equal "retained-v1")
        implementation.implementation_family_markers

@@ -47,6 +47,37 @@ processing and project selection reports it as skipped.
   $ ./external_target_specifications_tool.exe alpha-cross artifacts/consumer.cmt artifacts/consumer.cmi artifacts/alpha_consumer.cmt artifacts/alpha_consumer.cmi artifacts/legacy.cmt artifacts/legacy.cmi
   alpha-cross-artifact substitution=rejected semantic-abi=equal private-delta=0
 
+A retained library may publish a hidden external-function specification.  A
+direct consumer imports the provider contract implicitly, while the ordinary
+target remains an opaque dependency and no command-line dependency flags are
+needed.  Merely importing the provider does not activate the target contract,
+and two providers for one exact target reject rather than selecting by order.
+
+  $ for name in provider_external provider_external_duplicate; do ocamlc -w -A -alert -all -bin-annot -I "$GHOST" -I artifacts -ppx "$PPX_RETAINED" -c -o "artifacts/$name.cmi" "fixtures/$name.mli"; retained "$name"; done
+  $ for name in provider_external_consumer provider_external_only_consumer provider_external_inactive_overlap_consumer provider_external_overlap_consumer; do retained "$name"; done
+  $ for threads in 1 2; do (cd artifacts && OCAML_COLOR=never ../../../src/verocaml.exe verify provider_external_consumer.cmt --threads "$threads" --timeout-ms 60000) >"artifacts/provider-external.$threads.out"; done
+  $ cmp artifacts/provider-external.1.out artifacts/provider-external.2.out
+  $ grep '^verocaml: verified dependency unit=Provider_external ' artifacts/provider-external.1.out | sed -E 's/interface-digest=[0-9a-f]+/interface-digest=<digest>/'
+  verocaml: verified dependency unit=Provider_external interface-digest=<digest> direct=none transitive=none trust=none
+  $ grep -c '^verocaml: trusted external specification trust=imported-unverified-target target-unit=Legacy .* target-path=Legacy.promised ' artifacts/provider-external.1.out
+  1
+  $ grep '^verocaml: verified-with-trusted-axioms file=provider_external_consumer.cmt functions=1 obligations=2 trusted-external-spec-uses=1$' artifacts/provider-external.1.out
+  verocaml: verified-with-trusted-axioms file=provider_external_consumer.cmt functions=1 obligations=2 trusted-external-spec-uses=1
+  $ (cd artifacts && OCAML_COLOR=never ../../../src/verocaml.exe verify provider_external_only_consumer.cmt --threads 1 --timeout-ms 60000) > artifacts/provider-only.out
+  $ test "$(grep -c '^verocaml: trusted external specification' artifacts/provider-only.out)" = 0
+  $ grep '^verocaml: verified file=provider_external_only_consumer.cmt functions=1 obligations=1$' artifacts/provider-only.out
+  verocaml: verified file=provider_external_only_consumer.cmt functions=1 obligations=1
+  $ (cd artifacts && OCAML_COLOR=never ../../../src/verocaml.exe verify provider_external_inactive_overlap_consumer.cmt --threads 1 --timeout-ms 60000) > artifacts/provider-inactive-overlap.out
+  $ test "$(grep -c '^verocaml: trusted external specification' artifacts/provider-inactive-overlap.out)" = 0; grep -q '^verocaml: verified file=provider_external_inactive_overlap_consumer.cmt '; echo provider-inactive-overlap=verified-without-target-authority
+  provider-inactive-overlap=verified-without-target-authority
+  $ code=0; (cd artifacts && OCAML_COLOR=never ../../../src/verocaml.exe verify provider_external_overlap_consumer.cmt --threads 1 --timeout-ms 60000) > artifacts/provider-overlap.out 2>&1 || code=$?; test "$code" = 2
+  $ grep -q 'overlapping external function specifications' artifacts/provider-overlap.out; grep -q 'Provider_external' artifacts/provider-overlap.out; grep -q 'Provider_external_duplicate' artifacts/provider-overlap.out; grep -q 'target Legacy.promised / Legacy.promised' artifacts/provider-overlap.out
+  $ ocamlc -w -A -alert -all -bin-annot -I "$GHOST" -I artifacts -ppx "$PPX_RETAINED" -c -o artifacts/provider_external_used.cmi fixtures/provider_external_used.mli
+  $ retained provider_external_used
+  $ retained provider_external_used_consumer
+  $ code=0; (cd artifacts && OCAML_COLOR=never ../../../src/verocaml.exe verify provider_external_used_consumer.cmt --threads 1 --timeout-ms 60000) > artifacts/provider-used.out 2>&1 || code=$?; test "$code" = 2
+  $ grep -q 'unit Provider_external_used: retained provider lacks private-driver completion' artifacts/provider-used.out
+
 The project report exposes one distinct verified-external-specification trust
 row per call, while the imported external target remains skipped rather than
 verified-dependency.
@@ -67,7 +98,7 @@ and mode-bearing summaries all reject without backend, solver, Z3, target-body
 semantic processing, verified-provider processing, or leaked private authority.
 
   $ reject_semantic () { name=$1; target=$2; retained "$name" || return 1; ./external_target_specifications_tool.exe rejected "artifacts/$name.cmt" "artifacts/$name.cmi" "artifacts/$target.cmt" "artifacts/$target.cmi" || return 1; }
-  $ reject_mode () { name=$1; target=$2; reject_semantic "$name" "$target" || return 1; code=0; OCAML_COLOR=never ../../src/verocaml.exe verify-project --root "artifacts/$name.cmt" "artifacts/$name.cmi" --dependency "artifacts/$target.cmt" "artifacts/$target.cmi" --threads 1 --timeout-ms 60000 >"artifacts/$name.project.out" 2>&1 || code=$?; if test "$code" != 2; then cat "artifacts/$name.project.out"; return 1; fi; trusted=$(grep -c '^verocaml: trusted external specification' "artifacts/$name.project.out" || true); if test "$trusted" != 0; then cat "artifacts/$name.project.out"; return 1; fi; diagnostic=$(grep -o 'error\[VERO_[A-Z_]*\]' "artifacts/$name.project.out" | head -1 || true); if test "$diagnostic" != 'error[VERO_MALFORMED_GHOST_CALL]'; then cat "artifacts/$name.project.out"; return 1; fi; echo "$name project-exit=2 diagnostic=VERO_MALFORMED_GHOST_CALL trust=0"; }
+  $ reject_mode () { name=$1; target=$2; reject_semantic "$name" "$target" || return 1; code=0; OCAML_COLOR=never ../../src/verocaml.exe verify-project --root "artifacts/$name.cmt" "artifacts/$name.cmi" --dependency "artifacts/$target.cmt" "artifacts/$target.cmi" --threads 1 --timeout-ms 60000 >"artifacts/$name.project.out" 2>&1 || code=$?; if test "$code" != 2; then cat "artifacts/$name.project.out"; return 1; fi; trusted=$(grep -c '^verocaml: trusted external specification' "artifacts/$name.project.out" || true); if test "$trusted" != 0; then cat "artifacts/$name.project.out"; return 1; fi; diagnostic=$(grep -o 'VERO_[A-Z_]*' "artifacts/$name.project.out" | head -1 || true); if test "$diagnostic" != 'VERO_MALFORMED_GHOST_CALL'; then cat "artifacts/$name.project.out"; return 1; fi; echo "$name project-exit=2 diagnostic=VERO_MALFORMED_GHOST_CALL trust=0"; }
   $ for name in missing_summary call_before_summary duplicate_summary local_alias open_path module_alias functor_path wrong_order specialized_generic partial callback; do reject_semantic "$name" legacy || exit 1; done
   Missing_summary rejected pre-SST/VIR/solver target=skipped target-semantic-lowering=0 trust=0 authority-delta=0
   Call_before_summary rejected pre-SST/VIR/solver target=skipped target-semantic-lowering=0 trust=0 authority-delta=0
@@ -174,8 +205,8 @@ the consumer import CRC and rejects before any trusted row.
 
   $ ocamlc -w -A -alert -all -bin-annot -I artifacts -c -o artifacts/raw_carrier.cmo fixtures/raw_carrier.ml
   $ code=0; OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/raw_carrier.cmt --threads 1 >artifacts/raw.out 2>&1 || code=$?; test "$code" = 2
-  $ grep -o 'error\[VERO_[A-Z_]*\]' artifacts/raw.out | head -1
-  error[VERO_MALFORMED_GHOST_CALL]
+  $ grep -o 'VERO_[A-Z_]*' artifacts/raw.out | head -1
+  VERO_DEPENDENCY
   $ mkdir stale
   $ cp fixtures/legacy.mli fixtures/legacy.ml stale/
   $ chmod u+w stale/legacy.mli stale/legacy.ml
@@ -184,5 +215,5 @@ the consumer import CRC and rejects before any trusted row.
   $ (cd stale && ocamlc -w -A -alert -all -bin-annot -I "$GHOST" -ppx "$PPX_ORDINARY" -c legacy.mli && ocamlc -w -A -alert -all -bin-annot -I "$GHOST" -ppx "$PPX_ORDINARY" -c legacy.ml)
   $ code=0; OCAML_COLOR=never ../../src/verocaml.exe verify-project --root artifacts/consumer.cmt artifacts/consumer.cmi --dependency stale/legacy.cmt stale/legacy.cmi --threads 1 >artifacts/stale.out 2>&1 || code=$?; test "$code" = 2
   $ test $(grep -c '^verocaml: trusted external specification trust=imported-unverified-target' artifacts/stale.out) -eq 0
-  $ grep -o 'error\[VERO_[A-Z_]*\]' artifacts/stale.out | head -1
-  error[VERO_DEPENDENCY]
+  $ grep -o 'VERO_[A-Z_]*' artifacts/stale.out | head -1
+  VERO_DEPENDENCY

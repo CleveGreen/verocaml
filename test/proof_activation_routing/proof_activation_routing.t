@@ -41,7 +41,7 @@ byte-identical repeated diagnostics.
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/external_finite_rejected.cmo artifacts/external_finite_rejected.ml
   $ for n in 1 2; do OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/external_finite_rejected.cmt --timeout-ms 5000 >"artifacts/external-finite-$n.out" 2>&1; test $? = 2; done
   $ cmp artifacts/external-finite-1.out artifacts/external-finite-2.out && tail -1 artifacts/external-finite-1.out | sed -E 's/ at .*$/ at SPAN/'
-  verocaml: error[VERO_DEPENDENCY] unit External_finite_rejected: lemma_peel_push: invalid semantic SST: unchecked, external, trusted, or raw callables cannot require finite formals at SPAN
+  Error: [VERO_INVALID_PROGRAM] VeroCaml could not validate function "lemma_peel_push": unchecked, external, trusted, or raw callables cannot require finite formals
 
 The private in-process observer pins distinct final indices, copied
 provisional counters, exact path digests and activation vectors for all three

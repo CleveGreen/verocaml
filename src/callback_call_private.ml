@@ -33,6 +33,8 @@ type 'error direct_lowering_services = {
     Location.t ->
     Types.type_expr ->
     (Parametric_type.t, 'error) result;
+  optional_carrier :
+    Location.t -> Parametric_type.t -> (Parametric_type.t, 'error) result;
   lower_expression :
     Typedtree.expression -> (Sst.expression, 'error) result;
   callback_actual :
@@ -40,8 +42,7 @@ type 'error direct_lowering_services = {
     string option ->
     Typedtree.expression ->
     (Sst.call_argument, 'error) result;
-  verified_callback_candidate : bool;
-  unverified_callback_error : Location.t -> 'error;
+  callback_candidate_contract : (unit, 'error) result;
   parameter_label : Typedtree.arg_label -> string option;
   policy_error : Location.t -> string -> 'error;
   polymorphic_error : Location.t -> 'error;
@@ -103,11 +104,14 @@ let rec lower_mixed services candidate call_location lowered formal_types
                 services.normalized_type candidate pattern.pat_loc
                   pattern.pat_type
               in
+              let* carrier =
+                services.optional_carrier pattern.pat_loc payload
+              in
               lower_mixed services candidate call_location
                 (Typedtree_callback_private.Lowered_call_argument
                    (Sst.Value_argument { label = actual_label; value })
                 :: lowered)
-                (Parametric_type.option payload :: formal_types)
+                (carrier :: formal_types)
                 (expected_label :: formal_labels)
                 (value.typ :: actual_types) parameters arguments
         | Typedtree.Tparam_pat pattern ->
@@ -138,11 +142,11 @@ let rec lower_mixed services candidate call_location lowered formal_types
                 (value.typ :: actual_types) parameters arguments)
   | _ :: _, (_, Typedtree.Omitted _) :: _ ->
       let error = if has_callback_formal candidate then services.policy_error
-        else fun location _ -> services.unverified_callback_error location in
+        else fun location _ -> services.higher_order_error location in
       Error (error call_location "higher-order call is partial")
   | [], _ :: _ | _ :: _, [] ->
       let error = if has_callback_formal candidate then services.policy_error
-        else fun location _ -> services.unverified_callback_error location in
+        else fun location _ -> services.higher_order_error location in
       Error (error call_location "higher-order call arity differs from its formals")
 let terminal_body expression =
   match expression.Typedtree.exp_desc with
@@ -189,15 +193,16 @@ let lower_direct_candidate services
         _;
       }
     when List.length params = List.length source_arguments ->
-      let unverified_callback =
-        has_callback_formal candidate && not services.verified_callback_candidate
+      let callback_contract =
+        if has_callback_formal candidate then services.callback_candidate_contract
+        else Ok ()
       in
       let* () =
-        if unverified_callback
+        if Result.is_error callback_contract
            && not (Callback_shape_private.has_immediate_callback_actual
                      ~is_callback:Typedtree_callback_private.callback_arrow_type
                      params source_arguments)
-        then Error (services.unverified_callback_error application.exp_loc)
+        then callback_contract
         else Ok ()
       in
       let* lowered, formal_types, formal_labels, actual_types =
@@ -239,9 +244,7 @@ let lower_direct_candidate services
       in
       let* arguments = resolve_mixed services substitutions lowered in
       let* () =
-        if unverified_callback
-        then Error (services.unverified_callback_error application.exp_loc)
-        else Ok ()
+        callback_contract
       in
       Ok
         {

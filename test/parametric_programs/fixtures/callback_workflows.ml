@@ -1,5 +1,11 @@
 [@@@verocaml.verify]
 
+type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
+type ('a, 'error) result_specification = ('a, 'error) result
+[@@verocaml.external_type_specification]
+
 type ('a, 'b) choice = First of 'a | Second of 'b
 type ('a, 'error) outcome = Accepted of 'a | Rejected of 'error
 type 'a envelope = { sequence : int; payload : 'a }

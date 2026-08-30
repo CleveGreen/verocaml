@@ -381,13 +381,13 @@ let status = function
   | Inconclusive -> Inconclusive
   | Incomplete_source -> Incomplete_source
 
-let verify_with_external ?external_specifications request =
+let verify_with_external ?external_specifications ?(external_targets = []) request =
   let configuration = request.configuration in
   match
     Interface_specification_loaded_private.verify
       ~threads:configuration.threads
       ~solver_policy:configuration.solver_policy ~consumer:request.consumer
-      ~external_specifications ~dependencies:request.dependencies
+      ~external_specifications ~external_targets ~dependencies:request.dependencies
   with
   | Error _ as error -> error
   | Ok loaded ->
@@ -423,7 +423,21 @@ let verify_with_external ?external_specifications request =
           trusted_external_observations = trusted_external_observations vir;
         }
 
-let verify request = verify_with_external request
+let verify request =
+  let external_targets =
+    List.filter
+      (fun candidate -> not (Cmt_input.retained_preprocessing candidate))
+      request.dependencies
+  in
+  match
+    External_target_specification_private.environment ~consumer:request.consumer
+      ~targets:external_targets
+  with
+  | Error message ->
+      Interface_specification_loaded_private.error
+        ~unit_name:request.consumer.unit_name message
+  | Ok external_specifications ->
+      verify_with_external ~external_specifications ~external_targets request
 
 let scoped_request ~configuration ~inventory =
   let artifacts =
@@ -460,7 +474,8 @@ let verify_scoped_root ~external_targets request consumer dependencies =
       ~targets:external_targets
   with
   | Ok external_specifications ->
-      verify_with_external ~external_specifications verification_request
+      verify_with_external ~external_specifications ~external_targets
+        verification_request
   | Error message ->
       Interface_specification_loaded_private.error ~unit_name:consumer.unit_name
         message

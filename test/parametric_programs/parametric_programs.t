@@ -26,10 +26,10 @@ and parallel VC checking agree.
   verocaml: verified file=artifacts/workflow_provider.cmt functions=14 obligations=44
   $ cp fixtures/workflow_consumer.ml artifacts/workflow_consumer_source.ml
   $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/workflow_consumer_source.ml --threads 1 --timeout-ms 10000 --dependency artifacts/workflow_provider.cmt
-  verocaml: verified dependency unit=Workflow_provider interface-digest=90d4fa5d7decf4a566b1ac50eb1159bb direct=none transitive=none trust=none
+  verocaml: verified dependency unit=Workflow_provider interface-digest=2ce1d3e23ca240038331f0e858dcf51a direct=none transitive=none trust=none
   verocaml: verified file=artifacts/workflow_consumer_source.ml functions=14 obligations=6
   $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/workflow_consumer.cmt --threads 2 --timeout-ms 10000 --dependency artifacts/workflow_provider.cmt
-  verocaml: verified dependency unit=Workflow_provider interface-digest=90d4fa5d7decf4a566b1ac50eb1159bb direct=none transitive=none trust=none
+  verocaml: verified dependency unit=Workflow_provider interface-digest=2ce1d3e23ca240038331f0e858dcf51a direct=none transitive=none trust=none
   verocaml: verified file=artifacts/workflow_consumer.cmt functions=14 obligations=6
 
 The retained semantic dump keeps generic functions generic rather than
@@ -38,7 +38,7 @@ enumerating concrete instantiations.
   $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/persistent_collections.cmt --threads 2 --timeout-ms 10000 --dump-sst artifacts/collections.sst >/dev/null
   $ grep -E '^function (identity|copy_option|reverse_into|mirror)#.*binders=' artifacts/collections.sst | sed -E 's/ policy=.*//'
   function identity#0 binders=['0@identity#0] mode=exec recursive=false result='0@identity#0
-  function copy_option#3 binders=['0@copy_option#3] mode=exec recursive=false result=Stdlib.option<'0@copy_option#3>
+  function copy_option#3 binders=['0@copy_option#3] mode=exec recursive=false result=option<'0@copy_option#3>
   function reverse_into#10 binders=['0@reverse_into#10] mode=exec recursive=true result=chain<'0@reverse_into#10>
   function mirror#23 binders=['0@mirror#23] mode=exec recursive=true result=tree<'0@mirror#23>
   $ test "$(grep -Ec '^function [^ ]+<' artifacts/collections.sst)" = 0

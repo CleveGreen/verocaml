@@ -1,3 +1,6 @@
+type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
 let exec_if flag =
   [%verocaml.ensures fun result -> result = flag] ; if flag then true else false
 

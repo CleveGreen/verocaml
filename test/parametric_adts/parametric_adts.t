@@ -14,7 +14,7 @@ output binders and verifies identically from source and retained CMT.
   $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/type_changing_option_map.cmt --threads 2 --timeout-ms 10000 --dump-sst artifacts/type-changing-option-map.sst
   verocaml: verified file=artifacts/type_changing_option_map.cmt functions=1 obligations=10
   $ grep '^function map_option#0 binders=' artifacts/type-changing-option-map.sst | sed -E 's/ @ .*//'
-  function map_option#0 binders=['0@map_option#0, '1@map_option#0] mode=exec recursive=false result=Stdlib.option<'1@map_option#0> policy=default-linear/default-z3
+  function map_option#0 binders=['0@map_option#0, '1@map_option#0] mode=exec recursive=false result=option<'1@map_option#0> policy=default-linear/default-z3
 
   $ OCAML_COLOR=never ../../src/verocaml.exe verify fixtures/structures.ml --threads 1 --timeout-ms 10000 --dump-sst artifacts/structures-source.sst --dump-vir artifacts/structures-source.vir
   verocaml: verified file=fixtures/structures.ml functions=12 obligations=40
@@ -39,29 +39,29 @@ A concrete mismatch and an inconsistent repeated inferred variable are rejected
 while authenticating the result binder; neither can relabel the callable's
 actual result type.
 
-  $ for name in generic_option_spec_binder_mismatch generic_repeated_binder_mismatch; do code=0; OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$name.cmt" --threads 1 --timeout-ms 10000 >"artifacts/$name.out" 2>&1 || code=$?; test "$code" = 2; printf '%s: ' "$name"; grep -o 'error\[VERO_[A-Z_]*\]' "artifacts/$name.out"; done
-  generic_option_spec_binder_mismatch: error[VERO_MALFORMED_GHOST_CALL]
-  generic_repeated_binder_mismatch: error[VERO_MALFORMED_GHOST_CALL]
+  $ for name in generic_option_spec_binder_mismatch generic_repeated_binder_mismatch; do code=0; OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$name.cmt" --threads 1 --timeout-ms 10000 >"artifacts/$name.out" 2>&1 || code=$?; test "$code" = 2; printf '%s: ' "$name"; grep -o 'VERO_[A-Z_]*' "artifacts/$name.out" | head -1; done
+  generic_option_spec_binder_mismatch: VERO_MALFORMED_GHOST_CALL
+  generic_repeated_binder_mismatch: VERO_MALFORMED_GHOST_CALL
 
 The standard external specifications and local descriptors share one
 UID-backed registry.  The tree has two authenticated recursive fields and no
 clone function is emitted for multiple payload instantiations.
 
   $ ./parametric_adts_tool.exe descriptors artifacts/structures.cmt | sed -E 's/uid=[^ ]+/uid=<uid>/'
-  adt Stdlib.option<'0@Stdlib.option#-1> uid=<uid> provenance=external-type-specification binders=1 variant[0:None()|1:Some(0:$0:'0@Stdlib.option#-1)] recursive-fields=0
-  adt Stdlib.list<'0@Stdlib.list#-2> uid=<uid> provenance=external-type-specification binders=1 variant[0:[]()|1:::(0:$0:'0@Stdlib.list#-2,1:$1:Stdlib.list<'0@Stdlib.list#-2>)] recursive-fields=1
-  adt Stdlib.result<'0@Stdlib.result#-3, '1@Stdlib.result#-3> uid=<uid> provenance=external-type-specification binders=2 variant[0:Ok(0:$0:'0@Stdlib.result#-3)|1:Error(0:$0:'1@Stdlib.result#-3)] recursive-fields=0
-  adt box<'0@box#0> uid=<uid> provenance=local binders=1 variant[0:Box(0:$0:'0@box#0)] recursive-fields=0
-  adt pair<'0@pair#1> uid=<uid> provenance=local binders=1 record{0:left:'0@pair#1;1:right:'0@pair#1} recursive-fields=0
-  adt tree<'0@tree#2> uid=<uid> provenance=local binders=1 variant[0:Leaf()|1:Node(0:$0:'0@tree#2,1:$1:tree<'0@tree#2>,2:$2:tree<'0@tree#2>)] recursive-fields=2
+  adt option<'0@option_specification#0> uid=<uid> provenance=external-type-specification binders=1 variant[0:None()|1:Some(0:$0:'0@option_specification#0)] recursive-fields=0
+  adt list<'0@list_specification#1> uid=<uid> provenance=external-type-specification binders=1 variant[0:[]()|1:::(0:$0:'0@list_specification#1,1:$1:list<'0@list_specification#1>)] recursive-fields=1
+  adt Stdlib.result<'0@result_specification#2, '1@result_specification#2> uid=<uid> provenance=external-type-specification binders=2 variant[0:Ok(0:$0:'0@result_specification#2)|1:Error(0:$0:'1@result_specification#2)] recursive-fields=0
+  adt box<'0@box#3> uid=<uid> provenance=local binders=1 variant[0:Box(0:$0:'0@box#3)] recursive-fields=0
+  adt pair<'0@pair#4> uid=<uid> provenance=local binders=1 record{0:left:'0@pair#4;1:right:'0@pair#4} recursive-fields=0
+  adt tree<'0@tree#5> uid=<uid> provenance=local binders=1 variant[0:Leaf()|1:Node(0:$0:'0@tree#5,1:$1:tree<'0@tree#5>,2:$2:tree<'0@tree#5>)] recursive-fields=2
   $ grep -E '^function (copy_option|copy_result|copy_box|make_pair|copy_pair|length|append|tree_size|tree_height)#' artifacts/structures-source.sst | sed -E 's/ policy=.*//'
-  function copy_option#0 binders=['0@copy_option#0] mode=exec recursive=false result=Stdlib.option<'0@copy_option#0>
+  function copy_option#0 binders=['0@copy_option#0] mode=exec recursive=false result=option<'0@copy_option#0>
   function copy_result#1 binders=['0@copy_result#1, '1@copy_result#1] mode=exec recursive=false result=Stdlib.result<'0@copy_result#1, '1@copy_result#1>
   function copy_box#2 binders=['0@copy_box#2] mode=exec recursive=false result=box<'0@copy_box#2>
   function make_pair#3 binders=['0@make_pair#3] mode=exec recursive=false result=pair<'0@make_pair#3>
   function copy_pair#4 binders=['0@copy_pair#4] mode=exec recursive=false result=pair<'0@copy_pair#4>
   function length#7 binders=['0@length#7] mode=exec recursive=true result=int
-  function append#8 binders=['0@append#8] mode=exec recursive=true result=Stdlib.list<'0@append#8>
+  function append#8 binders=['0@append#8] mode=exec recursive=true result=list<'0@append#8>
   function tree_size#9 binders=['0@tree_size#9] mode=exec recursive=true result=int
   function tree_height#11 binders=['0@tree_height#11] mode=exec recursive=true result=int
   $ test "$(grep -c '^function [^#]*<parameter' artifacts/structures-source.sst)" = 0
@@ -75,7 +75,7 @@ layout verify.
   $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/equality.cmt --threads 2 --timeout-ms 10000 --dump-sst artifacts/equality-cmt.sst --dump-vir artifacts/equality-cmt.vir
   verocaml: verified file=artifacts/equality.cmt functions=7 obligations=25
   $ cmp artifacts/equality-source.vir artifacts/equality-cmt.vir
-  $ grep -q 'tag.Stdlib.option<int>' artifacts/equality-source.vir
+  $ grep -q 'tag.option_specification<int>' artifacts/equality-source.vir
   $ grep -q 'tag.local_option<int>' artifacts/equality-source.vir
 
 The inherited Proof grammar includes the exact recursive direct-None assertion,
@@ -110,18 +110,18 @@ postconditions produce counterexamples rather than proving from an opaque sort.
 Open, recursive, unit/function/reference/array-bearing equality and unsupported
 generic recursion/mutation reject before solver/private-receipt work.
 
-  $ reject () { name=$1; expected=$2; code=0; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$name.cmt" --threads 1 --timeout-ms 5000 --dump-sst "artifacts/$name.sst" --dump-vir "artifacts/$name.vir" >"artifacts/$name.out" 2>&1 || code=$?; test "$code" = 2; printf '%s: ' "$name"; grep -o 'error\[VERO_[A-Z_]*\]' "artifacts/$name.out"; grep -q "error\[$expected\]" "artifacts/$name.out"; test "$(grep -c 'private-receipt ' "artifacts/$name.out")" = 0; test ! -e "artifacts/$name.sst"; test ! -e "artifacts/$name.vir"; }
+  $ reject () { name=$1; expected=$2; code=0; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$name.cmt" --threads 1 --timeout-ms 5000 --dump-sst "artifacts/$name.sst" --dump-vir "artifacts/$name.vir" >"artifacts/$name.out" 2>&1 || code=$?; test "$code" = 2; observed=$(grep -o 'VERO_[A-Z_]*' "artifacts/$name.out" | head -1); printf '%s: %s\n' "$name" "$observed"; test "$observed" = "$expected"; test "$(grep -c 'private-receipt ' "artifacts/$name.out")" = 0; test ! -e "artifacts/$name.sst"; test ! -e "artifacts/$name.vir"; }
   $ for spec in 'open_equality VERO_UNSUPPORTED_POLYMORPHISM' 'recursive_equality VERO_UNSUPPORTED_POLYMORPHISM' 'unit_payload_equality VERO_UNSUPPORTED_POLYMORPHISM' 'function_payload_equality VERO_UNSUPPORTED_AGGREGATE' 'ref_payload_equality VERO_UNSUPPORTED_TYPE' 'array_payload_equality VERO_UNSUPPORTED_TYPE' 'unauthenticated_descent VERO_DEPENDENCY' 'changed_recursive_arguments VERO_DEPENDENCY' 'generic_mutual VERO_UNSUPPORTED_MUTUAL_RECURSION' 'mutable_generic VERO_UNSUPPORTED_MUTATION'; do set -- $spec; reject "$1" "$2"; done
-  open_equality: error[VERO_UNSUPPORTED_POLYMORPHISM]
-  recursive_equality: error[VERO_UNSUPPORTED_POLYMORPHISM]
-  unit_payload_equality: error[VERO_UNSUPPORTED_POLYMORPHISM]
-  function_payload_equality: error[VERO_UNSUPPORTED_AGGREGATE]
-  ref_payload_equality: error[VERO_UNSUPPORTED_TYPE]
-  array_payload_equality: error[VERO_UNSUPPORTED_TYPE]
-  unauthenticated_descent: error[VERO_DEPENDENCY]
-  changed_recursive_arguments: error[VERO_UNSUPPORTED_POLYMORPHISM]
-  generic_mutual: error[VERO_UNSUPPORTED_MUTUAL_RECURSION]
-  mutable_generic: error[VERO_UNSUPPORTED_MUTATION]
+  open_equality: VERO_UNSUPPORTED_POLYMORPHISM
+  recursive_equality: VERO_UNSUPPORTED_POLYMORPHISM
+  unit_payload_equality: VERO_UNSUPPORTED_POLYMORPHISM
+  function_payload_equality: VERO_UNSUPPORTED_AGGREGATE
+  ref_payload_equality: VERO_UNSUPPORTED_TYPE
+  array_payload_equality: VERO_UNSUPPORTED_TYPE
+  unauthenticated_descent: VERO_DEPENDENCY
+  changed_recursive_arguments: VERO_UNSUPPORTED_POLYMORPHISM
+  generic_mutual: VERO_UNSUPPORTED_MUTUAL_RECURSION
+  mutable_generic: VERO_UNSUPPORTED_MUTATION
 
 Pure descriptor construction rejects malformed binder, constructor, field, and
 external proxy identity directly at [Parametric_adt.create], before malformed
@@ -135,9 +135,9 @@ state can reach SST, VIR, VC, backend, solver, or Z3 work.
   field-order rejected: constructor Box fields must have dense zero-based indices
   field-template rejected: constructor Box field template escapes descriptor binders
   empty-external-proxy rejected: external proxy compiler identity is empty
-  canonical-option name=Stdlib.option uid=<predef:option> accepted
-  canonical-list name=Stdlib.list uid=<predef:list> accepted
-  canonical-result name=Stdlib.result uid=[intf]Stdlib.214 accepted
+  canonical-stdlib.result name=result_specification uid=[intf]Stdlib.214 accepted
+  canonical-list name=list_specification uid=<predef:list> accepted
+  canonical-option name=option_specification uid=<predef:option> accepted
   descriptor-boundary=Parametric_adt.create downstream=none backend-delta=0 z3-delta=0
 
 Repeated, copied, alpha-renamed, and serial/threaded artifacts are stable.

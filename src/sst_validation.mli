@@ -9,6 +9,12 @@ type error_kind = Sst_validation_private.Public.error_kind =
   | Invalid_clause of string
   | Invalid_body of string
   | Invalid_call of string
+  | Invalid_call_stage of {
+      callee : Sst.function_id;
+      stage : Sst.expression_stage;
+      callee_mode : Sst.verification_mode;
+    }
+  | Unannotated_erased_call of Instance_mode.unannotated_erased_call
   | Invalid_recursive_marker of string
   | Invalid_unique_return of string
   | Invalid_target_link of string
@@ -220,6 +226,7 @@ val rank_ground_witnesses :
   validated_rank_domain -> Typedtree_adapter.rank_ground_witness list
 val rank_immutable : validated_rank_domain -> bool
 val error_to_string : error -> string
+val to_diagnostic : error -> Diagnostic.t
 
 module For_testing : sig
   val reset_ghost_formal_flow_count : unit -> unit

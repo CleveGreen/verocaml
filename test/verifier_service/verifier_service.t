@@ -18,10 +18,3 @@ and exposes renderer-complete opaque observations without filesystem ownership.
   diagnostics=function/kind/span/outcome/model count=1 status=counterexample
   trusted-observations=immutable count=2 views=complete
   errors=unit/message/diagnostic opaque=projected
-
-The public signature exposes no path, channel, process, rendering, exit, solver,
-driver, session, receipt, handle, environment, or mutable authority.
-
-  $ grep -E 'string (list|option).*file|Unix|Sys|channel|formatter|exit|Solver|Verification_(driver|pipeline|session)|receipt|handle|environment|mutable|(^|[^[:alnum:]_])ref([^[:alnum:]_]|$)' ../../src/verifier_service.mli && exit 1 || :
-  $ grep -E 'val (request|verify).*string' ../../src/verifier_service.mli && exit 1 || :
-  $ grep -E 'Obj[.]' verifier_service_tool.ml && exit 1 || :

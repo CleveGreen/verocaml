@@ -174,7 +174,8 @@ let imported dependency consumer =
   in
   let environment, _ =
     match
-      Interface_specification_loaded_private.authenticate ~solver_policy:policy
+      Interface_specification_loaded_private.authenticate ~external_targets:[]
+        ~solver_policy:policy
         ~dependencies:[ dependency ] ~consumer
     with
     | Ok result -> result

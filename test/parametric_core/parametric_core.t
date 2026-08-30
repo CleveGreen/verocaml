@@ -42,8 +42,8 @@ compiler-typed optional binding through the same default/payload path.
   optional-forward
   optional-forward
   optional-forward
-  $ sed -n '/function pick#/,/function concrete#/p' artifacts/source.vir | grep -q 'tag.Stdlib.option.*optional.selected.*fallback'
-  $ sed -n '/function forwarded#/,/function forwarded_absent#/p' artifacts/source.vir | grep -q 'tag.Stdlib.option<int>.*carrier.*optional.selected.* 7'
+  $ sed -n '/function pick#/,/function concrete#/p' artifacts/source.vir | grep -q 'tag.option_specification.*optional.selected.*fallback'
+  $ sed -n '/function forwarded#/,/function forwarded_absent#/p' artifacts/source.vir | grep -q 'tag.option_specification<int>.*carrier.*optional.selected.* 7'
   $ test "$(grep -c '^function relay#' artifacts/source.sst)" = 1
   $ test "$(grep -c '^function .*<' artifacts/source.sst)" = 0
 
@@ -115,34 +115,34 @@ mutation, and unsupported aggregate applications reject before dumps and
 private authority. Compiler-invalid label and optional forwarding forms reject
 on the source route. Compiler-valid negatives also reject from retained CMT.
 
-  $ reject () { input=$1; name=$2; expected=$3; code=0; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify "$input" --threads 1 --timeout-ms 5000 --dump-sst "artifacts/$name.sst" --dump-vir "artifacts/$name.vir" >"artifacts/$name.out" 2>&1 || code=$?; test "$code" = 2; printf '%s: ' "$name"; grep -o 'error\[VERO_[A-Z_]*\]' "artifacts/$name.out"; test "$(grep -c 'private-receipt ' "artifacts/$name.out")" = 0; test ! -e "artifacts/$name.sst"; test ! -e "artifacts/$name.vir"; grep -q "error\\[$expected\\]" "artifacts/$name.out"; }
-  $ for spec in 'eq_parameter VERO_UNSUPPORTED_POLYMORPHISM' 'eq_tuple VERO_UNSUPPORTED_POLYMORPHISM' 'eq_option VERO_UNSUPPORTED_POLYMORPHISM' 'eq_list VERO_UNSUPPORTED_POLYMORPHISM' 'partial_application VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION' 'callback VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION' 'generic_mutation VERO_UNSUPPORTED_MUTATION' 'inferred_generic_recursion VERO_DEPENDENCY' 'explicit_polymorphic_recursion VERO_DEPENDENCY' 'open_aggregate VERO_DEPENDENCY'; do set -- $spec; reject "fixtures/$1.ml" "source-$1" "$2"; done
-  source-eq_parameter: error[VERO_UNSUPPORTED_POLYMORPHISM]
-  source-eq_tuple: error[VERO_UNSUPPORTED_POLYMORPHISM]
-  source-eq_option: error[VERO_UNSUPPORTED_POLYMORPHISM]
-  source-eq_list: error[VERO_UNSUPPORTED_POLYMORPHISM]
-  source-partial_application: error[VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION]
-  source-callback: error[VERO_CALLBACK_CONTRACT]
-  source-generic_mutation: error[VERO_UNSUPPORTED_MUTATION]
-  source-inferred_generic_recursion: error[VERO_DEPENDENCY]
-  source-explicit_polymorphic_recursion: error[VERO_UNSUPPORTED_POLYMORPHISM]
-  source-open_aggregate: error[VERO_DEPENDENCY]
-  $ for spec in 'eq_parameter VERO_UNSUPPORTED_POLYMORPHISM' 'eq_tuple VERO_UNSUPPORTED_POLYMORPHISM' 'eq_option VERO_UNSUPPORTED_POLYMORPHISM' 'eq_list VERO_UNSUPPORTED_POLYMORPHISM' 'partial_application VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION' 'callback VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION' 'generic_mutation VERO_UNSUPPORTED_MUTATION' 'inferred_generic_recursion VERO_DEPENDENCY' 'explicit_polymorphic_recursion VERO_UNSUPPORTED_POLYMORPHISM' 'open_aggregate VERO_DEPENDENCY'; do set -- $spec; reject "artifacts/$1.cmt" "retained-$1" "$2"; done
-  retained-eq_parameter: error[VERO_UNSUPPORTED_POLYMORPHISM]
-  retained-eq_tuple: error[VERO_UNSUPPORTED_POLYMORPHISM]
-  retained-eq_option: error[VERO_UNSUPPORTED_POLYMORPHISM]
-  retained-eq_list: error[VERO_UNSUPPORTED_POLYMORPHISM]
-  retained-partial_application: error[VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION]
-  retained-callback: error[VERO_CALLBACK_CONTRACT]
-  retained-generic_mutation: error[VERO_UNSUPPORTED_MUTATION]
-  retained-inferred_generic_recursion: error[VERO_DEPENDENCY]
-  retained-explicit_polymorphic_recursion: error[VERO_UNSUPPORTED_POLYMORPHISM]
-  retained-open_aggregate: error[VERO_DEPENDENCY]
+  $ reject () { input=$1; name=$2; expected=$3; code=0; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 OCAML_COLOR=never ../../src/verocaml.exe verify "$input" --threads 1 --timeout-ms 5000 --dump-sst "artifacts/$name.sst" --dump-vir "artifacts/$name.vir" >"artifacts/$name.out" 2>&1 || code=$?; test "$code" = 2; actual=$(grep -Eo 'VERO_[A-Z_]+' "artifacts/$name.out" | head -1); printf '%s: code=%s\n' "$name" "$actual"; test "$actual" = "$expected"; test "$(grep -c 'private-receipt ' "artifacts/$name.out")" = 0; test ! -e "artifacts/$name.sst"; test ! -e "artifacts/$name.vir"; }
+  $ for spec in 'eq_parameter VERO_UNSUPPORTED_POLYMORPHISM' 'eq_tuple VERO_UNSUPPORTED_POLYMORPHISM' 'eq_option VERO_UNSUPPORTED_POLYMORPHISM' 'eq_list VERO_UNSUPPORTED_POLYMORPHISM' 'partial_application VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION' 'callback VERO_CALLBACK_CONTRACT' 'generic_mutation VERO_UNSUPPORTED_MUTATION' 'inferred_generic_recursion VERO_DEPENDENCY' 'explicit_polymorphic_recursion VERO_UNSUPPORTED_POLYMORPHISM' 'open_aggregate VERO_DEPENDENCY'; do set -- $spec; reject "fixtures/$1.ml" "source-$1" "$2"; done
+  source-eq_parameter: code=VERO_UNSUPPORTED_POLYMORPHISM
+  source-eq_tuple: code=VERO_UNSUPPORTED_POLYMORPHISM
+  source-eq_option: code=VERO_UNSUPPORTED_POLYMORPHISM
+  source-eq_list: code=VERO_UNSUPPORTED_POLYMORPHISM
+  source-partial_application: code=VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION
+  source-callback: code=VERO_CALLBACK_CONTRACT
+  source-generic_mutation: code=VERO_UNSUPPORTED_MUTATION
+  source-inferred_generic_recursion: code=VERO_DEPENDENCY
+  source-explicit_polymorphic_recursion: code=VERO_UNSUPPORTED_POLYMORPHISM
+  source-open_aggregate: code=VERO_DEPENDENCY
+  $ for spec in 'eq_parameter VERO_UNSUPPORTED_POLYMORPHISM' 'eq_tuple VERO_UNSUPPORTED_POLYMORPHISM' 'eq_option VERO_UNSUPPORTED_POLYMORPHISM' 'eq_list VERO_UNSUPPORTED_POLYMORPHISM' 'partial_application VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION' 'callback VERO_CALLBACK_CONTRACT' 'generic_mutation VERO_UNSUPPORTED_MUTATION' 'inferred_generic_recursion VERO_DEPENDENCY' 'explicit_polymorphic_recursion VERO_UNSUPPORTED_POLYMORPHISM' 'open_aggregate VERO_DEPENDENCY'; do set -- $spec; reject "artifacts/$1.cmt" "retained-$1" "$2"; done
+  retained-eq_parameter: code=VERO_UNSUPPORTED_POLYMORPHISM
+  retained-eq_tuple: code=VERO_UNSUPPORTED_POLYMORPHISM
+  retained-eq_option: code=VERO_UNSUPPORTED_POLYMORPHISM
+  retained-eq_list: code=VERO_UNSUPPORTED_POLYMORPHISM
+  retained-partial_application: code=VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION
+  retained-callback: code=VERO_CALLBACK_CONTRACT
+  retained-generic_mutation: code=VERO_UNSUPPORTED_MUTATION
+  retained-inferred_generic_recursion: code=VERO_DEPENDENCY
+  retained-explicit_polymorphic_recursion: code=VERO_UNSUPPORTED_POLYMORPHISM
+  retained-open_aggregate: code=VERO_DEPENDENCY
   $ reject fixtures/missing_label.ml source-missing_label VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION
-  source-missing_label: error[VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION]
+  source-missing_label: code=VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION
   $ reject fixtures/duplicate_label.ml source-duplicate_label VERO_SOURCE_COMPILE
-  source-duplicate_label: error[VERO_SOURCE_COMPILE]
+  source-duplicate_label: code=VERO_SOURCE_COMPILE
   $ reject fixtures/unknown_label.ml source-unknown_label VERO_SOURCE_COMPILE
-  source-unknown_label: error[VERO_SOURCE_COMPILE]
+  source-unknown_label: code=VERO_SOURCE_COMPILE
   $ reject fixtures/wrong_optional_forward.ml source-wrong_optional_forward VERO_SOURCE_COMPILE
-  source-wrong_optional_forward: error[VERO_SOURCE_COMPILE]
+  source-wrong_optional_forward: code=VERO_SOURCE_COMPILE

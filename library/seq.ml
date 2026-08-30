@@ -238,25 +238,3 @@ let axiom_extensionality (left : 'a t) (right : 'a t) : unit =
   axiom_append_get_left;
   axiom_append_get_right
 ])]
-
-let my_int_seq (l : int) : int t =
-  init l (fun i -> i)
-[@@verocaml.spec]
-
-let yes () : unit = 
-  [%verocaml.activate [group_seq_axioms] (
-    let my_seq = my_int_seq 10 in
-    assert(get my_seq 1 = 1);
-    assert(first my_seq = 0);
-    assert(last my_seq = 9);
-    let took = take my_seq 5 in
-    assert(length took = 5);
-    assert(first took = first my_seq);
-    assert(last took = (last my_seq) - 5);
-    let skipped = skip my_seq 5 in
-    let conc = append took skipped in
-    axiom_extensionality my_seq conc;
-    assert(my_seq = conc);
-    ()
-  )]
-[@@verocaml.proof]

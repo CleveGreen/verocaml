@@ -113,6 +113,8 @@ val make_definition :
 type ('bindings, 'error) parameter_services = {
   normalized_type :
     Location.t -> Types.type_expr -> (Parametric_type.t, 'error) result;
+  optional_carrier :
+    Location.t -> Parametric_type.t -> (Parametric_type.t, 'error) result;
   lower_expression :
     'bindings -> Typedtree.expression -> (Sst.expression, 'error) result;
   lower_pattern :

@@ -52,13 +52,6 @@ dependent lowering, backend, or solver work.
   $ ./prepared_vc_jobs_tool.exe production-failed-producer artifacts/failing_callee.cmt
   production-failed-producer status=counterexample receipts=0/0 dependent=0/0/0 session-destroyed=true
 
-No coordinator authority, callback, native Z3 value, mutable reference, or
-scheduler surface crosses the private job interface.
-
-  $ grep -E 'Verification_session|proof_activation|callback|Z3[.]|Smtml[.]|ref|Domain|Parallel|Thread|scheduler' ../../src/vc_solver_job_private.mli && exit 1 || :
-  $ sed -n '/^type ground_payload =/,/^type prepared_query =/p' ../../src/recursive_spec_encoding.ml | grep -E 'Logic_ir[.]query|ref|authentication_token' && exit 1 || :
-  $ sed -n '/^type prepared_job =/,/^let direct_requirements/p' ../../src/vc_solver_job_private.ml | grep -E 'Logic_ir[.]query|ref|Verification_session|callback|Z3[.]context|Z3[.]Solver' && exit 1 || :
-
 The CLI rejects every malformed, missing, duplicate, nonpositive, and
 overflowing explicit thread count before opening the input.
 

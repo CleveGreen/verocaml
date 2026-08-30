@@ -51,6 +51,8 @@ val formal_label : Typedtree.arg_label -> string option
 
 val lower_typedtree_formals :
   lower:(Location.t -> Types.type_expr -> (Parametric_type.t, 'error) result) ->
+  optional_carrier:
+    (Location.t -> Parametric_type.t -> (Parametric_type.t, 'error) result) ->
   Typedtree.function_param list ->
   (Parametric_type.t list * string option list, 'error) result
 
@@ -71,14 +73,6 @@ val infer_labeled_type_arguments_from_actuals :
   actual_types:Parametric_type.t list ->
   actual_labels:string option list ->
   (Parametric_type.t list, string) result
-
-type optional_shape =
-  | Absent
-  | Present of Parametric_type.t
-  | Forward of Parametric_type.t
-
-val validate_optional_shape :
-  carrier:Parametric_type.t -> optional_shape -> (unit, string) result
 
 type call_argument = {
   argument_label : string option;

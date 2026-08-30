@@ -1,3 +1,6 @@
+type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
 let id x = x
 let copy x = let y = x in y
 let choose flag left right = if flag then left else right

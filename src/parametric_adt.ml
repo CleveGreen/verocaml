@@ -3,7 +3,6 @@ type provenance =
   | External of {
       compiler_uid : string;
       proxy_uid : string;
-      prelude : bool;
     }
 
 type field = {
@@ -28,6 +27,7 @@ type t = {
   type_constructor : Parametric_type.constructor;
   binders : Parametric_type.binder list;
   provenance : provenance;
+  optional_carrier : bool;
   kind : kind;
   recursive_fields : (int option * field) list;
 }
@@ -50,6 +50,7 @@ let binders descriptor = descriptor.binders
 let provenance descriptor = descriptor.provenance
 let kind descriptor = descriptor.kind
 let recursive_fields descriptor = descriptor.recursive_fields
+let is_optional_carrier descriptor = descriptor.optional_carrier
 let authenticates_recursive_field descriptor ~constructor_index ~field_index =
   List.exists
     (fun (candidate_constructor, field) ->
@@ -60,11 +61,6 @@ let authenticates_recursive_field descriptor ~constructor_index ~field_index =
 let compiler_uid descriptor =
   match descriptor.provenance with
   | Local { compiler_uid } | External { compiler_uid; _ } -> compiler_uid
-
-let is_standard descriptor =
-  match descriptor.provenance with
-  | Local _ | External { prelude = false; _ } -> false
-  | External { prelude = true; _ } -> true
 
 let error type_constructor message =
   Error { descriptor = type_constructor.Parametric_type.constructor_path; message }
@@ -113,11 +109,24 @@ let binder_matches_type type_id binder =
   binder.Parametric_type.owner.owner_index = type_id.Parametric_type.type_index
   && String.equal binder.owner.owner_name type_id.type_name
 
-let create ~type_id ~type_constructor ~binders ~provenance ~kind =
+let create ~optional_carrier ~type_id ~type_constructor ~binders
+    ~provenance ~kind =
   let descriptor_name = type_constructor.Parametric_type.constructor_path in
   let fail message = error type_constructor message in
   if type_constructor.constructor_identity = "" then fail "type constructor identity is empty"
-  else if compiler_uid { type_id; type_constructor; binders; provenance; kind; recursive_fields = [] } = "" then
+  else if
+    compiler_uid
+      {
+        type_id;
+        type_constructor;
+        binders;
+        provenance;
+        optional_carrier;
+        kind;
+        recursive_fields = [];
+      }
+    = ""
+  then
     fail "compiler type UID is empty"
   else if
     match provenance with
@@ -169,7 +178,15 @@ let create ~type_id ~type_constructor ~binders ~provenance ~kind =
                 constructors
         in
         let descriptor =
-          { type_id; type_constructor; binders; provenance; kind; recursive_fields }
+          {
+            type_id;
+            type_constructor;
+            binders;
+            provenance;
+            optional_carrier;
+            kind;
+            recursive_fields;
+          }
         in
         let _ = descriptor_name in
         Ok descriptor
@@ -185,6 +202,7 @@ let option_instance descriptors = function
       match find descriptors constructor with
       | Some
           ({ binders = [ binder ];
+             optional_carrier = true;
              kind =
                Variant
                  [ ({ constructor_index = 0; constructor_fields = []; _ } as absent);
@@ -194,7 +212,7 @@ let option_instance descriptors = function
                       _ } as present) ];
              _ } as descriptor)
         when Parametric_type.compare_constructor constructor
-               Parametric_type.option_constructor
+               descriptor.type_constructor
              = 0
              && Parametric_type.equal field_type
                   (Parametric_type.Parameter binder)
@@ -219,6 +237,19 @@ let application descriptor arguments =
       (Printf.sprintf "type constructor %s expects %d argument(s)"
          descriptor.type_constructor.constructor_path (List.length descriptor.binders))
   else Ok (Parametric_type.Application (descriptor.type_constructor, arguments))
+
+let option_application descriptors payload =
+  let candidates =
+    List.filter_map
+      (fun descriptor ->
+        match application descriptor [ payload ] with
+        | Ok application
+          when Option.is_some (option_instance [ descriptor ] application) ->
+            Some application
+        | Ok _ | Error _ -> None)
+      descriptors
+  in
+  match candidates with [ application ] -> Some application | [] | _ -> None
 
 let same_application descriptor = function
   | Parametric_type.Application (constructor, arguments) ->

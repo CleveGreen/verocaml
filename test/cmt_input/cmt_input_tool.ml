@@ -199,15 +199,114 @@ let test_pack filename =
   require_classification (Diagnostic.Unsupported_input Packed) diagnostic;
   require_equal_string "VERO_UNSUPPORTED_PACK" diagnostic.code "pack code"
 
+let make_import unit_name crc =
+  let name = Compilation_unit.Name.of_string unit_name in
+  let crc_with_unit =
+    Option.map
+      (fun crc -> (Compilation_unit.of_string unit_name, crc))
+      crc
+  in
+  Import_info.create name ~crc_with_unit
+
+let forge_interface_identity input output unit_name =
+  let interface = Cmi_format.read_cmi_lazy input in
+  let original_name = interface.Cmi_format.cmi_name in
+  let cmi_crcs =
+    Array.map
+      (fun imported ->
+        if Compilation_unit.Name.equal (Import_info.name imported) original_name
+        then make_import unit_name (Import_info.crc imported)
+        else imported)
+      interface.Cmi_format.cmi_crcs
+  in
+  let cmi_kind =
+    match interface.Cmi_format.cmi_kind with
+    | Cmi_format.Normal metadata ->
+        Cmi_format.Normal
+          {
+            metadata with
+            cmi_impl = Compilation_unit.of_string unit_name;
+          }
+    | Parameter -> fail "%s is a parameter CMI" input
+  in
+  let interface =
+    {
+      interface with
+      Cmi_format.cmi_name = Compilation_unit.Name.of_string unit_name;
+      cmi_kind;
+      cmi_crcs;
+    }
+  in
+  let channel = open_out_bin output in
+  Fun.protect
+    ~finally:(fun () -> close_out channel)
+    (fun () -> ignore (Cmi_format.output_cmi output channel interface))
+
+let test_rejected_implementation filename =
+  let diagnostic = diagnostic_of_error (Cmt_input.load filename) in
+  require_classification Diagnostic.Malformed_input diagnostic;
+  print_endline "ordinary CMT/CMI identity rejected"
+
+let canonical_path path =
+  (if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path else path)
+  |> Unix.realpath
+
+let test_relocated_load_path filename expected =
+  let implementation =
+    match Cmt_input.load filename with
+    | Ok implementation -> implementation
+    | Error diagnostic ->
+        fail "relocated implementation rejected as %s: %s" diagnostic.code
+          diagnostic.message
+  in
+  let expected = List.map canonical_path expected in
+  let label paths path =
+    let basename = Filename.basename path in
+    List.find_opt
+      (fun expected -> String.equal (Filename.basename expected) basename)
+      paths
+  in
+  let raw_order =
+    implementation.metadata.Cmt_format.cmt_loadpath.visible
+    |> List.filter_map (label expected)
+    |> List.map Filename.basename
+  in
+  let relocated_order =
+    implementation.load_path_visible
+    |> List.filter_map (fun path ->
+           let path = canonical_path path in
+           Option.map Filename.basename
+             (List.find_opt (String.equal path) expected))
+  in
+  require (raw_order = relocated_order)
+    "visible load-path precedence changed: raw=%s relocated=%s"
+    (String.concat "," raw_order) (String.concat "," relocated_order);
+  require (List.length relocated_order = List.length expected)
+    "not every expected relocated load path was retained";
+  print_endline
+    ("relocated load-path order=" ^ String.concat "," relocated_order)
+
 let () =
-  if Array.length Sys.argv <> 4 then
-    fail "usage: %s IMPLEMENTATION.cmt INTERFACE.cmti PACK.cmt" Sys.argv.(0);
-  test_bounds ();
-  test_unsupported_target_precedes_io ();
-  test_classifier_seams ();
-  test_malformed ();
-  test_incompatible_magic ();
-  test_implementation Sys.argv.(1);
-  test_interface Sys.argv.(2);
-  test_pack Sys.argv.(3);
-  print_endline "CMT input checks passed"
+  match Array.to_list Sys.argv with
+  | [ _; implementation; interface; pack ] ->
+      test_bounds ();
+      test_unsupported_target_precedes_io ();
+      test_classifier_seams ();
+      test_malformed ();
+      test_incompatible_magic ();
+      test_implementation implementation;
+      test_interface interface;
+      test_pack pack;
+      print_endline "CMT input checks passed"
+  | [ _; "forge-interface-identity"; input; output; unit_name ] ->
+      forge_interface_identity input output unit_name
+  | [ _; "rejected-implementation"; filename ] ->
+      test_rejected_implementation filename
+  | _ :: "relocated-load-path" :: filename :: expected ->
+      test_relocated_load_path filename expected
+  | _ ->
+      fail
+        "usage: %s IMPLEMENTATION.cmt INTERFACE.cmti PACK.cmt | \
+         forge-interface-identity INPUT OUTPUT UNIT | \
+         rejected-implementation CMT | relocated-load-path CMT PATH..."
+        Sys.argv.(0)

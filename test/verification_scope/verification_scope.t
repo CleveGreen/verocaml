@@ -23,7 +23,9 @@ relabeled as retained.
   $ OCAML_COLOR=never ../../src/verocaml.exe verify-project --root retained/marked_legacy.cmt retained/marked_legacy.cmi --threads 1 --timeout-ms 60000 >retained/marked.out 2>&1; echo $?
   2
   $ cat retained/marked.out
-  verocaml: error[VERO_UNSUPPORTED_STRUCTURE_ITEM] structure item is outside the pure SST subset @ marked_legacy.ml:3:0-7:3
+  File "marked_legacy.ml", lines 3-7, characters 0-3:
+  Error: [VERO_UNSUPPORTED_STRUCTURE_ITEM] This top-level declaration is not supported in a verified compilation unit.
+    Hint: Move this declaration to an unverified dependency, or rewrite it as a supported type or function declaration.
   verocaml: verified unit=Marked_legacy file=retained/marked_legacy.cmt result=rejected
   $ mkdir ordinary-marked
   $ cp fixtures/pass_root.ml ordinary-marked/
@@ -149,6 +151,7 @@ A marked client cannot route a call through an unmarked provider.
   $ project --root bypass/unmarked_client.cmt bypass/unmarked_client.cmi --dependency bypass/unmarked_provider.cmt bypass/unmarked_provider.cmi --threads 1 >bypass/out 2>&1; echo $?
   2
   $ cat bypass/out
-  verocaml: error[VERO_UNSUPPORTED_EXTERNAL_CALL] unknown and external calls are not supported @ unmarked_client.ml:3:25-3:57
+  File "unmarked_client.ml", line 3, characters 25-57:
+  Error: [VERO_UNSUPPORTED_EXTERNAL_CALL] unknown and external calls are not supported
   verocaml: verified unit=Unmarked_client file=bypass/unmarked_client.cmt result=rejected
   verocaml: skipped unit=Unmarked_provider file=bypass/unmarked_provider.cmt result=skipped

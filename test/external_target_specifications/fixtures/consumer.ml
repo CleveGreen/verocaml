@@ -1,5 +1,8 @@
 [@@@verocaml.verify]
 
+type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
 let logical_marker (value : bool) = value
 [@@verocaml.spec]
 

@@ -178,17 +178,6 @@ let find_registration program =
     (fun (registration : registration) -> registration.program == program)
     !registrations
 
-let ppx_is_retained arguments =
-  let rec loop = function
-    | [] | [ _ ] -> false
-    | "-ppx" :: command :: rest ->
-        String.split_on_char ' ' command
-        |> List.exists (String.equal "--keep-ghost")
-        || loop rest
-    | _ :: rest -> loop rest
-  in
-  loop (Array.to_list arguments)
-
 let seal implementation program =
   match find_registration program with
   | None ->
@@ -201,9 +190,9 @@ let seal implementation program =
       Error "finite-formal authority rejected a changed SST snapshot"
   | Some registration
     when registration.requests = []
-         && not (ppx_is_retained implementation.compiler_arguments) ->
+         && not (Cmt_input.retained_preprocessing implementation) ->
       Ok ()
-  | Some _ when not (ppx_is_retained implementation.compiler_arguments) ->
+  | Some _ when not (Cmt_input.retained_preprocessing implementation) ->
       Error "finite-formal authority requires the retained artifact family"
   | Some registration -> (
       match

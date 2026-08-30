@@ -1,6 +1,6 @@
 * [[https://en.wiktionary.org/wiki/vero#Etymology_2_2][vērō]]caml
 
-[[https://en.wiktionary.org/wiki/vero#Etymology_2_2][vērō]]caml is a tool for verifying the correctness of programs written in written
+[[https://en.wiktionary.org/wiki/vero#Etymology_2_2][vērō]]caml is a tool for verifying the correctness of programs written
 in OxCaml and OCaml. You specify what your program should do, and verocaml
 statically checks that your OxCaml / OCaml code will always satisfy your
 specifications.
@@ -17,6 +17,22 @@ prototype*. You may encounter bugs and rough edges while using it. Bug reports
 are greatly appreciated, even for already known issues, as they help us
 prioritize what to focus on during development.
 
+** Dune integration
+
+Use the ordinary public packages; the verifier gives them no name-based special
+case:
+
+#+BEGIN_SRC lisp
+(library
+ (name verified_component)
+ (libraries verocaml.vstd verocaml.ghost)
+ (preprocess (pps verocaml.ppx)))
+#+END_SRC
+
+This exposes the mathematical =Vstd.Seq= API and imports the generic external
+type specifications for =option=, =list=, and =result= through the exact normal
+library dependency graph.
+
 ** Philosophy / Design Goals
 
 *** Familiarity
@@ -29,23 +45,22 @@ When the verifier is being ran, the annotations / proofs / specs are lowered
 into standard OxCaml and picked back up from the ~Typedtree~, when the verifier
 is not being ran these annotations are all erased.
 
+A basic inductive proof is just a recursive OCaml proof function. The recursive
+call establishes the induction hypothesis for =upper - 1=:
+
 #+BEGIN_SRC ocaml
+let rec triangular (n : int) : int =
+  [%verocaml.decreases n];
+  if n <= 0 then 0 else n + triangular (n - 1)
+[@@verocaml.spec] [@@verocaml.revealed]
 
-let my_inductive_proof (s : 'a seq) =
-  [%verocaml.requires true ];
-  [%verocaml.ensures fun _ -> true];
-  [%verocaml.decreases s];
-  if is_empty s then
-    (* base case *)
-    ()
-  else begin
-    (* IH *)
-    let last_ = last s in
-    let p = drop s 1 in
-    my_inductive_proof p
-  end
+let rec triangular_growth lower upper =
+  [%verocaml.requires 0 <= lower && lower <= upper];
+  [%verocaml.ensures fun _ -> triangular lower + (upper - lower) <= triangular upper];
+  [%verocaml.decreases upper - lower];
+  if lower = upper then ()
+  else triangular_growth lower (upper - 1)
 [@@verocaml.proof]
-
 #+END_SRC
 
 *** Failures to be Local and Understandable (ish)
@@ -83,7 +98,8 @@ being merged because their newly introduced facts are now competing for solver
 resources or changing proof search elsewhere in the module. Lexically scoped
 broadcasts make these dependencies explicit and help preserve a useful property
 for collaborative verification: adding a proof in one place should not
-unexpectedly destabilize an unrelated proof somewhere else.
+unexpectedly destabilize an unrelated proof somewhere else.Keeping solver
+context local is especially important when collaborating.
 
 *** Broad Support
 
@@ -118,6 +134,8 @@ implementations around the capabilities of a separate verification language.
 | let mutable                           | Partial       |            6/10 |            6/10 | Local definitely-unique mutable bindings; no general heap interactions |
 | Verified callbacks                    | Partial       |            6/10 |            8/10 | Contracted nonescaping callbacks; not general higher-order OCaml |
 | Modules and interfaces                | Partial       |            6/10 |            8/10 | Strong separate compilation plus limited abstraction; no general modules/functors |
+| External specification libraries        | Partial       |            6/10 |            8/10 | Reachable libraries implicitly export generic type/function specs; overlaps reject |
+| Mathematical Vstd.Seq                    | Partial       |            6/10 |            6/10 | Abstract symbolic sequences for specs/proofs; not a runtime container |
 | Shared mutable state                  | Partial       |            4/10 |            8/10 | Narrow aliased scalar-record model; no general references or heap logic |
 | Other OxCaml mode axes                | Compiler-only |            2/10 |            4/10 | Mostly compiler-enforced rather than represented by VeroCaml semantics |
 | Loops, arrays, references             | Rejected      |            0/10 |            6/10 | No loops, arrays, Bigarrays, or general reference/heap semantics |

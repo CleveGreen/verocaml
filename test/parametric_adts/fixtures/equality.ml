@@ -1,3 +1,6 @@
+type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
 type 'a local_option = LNone | LSome of 'a
 
 type 'a scalar = Empty | Flag of bool | Count of int | Mixed of bool * int

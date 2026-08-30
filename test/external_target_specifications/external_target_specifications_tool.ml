@@ -112,6 +112,7 @@ let positive ~expected_uses threads root_cmt root_cmi dependency_cmt
     match
       Interface_specification_loaded_private.verify ~threads ~solver_policy
         ~external_specifications:(Some external_specifications)
+        ~external_targets:[ completion_dependency ]
         ~consumer:completion_root
         ~dependencies:[]
     with

@@ -536,12 +536,14 @@ let exact_callback_callee ~find (callee : Typedtree.expression) =
   | Texp_ident (Path.Pident ident, _, _, _, _) -> Option.is_some (find ident)
   | _ -> false
 
-let source_signature ~lower (expression : Typedtree.expression) =
+let source_signature ~lower ~optional_carrier
+    (expression : Typedtree.expression) =
   match expression.exp_desc with
   | Texp_function { params; body = Tfunction_body body; _ } ->
       Some
         (let* formal_types, formal_labels =
-           Parametric_lowering_private.lower_typedtree_formals ~lower params
+           Parametric_lowering_private.lower_typedtree_formals ~lower
+             ~optional_carrier params
          in
          let* result_type = lower body.exp_loc body.exp_type in
          Ok (formal_types, formal_labels, result_type))

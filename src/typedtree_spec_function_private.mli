@@ -149,6 +149,8 @@ val exact_callback_callee :
 
 val source_signature :
   lower:(Location.t -> Types.type_expr -> (Sst.typ, 'error) result) ->
+  optional_carrier:
+    (Location.t -> Sst.typ -> (Sst.typ, 'error) result) ->
   Typedtree.expression ->
   (Sst.typ list * string option list * Sst.typ, 'error) result option
 

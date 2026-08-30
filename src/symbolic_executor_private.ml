@@ -3825,12 +3825,7 @@ let logical_spec_call_target context callee =
       let definition = Sst_validation.callable_definition descriptor in
       Logical_spec_evaluation_private.classify_definition definition
         ~excluded:(fun definition ->
-          Option.fold ~none:false
-            ~some:(fun registration ->
-              Imported_callable.is_imported registration
-                definition.Sst.function_id)
-            context.imports
-          || Option.is_some
+          Option.is_some
                (Type_invariant.find_for_operation context.invariants
                   definition.function_id)
           || Option.is_some
@@ -6914,14 +6909,8 @@ let rec evaluate context expression state =
           | _ -> error function_name expression.span (Missing_summary callee)
         in
         let* disposition =
-          match (definition.mode, definition.body) with
-          | Sst.Spec, Sst.Spec_definition _
-            when Option.fold ~none:false
-                   ~some:(fun registration ->
-                     Imported_callable.is_imported registration
-                       definition.function_id)
-                   context.imports ->
-              Ok `Opaque_imported
+          if imported_aggregate_call then Ok `Opaque_imported
+          else match (definition.mode, definition.body) with
           | Sst.Spec, Sst.Spec_definition body -> (
               match
                 Type_invariant.find_for_operation context.invariants

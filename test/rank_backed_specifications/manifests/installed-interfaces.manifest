@@ -220,3 +220,17 @@ lib/verocaml/core/z3_bridge.mli
 lib/verocaml/core/z3_datatype_private.mli
 lib/verocaml/ghost/vero_ghost.cmi
 lib/verocaml/ghost/vero_ghost.mli
+lib/verocaml/ppx-rewriter/.private/vero_ppx_rewriter__Vero_ppx_broadcast_private.cmi
+lib/verocaml/ppx-rewriter/.private/vero_ppx_rewriter__Vero_ppx_logical_builtin_private.cmi
+lib/verocaml/ppx-rewriter/.private/vero_ppx_rewriter__Vero_ppx_symbolic_private.cmi
+lib/verocaml/ppx-rewriter/vero_ppx_broadcast_private.mli
+lib/verocaml/ppx-rewriter/vero_ppx_logical_builtin_private.mli
+lib/verocaml/ppx-rewriter/vero_ppx_rewriter.cmi
+lib/verocaml/ppx-rewriter/vero_ppx_rewriter.mli
+lib/verocaml/ppx-rewriter/vero_ppx_rewriter__.cmi
+lib/verocaml/ppx-rewriter/vero_ppx_symbolic_private.mli
+lib/verocaml/ppx/vero_ppx_driver.cmi
+lib/verocaml/vstd/seq.mli
+lib/verocaml/vstd/vstd.cmi
+lib/verocaml/vstd/vstd__Pervasive.cmi
+lib/verocaml/vstd/vstd__Seq.cmi

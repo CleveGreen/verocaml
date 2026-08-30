@@ -2,6 +2,7 @@ type result
 type error = Interface_specification_environment_private.error
 
 val authenticate :
+  external_targets:Cmt_input.implementation list ->
   solver_policy:Solver_policy_private.t ->
   dependencies:Cmt_input.implementation list ->
   consumer:Cmt_input.implementation ->
@@ -12,6 +13,7 @@ val verify :
   threads:int ->
   solver_policy:Solver_policy_private.t ->
   external_specifications:External_target_specification_private.environment option ->
+  external_targets:Cmt_input.implementation list ->
   consumer:Cmt_input.implementation ->
   dependencies:Cmt_input.implementation list ->
   (result, error) Stdlib.result

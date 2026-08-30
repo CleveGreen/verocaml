@@ -1,3 +1,9 @@
+type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
+type ('a, 'error) result_specification = ('a, 'error) result
+[@@verocaml.external_type_specification]
+
 let implies (premise : bool) (conclusion : bool) : bool =
   (not premise) || conclusion
 [@@verocaml.spec]

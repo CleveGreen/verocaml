@@ -65,15 +65,39 @@ type classification =
   | Invalid_symbolic_declaration of string
   | Invalid_symbolic_application of string
   | Invalid_symbolic_authentication of string
+  | Executable_function_in_specification of { function_name : string }
+  | Unannotated_erased_call of {
+      caller_name : string;
+      callee_name : string;
+      callee_mode : string;
+    }
+  | Invalid_imported_specification of string
+  | Invalid_semantic_program of {
+      function_name : string option;
+      detail : string;
+    }
   | Unsupported_construct of unsupported_construct
+
+type submessage =
+  | Hint of string
+  | Note of {
+      span : span;
+      message : string;
+    }
 
 type t = {
   classification : classification;
   code : string;
   message : string;
   span : span;
+  submessages : submessage list;
 }
 
 val file_span : string -> span
 val span_of_location : fallback_file:string -> Location.t -> span
+val location_of_span : span -> Location.t
 val make : classification -> span -> t
+val with_message : string -> t -> t
+val with_hint : string -> t -> t
+val with_note : span:span -> string -> t -> t
+val report : t -> Location.report

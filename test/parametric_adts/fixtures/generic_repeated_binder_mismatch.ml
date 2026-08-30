@@ -1,3 +1,6 @@
+type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
 let same_payload_pair (_pair : 'a option * 'a option) : bool = true
 [@@verocaml.spec]
 

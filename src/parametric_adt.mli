@@ -3,7 +3,6 @@ type provenance =
   | External of {
       compiler_uid : string;
       proxy_uid : string;
-      prelude : bool;
     }
 
 type field = {
@@ -38,6 +37,7 @@ type option_instance = {
 type error = { descriptor : string; message : string }
 
 val create :
+  optional_carrier:bool ->
   type_id:Parametric_type.type_id ->
   type_constructor:Parametric_type.constructor ->
   binders:Parametric_type.binder list ->
@@ -54,10 +54,11 @@ val recursive_fields : t -> (int option * field) list
 val authenticates_recursive_field :
   t -> constructor_index:int option -> field_index:int -> bool
 val compiler_uid : t -> string
-val is_standard : t -> bool
+val is_optional_carrier : t -> bool
 val validate_registry : t list -> (unit, error) result
 val find : t list -> Parametric_type.constructor -> t option
 val option_instance : t list -> Parametric_type.t -> option_instance option
+val option_application : t list -> Parametric_type.t -> Parametric_type.t option
 val instantiate_field : t -> Parametric_type.t list -> field -> (Parametric_type.t, string) result
 val instantiate_field_by_index :
   t ->

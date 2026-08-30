@@ -176,7 +176,7 @@
   $ classify concurrency
   VERO_UNSUPPORTED_CONCURRENCY concurrency.ml:1:20-1:60
   $ classify higher_order
-  VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION higher_order.ml:1:18-1:19
+  VERO_CALLBACK_CONTRACT higher_order.ml:1:18-1:19
   $ classify polymorphic
   accepted
   $ classify nonlinear

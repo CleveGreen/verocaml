@@ -8,10 +8,22 @@ type lowered = {
 }
 
 let malformed implementation message =
-  Printf.eprintf "imported-call seal: %s\n" message;
   Error
     (Diagnostic.make
        (Diagnostic.Unsupported_construct Diagnostic.Malformed_ghost_call)
+       (Diagnostic.file_span implementation.Cmt_input.source_file)
+    |> Diagnostic.with_message message)
+
+let imported_specification_error implementation message =
+  let prefix = "[VERO_DEPENDENCY] " in
+  let message =
+    if String.starts_with ~prefix message then
+      String.sub message (String.length prefix)
+        (String.length message - String.length prefix)
+    else message
+  in
+  Error
+    (Diagnostic.make (Diagnostic.Invalid_imported_specification message)
        (Diagnostic.file_span implementation.Cmt_input.source_file))
 
 let lower ?(allow_public_parametric_signatures = false) ?external_specifications ~imported
@@ -77,6 +89,7 @@ let lower ?(allow_public_parametric_signatures = false) ?external_specifications
           (fun (typ : Imported_callable.type_snapshot) ->
             {
               Typedtree_adapter_private.Public.imported_type_path = typ.path;
+              imported_type_uid = typ.binding_uid;
               imported_type_definition = typ.definition;
               imported_parametric_descriptor = typ.parametric_descriptor;
             })
@@ -170,7 +183,7 @@ let lower ?(allow_public_parametric_signatures = false) ?external_specifications
       | Error error -> malformed implementation error.detail
       | Ok () -> (
           match Instance_mode.seal implementation program with
-          | Error error -> malformed implementation error.Instance_mode.message
+          | Error error -> Error (Instance_mode.to_diagnostic error)
           | Ok () -> (
               match Finite_formal_requirement.seal implementation program with
               | Error message -> malformed implementation message
@@ -179,7 +192,8 @@ let lower ?(allow_public_parametric_signatures = false) ?external_specifications
                      Imported_callable.seal_calls imported ~implementation
                        ~program
                    with
-                  | Error message -> malformed implementation message
+                  | Error message ->
+                      imported_specification_error implementation message
                   | Ok registration -> (
                       match external_specifications with
                       | None ->
@@ -197,7 +211,8 @@ let lower ?(allow_public_parametric_signatures = false) ?external_specifications
                           | Error message ->
                               Imported_callable.invalidate_registration
                                 registration;
-                              malformed implementation message
+                              imported_specification_error implementation
+                                message
                           | Ok external_registration ->
                               Ok
                                 {
