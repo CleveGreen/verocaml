@@ -879,13 +879,21 @@ let load_dune_artifacts artifacts =
     | (artifact : Verocaml_bin_dune_private.artifact) :: rest -> (
         match Cmt_input.load artifact.cmt with
         | Ok implementation ->
-            [%log.trace "loaded Dune artifact"
+            [%log.debug "loaded Dune verification artifact"
               ~cmt:(Delator.Field.string artifact.cmt)
               ~source:(Delator.Field.string artifact.source)
               ~unit_name:(Delator.Field.string implementation.unit_name)
               ~retained:
                 (Delator.Field.bool
-                   (Cmt_input.retained_preprocessing implementation))];
+                   (Cmt_input.retained_preprocessing implementation))
+              ~verification_scope_marker_count:
+                (Delator.Field.int
+                   (List.length implementation.verification_scope_markers))
+              ~marked_for_verification:
+                (Delator.Field.bool
+                   (marked_for_verification implementation))
+              ~import_count:
+                (Delator.Field.int (Array.length implementation.imports))];
             load ((artifact, implementation) :: loaded) rest
         | Error diagnostic -> Error (artifact.cmt, diagnostic))
   in
@@ -931,7 +939,15 @@ let verify_dune_project options configuration =
           let roots =
             List.filter
               (fun (_, implementation) ->
-                not (imported_by marked_implementations implementation))
+                let imported =
+                  imported_by marked_implementations implementation
+                in
+                [%log.trace "classify marked Dune verification artifact"
+                  ~unit_name:
+                    (Delator.Field.string implementation.unit_name)
+                  ~imported_by_marked_module:(Delator.Field.bool imported)
+                  ~selected_as_root:(Delator.Field.bool (not imported))];
+                not imported)
               marked
           in
           [%log.info "selected Dune verification roots"

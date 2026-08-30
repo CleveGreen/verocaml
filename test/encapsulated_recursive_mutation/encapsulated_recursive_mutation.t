@@ -135,7 +135,8 @@ registry.  Issuer identity is not enough by itself: replaying a real token with
 an altered certificate, type graph, callable, target type, or abstract-type set
 is rejected.  A type-graph alteration that also contradicts transition metadata
 receives that structural diagnostic first; otherwise rejection comes from the
-complete issued semantic snapshot.
+complete issued local semantic snapshot. Independently imported definitions do
+not alter that same-CMT snapshot.
 
 Closed transition metadata is independently validated because public SST is
 constructible.  Production validation reports malformed transition structure

@@ -168,47 +168,136 @@ module Public = struct
           (definition.type_id, definition.type_kind, definition.span))
         types
     in
-    let abstract_type_ids =
+    let token_candidates =
+      List.filter
+        (fun expected -> expected.token == evidence.authentication_token)
+        !issued_abstractions
+    in
+    let issued_type_ids expected =
+      List.map (fun (type_id, _, _) -> type_id) expected.semantic_types
+    in
+    let current_local_abstract_type_ids expected =
+      let issued_type_ids =
+        issued_type_ids expected
+      in
       List.filter_map
         (fun (definition : Sst.type_definition) ->
-          match definition.representation with
-          | Sst.Abstract_with_evidence
-              (Sst.Authenticated_same_cmt_abstraction _) ->
-              Some definition.type_id
-          | Sst.Revealed
-          | Sst.Abstract_with_evidence
-              ( Sst.Incomplete_abstraction_evidence _
-              | Sst.Proposed_same_cmt_abstraction _ ) ->
-              None)
+          if not (List.mem definition.type_id issued_type_ids) then None
+          else
+            match definition.representation with
+            | Sst.Abstract_with_evidence
+                (Sst.Authenticated_same_cmt_abstraction _) ->
+                Some definition.type_id
+            | Sst.Revealed
+            | Sst.Abstract_with_evidence
+                ( Sst.Incomplete_abstraction_evidence _
+                | Sst.Proposed_same_cmt_abstraction _ ) ->
+                None)
         types
       |> List.sort compare
     in
-    List.exists
-      (fun expected ->
-        expected.token == evidence.authentication_token
-        && String.equal expected.evidence_id evidence.evidence_id
-        && expected.abstract_signature_type = evidence.abstract_signature_type
-        && expected.hidden_implementation_type
-           = evidence.hidden_implementation_type
-        && expected.signature_module_identity
-           = evidence.signature_module_identity
-        && expected.implementation_module_identity
-           = evidence.implementation_module_identity
-        && expected.abstract_signature_type_identity
-           = evidence.abstract_signature_type_identity
-        && expected.hidden_implementation_type_identity
-           = evidence.hidden_implementation_type_identity
-        && expected.constraint_span = evidence.constraint_span
-        && expected.declaration_spans = evidence.declaration_spans
-        && expected.public_surface = evidence.public_surface
-        && expected.owned_tree_prerequisite = evidence.owned_tree_prerequisite
-        && expected.frozen_spine_prerequisite
-           = Sst.frozen_spine_prerequisite evidence
-        && expected.abstract_signature_type = definition.Sst.type_id
-        && expected.semantic_types = semantic_types
-        && expected.semantic_functions = functions
-        && expected.abstract_type_ids = abstract_type_ids)
-      !issued_abstractions
+    let semantic_types_match expected =
+      List.for_all
+        (fun issued -> List.mem issued semantic_types)
+        expected.semantic_types
+    in
+    let semantic_functions_match expected =
+      List.for_all
+        (fun issued -> List.mem issued functions)
+        expected.semantic_functions
+    in
+    let abstract_type_set_matches expected =
+      expected.abstract_type_ids = current_local_abstract_type_ids expected
+    in
+    let authenticates expected =
+      String.equal expected.evidence_id evidence.evidence_id
+      && expected.abstract_signature_type = evidence.abstract_signature_type
+      && expected.hidden_implementation_type = evidence.hidden_implementation_type
+      && expected.signature_module_identity = evidence.signature_module_identity
+      && expected.implementation_module_identity
+         = evidence.implementation_module_identity
+      && expected.abstract_signature_type_identity
+         = evidence.abstract_signature_type_identity
+      && expected.hidden_implementation_type_identity
+         = evidence.hidden_implementation_type_identity
+      && expected.constraint_span = evidence.constraint_span
+      && expected.declaration_spans = evidence.declaration_spans
+      && expected.public_surface = evidence.public_surface
+      && expected.owned_tree_prerequisite = evidence.owned_tree_prerequisite
+      && expected.frozen_spine_prerequisite
+         = Sst.frozen_spine_prerequisite evidence
+      && expected.abstract_signature_type = definition.Sst.type_id
+      && semantic_types_match expected
+      && semantic_functions_match expected
+      && abstract_type_set_matches expected
+    in
+    let authenticated = List.exists authenticates token_candidates in
+    if not authenticated then
+      match token_candidates with
+      | [] ->
+          [%log.debug "same-CMT abstraction authentication has no issued token"
+            ~evidence_id:(Delator.Field.string evidence.evidence_id)
+            ~issued_abstraction_count:
+              (Delator.Field.int (List.length !issued_abstractions))]
+      | expected :: _ ->
+          [%log.debug "same-CMT abstraction authentication mismatch"
+            ~evidence_id:(Delator.Field.string evidence.evidence_id)
+            ~token_candidate_count:
+              (Delator.Field.int (List.length token_candidates))
+            ~evidence_identity_matches:
+              (Delator.Field.bool
+                 (String.equal expected.evidence_id evidence.evidence_id))
+            ~type_identity_matches:
+              (Delator.Field.bool
+                 (expected.abstract_signature_type
+                    = evidence.abstract_signature_type
+                 && expected.hidden_implementation_type
+                    = evidence.hidden_implementation_type
+                 && expected.abstract_signature_type = definition.Sst.type_id))
+            ~module_identity_matches:
+              (Delator.Field.bool
+                 (expected.signature_module_identity
+                    = evidence.signature_module_identity
+                 && expected.implementation_module_identity
+                    = evidence.implementation_module_identity
+                 && expected.abstract_signature_type_identity
+                    = evidence.abstract_signature_type_identity
+                 && expected.hidden_implementation_type_identity
+                    = evidence.hidden_implementation_type_identity))
+            ~span_matches:
+              (Delator.Field.bool
+                 (expected.constraint_span = evidence.constraint_span
+                 && expected.declaration_spans = evidence.declaration_spans))
+            ~public_surface_matches:
+              (Delator.Field.bool
+                 (expected.public_surface = evidence.public_surface))
+            ~prerequisite_matches:
+              (Delator.Field.bool
+                 (expected.owned_tree_prerequisite
+                    = evidence.owned_tree_prerequisite
+                 && expected.frozen_spine_prerequisite
+                    = Sst.frozen_spine_prerequisite evidence))
+            ~semantic_types_match:
+              (Delator.Field.bool (semantic_types_match expected))
+            ~issued_semantic_type_count:
+              (Delator.Field.int (List.length expected.semantic_types))
+            ~current_semantic_type_count:
+              (Delator.Field.int (List.length semantic_types))
+            ~semantic_functions_match:
+              (Delator.Field.bool (semantic_functions_match expected))
+            ~issued_semantic_function_count:
+              (Delator.Field.int (List.length expected.semantic_functions))
+            ~current_semantic_function_count:
+              (Delator.Field.int (List.length functions))
+            ~abstract_type_set_matches:
+              (Delator.Field.bool (abstract_type_set_matches expected))
+            ~issued_abstract_type_count:
+              (Delator.Field.int (List.length expected.abstract_type_ids))
+            ~current_abstract_type_count:
+              (Delator.Field.int
+                 (List.length (current_local_abstract_type_ids expected)))]
+    else ();
+    authenticated
   include Typedtree_surface_private
   open Typedtree_logical_builtin_private
   open Callback_contract_private

@@ -1,6 +1,6 @@
 (library
  (name verified_dune_project)
- (modules verified_unit second_root unmarked)
+ (modules verified_unit second_root abstract_stack unmarked)
  (libraries verocaml.vstd verocaml.ghost)
  (flags (:standard -w -A -alert -all -open Vstd))
  (preprocess (pps verocaml.ppx)))

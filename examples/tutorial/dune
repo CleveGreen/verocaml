@@ -1,7 +1,13 @@
 (library
- (name verocaml_examples)
- (wrapped false)
- (modules overview playground_clean testing list)
+ (name verocaml_tutorial)
+ (modules 01-contracts
+          02-recursive-specification
+          03-scalar-induction
+          04-list-induction
+          05-tree-induction
+          06-finite-formals
+          07-owned-recursive-stack
+          08-abstract-nested-mutation)
  (libraries verocaml.vstd verocaml.ghost)
  (flags (:standard -w -A -alert -all -open Vstd))
  (preprocess (pps verocaml.ppx)))
