@@ -519,6 +519,10 @@ let verification_exit_code result =
 let render_service_error error =
   match Verifier_service.error_diagnostic error with
   | Some diagnostic -> render_frontend_error diagnostic
+  | None when Verifier_service.error_is_internal error ->
+      prerr_endline
+        (Verocaml_bin_render.internal_error
+           "VeroCaml could not prepare this verification request. This is a verifier bug, not a failed proof. Re-run with DELATOR_LOG=debug to capture diagnostic details.")
   | None ->
       prerr_endline
         (Verocaml_bin_render.dependency_error

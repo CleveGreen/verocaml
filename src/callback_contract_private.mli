@@ -129,6 +129,7 @@ type ('bindings, 'error) parameter_services = {
   parameter_label : Typedtree.arg_label -> string option;
   span : Location.t -> Sst.span;
   partial_error : Location.t -> 'error;
+  parameter_pattern_error : Location.t -> 'error;
 }
 
 val lower_parameters :

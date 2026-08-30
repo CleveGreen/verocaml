@@ -105,9 +105,11 @@ module Error_identity = struct
 end
 
 module Error_diagnostics = Ephemeron.K1.Make (Error_identity)
+module Internal_errors = Ephemeron.K1.Make (Error_identity)
 
 let process_issuer = ref ()
 let error_diagnostics = Error_diagnostics.create 8
+let internal_errors = Internal_errors.create 8
 let error_diagnostics_lock = Mutex.create ()
 
 let ( let* ) result continuation =
@@ -119,7 +121,16 @@ let with_error_diagnostics action =
     ~finally:(fun () -> Mutex.unlock error_diagnostics_lock)
     action
 
+let rec public_dependency_message message =
+  let prefix = "[VERO_DEPENDENCY] " in
+  if String.starts_with ~prefix message then
+    public_dependency_message
+      (String.sub message (String.length prefix)
+         (String.length message - String.length prefix))
+  else message
+
 let error ?unit_name ?diagnostic message =
+  let message = public_dependency_message message in
   let result = { unit_name; message } in
   Option.iter
     (fun diagnostic ->
@@ -127,6 +138,19 @@ let error ?unit_name ?diagnostic message =
           Error_diagnostics.replace error_diagnostics result diagnostic))
     diagnostic;
   Error result
+
+let internal_error ?unit_name message =
+  [%log.debug "internal verification error"
+    ~unit_name:
+      (Delator.Field.string (Option.value ~default:"<unknown>" unit_name))
+    ~detail:(Delator.Field.string message)];
+  let result = { unit_name; message } in
+  with_error_diagnostics (fun () ->
+      Internal_errors.replace internal_errors result ());
+  Error result
+
+let error_is_internal error =
+  with_error_diagnostics (fun () -> Internal_errors.mem internal_errors error)
 
 let error_to_string error =
   Option.fold ~none:error.message
@@ -501,17 +525,18 @@ let rec provider_of_root root =
   and public_models = root_models root in
   let* broadcast_scan =
     Typedtree_adapter_private.Public.Broadcast.authenticate_typedtree
-      ~imported_declaration_paths:
+      ~imported_declarations:
         (Imported_callable.callables imported
         |> List.filter_map
              (fun (callable : Imported_callable.callable_snapshot) ->
-               Option.map (Fun.const callable.path)
+               Option.map
+                 (Fun.const (callable.path, callable.binding_uid))
                  callable.broadcast_trigger_span))
-      ~imported_group_paths:
+      ~imported_groups:
         (Imported_callable.broadcast_groups imported
         |> List.map
              (fun (group : Imported_callable.broadcast_group_snapshot) ->
-               group.path))
+               (group.path, group.binding_uid)))
       ~source_file:implementation.source_file ~imports:implementation.imports
       ~artifact:
         (Some
@@ -646,6 +671,8 @@ let rec provider_of_root root =
                    [%log.trace "classified provider broadcast callable"
                      ~unit_name:(Delator.Field.string unit_name)
                      ~path:(Delator.Field.string resolved_path)
+                     ~value_uid:
+                       (Delator.Field.string callable_binding_uid)
                      ~declared:
                        (Delator.Field.bool
                           (List.mem definition.function_id.function_name
@@ -779,22 +806,139 @@ let rec provider_of_root root =
            })
   in
   if exported_broadcasts <> declared_broadcasts then
-    ([%log.warn "provider broadcast interface mismatch"
+    (let missing =
+       List.filter (fun path -> not (List.mem path exported_broadcasts))
+         declared_broadcasts
+     in
+     [%log.warn "provider broadcast interface mismatch"
        ~unit_name:(Delator.Field.string unit_name)
        ~declared:(Delator.Field.int (List.length declared_broadcasts))
-       ~authenticated:(Delator.Field.int (List.length exported_broadcasts))];
+       ~authenticated:(Delator.Field.int (List.length exported_broadcasts))
+       ~missing:(Delator.Field.string (String.concat "," missing))];
     Error
-      "[VERO_DEPENDENCY] public broadcast declaration does not match one authenticated implementation proof"
+      (Printf.sprintf
+         "The interface exports broadcast proof%s %s, but the implementation does not define matching [@@verocaml.broadcast] proof%s."
+         (if List.length missing = 1 then "" else "s")
+         (String.concat ", " (List.map (Printf.sprintf "%S") missing))
+         (if List.length missing = 1 then "" else "s"))
     )
   else
-  let broadcast_groups =
-    List.map
-      (fun (group : Cmt_input.interface_broadcast_group) ->
-        {
-          Imported_callable.resolved_path = unit_name ^ "." ^ group.group_path;
-          target_paths = group.group_targets;
-        })
-      implementation.interface_broadcast_groups
+  let implementation_broadcast_groups =
+    Typedtree_broadcast_private.groups broadcast_scan
+  in
+  let target_path prefix target_id =
+    if String.starts_with ~prefix target_id then
+      Some
+        (String.sub target_id (String.length prefix)
+           (String.length target_id - String.length prefix))
+    else None
+  in
+  let canonical_broadcast_target
+      (target : Typedtree_broadcast_private.target) =
+    if target.target_group then
+      match
+        List.find_opt
+          (fun (group : Typedtree_broadcast_private.group) ->
+            String.equal group.group_id target.target_id)
+          implementation_broadcast_groups
+      with
+      | Some group -> Ok (unit_name ^ "." ^ group.group_path)
+      | None -> (
+          match target_path "broadcast-group:" target.target_id with
+          | Some path -> Ok path
+          | None ->
+              Error
+                "An exported broadcast group contains an unresolved group target. Rebuild the provider and its dependencies together.")
+    else
+      match
+        List.find_opt
+          (fun (callable : Imported_callable.provider_callable) ->
+            Option.is_some callable.broadcast_trigger_span
+            && String.equal
+                 ("broadcast:"
+                 ^ callable.definition.Sst.function_id.function_name)
+                 target.target_id)
+          callables
+      with
+      | Some callable -> Ok callable.resolved_path
+      | None -> (
+          match target_path "broadcast:" target.target_id with
+          | Some path -> Ok path
+          | None ->
+              Error
+                "An exported broadcast group contains an unresolved proof target. Rebuild the provider and its dependencies together.")
+  in
+  let rec canonical_broadcast_targets canonical = function
+    | [] -> Ok (List.rev canonical)
+    | target :: rest ->
+        let* path = canonical_broadcast_target target in
+        canonical_broadcast_targets (path :: canonical) rest
+  in
+  let rec prepare_broadcast_groups prepared = function
+    | [] -> Ok (List.rev prepared)
+    | (group : Cmt_input.interface_broadcast_group) :: rest ->
+        let resolved_path = unit_name ^ "." ^ group.group_path in
+        let* implementation_group =
+          match
+            List.filter
+              (fun (candidate : Typedtree_broadcast_private.group) ->
+                String.equal candidate.group_path group.group_path)
+              implementation_broadcast_groups
+          with
+          | [ implementation_group ] -> Ok implementation_group
+          | [] ->
+              Error
+                (Printf.sprintf
+                   "The interface exports broadcast group %S, but the implementation does not define it."
+                   group.group_path)
+          | _ :: _ :: _ ->
+              Error
+                (Printf.sprintf
+                   "The implementation defines broadcast group %S more than once."
+                   group.group_path)
+        in
+        let* target_paths =
+          canonical_broadcast_targets [] implementation_group.group_targets
+        in
+        let* () =
+          if List.length target_paths = List.length group.group_targets then
+            Ok ()
+          else
+            Error
+              (Printf.sprintf
+                 "Broadcast group %S has different interface and implementation membership."
+                 group.group_path)
+        in
+        let* binding_uid =
+          match binding_uid implementation `Value resolved_path with
+          | Some uid -> Ok uid
+          | None ->
+              Error
+                (Printf.sprintf
+                   "The exported broadcast group %S is missing from the compiled interface. Rebuild the library with the matching VeroCaml PPX."
+                   group.group_path)
+        in
+        [%log.trace "captured provider broadcast group identity"
+          ~unit_name:(Delator.Field.string unit_name)
+          ~path:(Delator.Field.string resolved_path)
+          ~value_uid:(Delator.Field.string binding_uid)
+          ~interface_targets:
+            (Delator.Field.int (List.length group.group_targets))
+          ~implementation_targets:
+            (Delator.Field.int (List.length target_paths))
+          ~canonical_targets:
+            (Delator.Field.string (String.concat "," target_paths))];
+        prepare_broadcast_groups
+          ({
+             Imported_callable.resolved_path;
+             binding_uid;
+             target_paths;
+           }
+          :: prepared)
+          rest
+  in
+  let* broadcast_groups =
+    prepare_broadcast_groups [] implementation.interface_broadcast_groups
   in
   let description =
   {

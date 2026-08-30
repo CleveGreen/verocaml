@@ -41,6 +41,7 @@ type unsupported_construct =
   | Aggregate
   | Mutation
   | Unsupported_pattern
+  | Refutable_parameter_pattern
   | Unsupported_expression
   | Malformed_ghost_call
   | Callback_authentication
@@ -70,6 +71,11 @@ type classification =
       caller_name : string;
       callee_name : string;
       callee_mode : string;
+    }
+  | Invalid_verification_call of {
+      callee_name : string;
+      callee_mode : string;
+      context : string;
     }
   | Invalid_imported_specification of string
   | Invalid_semantic_program of {

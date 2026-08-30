@@ -7947,6 +7947,11 @@ let mode_name = function
   | Sst.Proof -> "proof"
   | Sst.Exec -> "executable function"
 
+let stage_name = function
+  | Sst.Logical -> "a specification"
+  | Sst.Proof_stage -> "a proof"
+  | Sst.Runtime -> "executable code"
+
 let to_diagnostic error =
   match error.kind with
   | Invalid_call_stage { callee; stage = Sst.Logical; callee_mode = Sst.Exec }
@@ -7954,6 +7959,15 @@ let to_diagnostic error =
       Diagnostic.make
         (Diagnostic.Executable_function_in_specification
            { function_name = callee.function_name })
+        error.span
+  | Invalid_call_stage { callee; stage; callee_mode } ->
+      Diagnostic.make
+        (Diagnostic.Invalid_verification_call
+           {
+             callee_name = callee.function_name;
+             callee_mode = mode_name callee_mode;
+             context = stage_name stage;
+           })
         error.span
   | Unannotated_erased_call { caller; callee; callee_mode } ->
       Diagnostic.make
@@ -7967,7 +7981,7 @@ let to_diagnostic error =
   | Unsupported_policy _ | Duplicate_type_id _ | Duplicate_function_id _
   | Duplicate_binding_id _ | Unknown_type_id _ | Unknown_function_id _
   | Conflicting_identity _ | Invalid_clause _ | Invalid_body _
-  | Invalid_call _ | Invalid_call_stage _ | Invalid_recursive_marker _
+  | Invalid_call _ | Invalid_recursive_marker _
   | Invalid_unique_return _ | Invalid_target_link _
   | Forged_abstract_evidence _ | Forged_rank_domain _
   | Invalid_instance_mode _ | Invalid_finite_requirement _ | Unbound_binding _

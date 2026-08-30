@@ -1161,17 +1161,22 @@ let validate_obligation_record_metadata ~(program : Sst.program)
     | Vir.Recursive_integer_argument term -> integer term
     | Vir.Recursive_boolean_argument term -> boolean term
     | Vir.Recursive_aggregate_argument term -> aggregate term
-    | Vir.Recursive_parametric_argument term -> (
-        match Parametric_logic_private.validate term with
-        | Ok () -> (
-            match term.parametric_desc with
-            | Vir.Parametric_symbolic_application application ->
-                arguments
-                  (Symbolic_application_private.arguments application)
-            | Parametric_symbol _ | Parametric_selector _
-            | Parametric_conditional _ ->
-                Ok ())
-        | Error message -> fail span "%s" message)
+    | Vir.Recursive_parametric_argument term -> parametric term
+  and parametric term =
+    let* () =
+      Parametric_logic_private.validate term
+      |> Result.map_error (fun message -> { span; message })
+    in
+    Parametric_logic_private.fold
+      ~symbol:(fun _ -> Ok ())
+      ~selector:(fun _ source -> aggregate source)
+      ~conditional:(fun condition consequent alternative ->
+        let* () = boolean condition in
+        let* () = consequent in
+        alternative)
+      ~application:(fun _ application ->
+        arguments (Symbolic_application_private.arguments application))
+      term
   and arguments values =
     List.fold_left
       (fun result value ->
@@ -1236,8 +1241,8 @@ let validate_obligation_record_metadata ~(program : Sst.program)
     | Vir.Callback_ensures { application; result } ->
         arguments (application.arguments @ [ result ])
     | Vir.Parametric_equal (left, right) ->
-        Parametric_logic_private.fold_conditions_result (Ok ()) boolean left
-          right
+        let* () = parametric left in
+        parametric right
     | Vir.Boolean_constant _ | Vir.Boolean_symbol _
     | Vir.Logical_adt_schema _ ->
         Ok ()
@@ -1451,6 +1456,16 @@ let prepare_proof_query verified ~activations (obligation : Vir.obligation)
     solver_controls =
   let definitions = Spec_unfolding_private.definitions (prepared verified) in
   let span = obligation.span in
+  List.iter
+    (fun _assumption ->
+      [%log.trace "recursive proof query assumption"
+        ~term:
+          (Delator.Field.string
+             (Vir.boolean_term_to_string _assumption))])
+    (obligation.assumptions @ obligation.required_preceding_safety
+   @ obligation.path_condition);
+  [%log.trace "recursive proof query goal"
+    ~term:(Delator.Field.string (Vir.boolean_term_to_string obligation.goal))];
   let program =
     Spec_unfolding_private.validated_program (prepared verified)
     |> Sst_validation.program
@@ -1666,6 +1681,44 @@ let declare_proof_query_environment (preparation : proof_query_preparation)
     with
     | Some symbols -> Ok symbols
     | None ->
+        [%log.warn "recursive specification query symbol lookup failed"
+          ~function_name:
+            (Delator.Field.string function_id.Sst.function_name)
+          ~function_index:(Delator.Field.int function_id.function_index)
+          ~type_arguments:
+            (Delator.Field.string
+               (String.concat ","
+                  (List.map Parametric_type.to_string type_arguments)))
+          ~available_instances:(Delator.Field.int (List.length symbols))];
+        List.iter
+          (fun (_symbols : symbols) ->
+            match _symbols.view.key with
+            | None ->
+                [%log.trace "available recursive specification query symbol"
+                  ~function_name:
+                    (Delator.Field.string
+                       (Spec_unfolding_private.definition_id
+                          _symbols.definition)
+                         .function_name)
+                  ~function_index:
+                    (Delator.Field.int
+                       (Spec_unfolding_private.definition_id
+                          _symbols.definition)
+                         .function_index)
+                  ~type_arguments:(Delator.Field.string "<canonical>")]
+            | Some _key ->
+                [%log.trace "available recursive specification query symbol"
+                  ~function_name:
+                    (Delator.Field.string
+                       _key.function_id.function_name)
+                  ~function_index:
+                    (Delator.Field.int _key.function_id.function_index)
+                  ~type_arguments:
+                    (Delator.Field.string
+                       (String.concat ","
+                          (List.map Parametric_type.to_string
+                             _key.type_arguments)))])
+          symbols;
         fail preparation.span
           "recursive specification %s#%d is absent from verified authority"
           function_id.function_name function_id.function_index

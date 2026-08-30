@@ -19,10 +19,50 @@
  (flags (:standard -w -A -alert -all -open Vstd))
  (preprocess (pps vero_ppx_driver)))
 
+(library
+ (name imported_broadcast_group_consumer)
+ (modules imported_broadcast_group_consumer)
+ (libraries verocaml.vstd verocaml.ghost)
+ (flags (:standard -w -A -alert -all -open Vstd))
+ (preprocess (pps vero_ppx_driver)))
+
+(library
+ (name vstd_broadcast_forwarder)
+ (modules vstd_broadcast_forwarder)
+ (libraries verocaml.vstd verocaml.ghost)
+ (flags (:standard -w -A -alert -all))
+ (preprocess (pps vero_ppx_driver)))
+
+(library
+ (name imported_broadcast_declaration_consumer)
+ (modules imported_broadcast_declaration_consumer)
+ (libraries verocaml.vstd verocaml.ghost)
+ (flags (:standard -w -A -alert -all -open Vstd))
+ (preprocess (pps vero_ppx_driver)))
+
+(library
+ (name forwarded_broadcast_group_consumer)
+ (modules forwarded_broadcast_group_consumer)
+ (libraries vstd_broadcast_forwarder verocaml.vstd verocaml.ghost)
+ (flags (:standard -w -A -alert -all -open Vstd))
+ (preprocess (pps vero_ppx_driver)))
+
+(library
+ (name selected_broadcast_group_consumer)
+ (modules selected_broadcast_group_consumer)
+ (libraries vstd_broadcast_forwarder verocaml.vstd verocaml.ghost)
+ (flags (:standard -w -A -alert -all -open Vstd))
+ (preprocess (pps vero_ppx_driver)))
+
 (cram
  (deps
   ../../src/verocaml.exe
   .vstd_consumer.objs/byte/vstd_consumer.cmt
   .ambient_vstd_consumer.objs/byte/ambient_vstd_consumer.cmt
   .imported_generic_axiom_consumer.objs/byte/imported_generic_axiom_consumer.cmt
+  .imported_broadcast_group_consumer.objs/byte/imported_broadcast_group_consumer.cmt
+  .vstd_broadcast_forwarder.objs/byte/vstd_broadcast_forwarder.cmt
+  .imported_broadcast_declaration_consumer.objs/byte/imported_broadcast_declaration_consumer.cmt
+  .forwarded_broadcast_group_consumer.objs/byte/forwarded_broadcast_group_consumer.cmt
+  .selected_broadcast_group_consumer.objs/byte/selected_broadcast_group_consumer.cmt
   (alias ../../library/all)))

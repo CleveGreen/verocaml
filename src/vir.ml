@@ -1135,16 +1135,20 @@ and argument_has_recursive_specification = function
   | Recursive_boolean_argument term -> boolean_has_recursive_specification term
   | Recursive_aggregate_argument term -> aggregate_has_recursive_specification term
   | Recursive_parametric_argument term ->
-      (match term.parametric_desc with
-      | Parametric_symbol _ -> false
-      | Parametric_selector (_, source) -> aggregate_has_recursive_specification source
-      | Parametric_conditional (condition, consequent, alternative) ->
-          boolean_has_recursive_specification condition
-          || List.exists boolean_has_recursive_specification
-               (parametric_conditions consequent @ parametric_conditions alternative)
-      | Parametric_symbolic_application application ->
-          List.exists argument_has_recursive_specification
-            (Symbolic_application_private.arguments application))
+      parametric_has_recursive_specification term
+
+and parametric_has_recursive_specification term =
+  match term.parametric_desc with
+  | Parametric_symbol _ -> false
+  | Parametric_selector (_, source) ->
+      aggregate_has_recursive_specification source
+  | Parametric_conditional (condition, consequent, alternative) ->
+      boolean_has_recursive_specification condition
+      || parametric_has_recursive_specification consequent
+      || parametric_has_recursive_specification alternative
+  | Parametric_symbolic_application application ->
+      List.exists argument_has_recursive_specification
+        (Symbolic_application_private.arguments application)
 
 and integer_has_recursive_specification = function
   | Integer_recursive_spec_application _ -> true
@@ -1194,8 +1198,8 @@ and boolean_has_recursive_specification = function
   | Boolean_invariant_application { value; _ } ->
       aggregate_has_recursive_specification value
   | Parametric_equal (left, right) ->
-      List.exists boolean_has_recursive_specification
-        (parametric_conditions left @ parametric_conditions right)
+      parametric_has_recursive_specification left
+      || parametric_has_recursive_specification right
   | Boolean_constant _ | Boolean_symbol _ -> false
 
 let obligation_has_recursive_specification (obligation : obligation) =

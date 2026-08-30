@@ -14,8 +14,8 @@ type imported_group = {
 }
 
 val authenticate_typedtree :
-  ?imported_declaration_paths:string list ->
-  ?imported_group_paths:string list ->
+  ?imported_declarations:(string * string) list ->
+  ?imported_groups:(string * string) list ->
   source_file:string ->
   imports:Cmt_input.import array ->
   artifact:Typedtree_adapter_issuance_private.proof_capture_artifact option ->

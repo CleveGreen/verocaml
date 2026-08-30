@@ -23,6 +23,7 @@ val provenance : result -> (string * string * (string * string) list * (string *
 val error_unit_name : error -> string option
 val error_message : error -> string
 val error_diagnostic : error -> Diagnostic.t option
+val error_is_internal : error -> bool
 val error :
   ?unit_name:string ->
   ?diagnostic:Diagnostic.t ->

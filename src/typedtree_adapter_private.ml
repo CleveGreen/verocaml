@@ -1734,6 +1734,7 @@ module Public = struct
   }
   type imported_broadcast_group = {
     imported_broadcast_group_path : string;
+    imported_broadcast_group_uid : string;
     imported_broadcast_target_paths : string list;
   }
   type imported_type = {
@@ -1970,6 +1971,8 @@ module Public = struct
     | Some { function_kind = Top_exec | Top_external_body (Sst.Exec, _); _ }
     | None ->
         false
+  let compiler_type_name typ =
+    Format.asprintf "%a" Printtyp.type_expr typ
   let normalized_type_with_substitutions context substitutions location typ =
     let binders =
       Option.fold ~none:[]
@@ -2037,17 +2040,49 @@ module Public = struct
               | _ :: _ :: _ ->
                   Spec_function_type_private.Unsupported_application))
     in
+    let source_type = compiler_type_name typ in
     match
       Spec_function_type_private.lower_compiler_type ~substitutions ~binders
         ~logical:(symbolic_context_is_logical context) ~resolve typ
     with
     | Ok typ -> Ok typ
     | Error Parametric_lowering_private.Polymorphic_source_type ->
-        unsupported context location Diagnostic.Unsupported_generic_use
+        [%log.debug "source type lowering rejected a generic use"
+          ~source_type:(Delator.Field.string source_type)
+          ~type_binders:(Delator.Field.int (List.length binders))
+          ~substitutions:(Delator.Field.int (List.length substitutions))];
+        Error
+          (Diagnostic.make
+             (Diagnostic.Unsupported_construct Diagnostic.Unsupported_generic_use)
+             (span context location)
+          |> Diagnostic.with_message
+               (Printf.sprintf
+                  "VeroCaml cannot represent the inferred type %s as a supported first-order generic type here."
+                  source_type))
     | Error Parametric_lowering_private.Higher_order_source_type ->
-        unsupported context location Diagnostic.Higher_order_function
+        [%log.debug "source type lowering rejected a higher-order type"
+          ~source_type:(Delator.Field.string source_type)];
+        Error
+          (Diagnostic.make
+             (Diagnostic.Unsupported_construct Diagnostic.Higher_order_function)
+             (span context location)
+          |> Diagnostic.with_message
+               (Printf.sprintf
+                  "VeroCaml cannot use the inferred function type %s in this position."
+                  source_type))
     | Error Parametric_lowering_private.Unsupported_source_type ->
-        unsupported context location Diagnostic.Unsupported_type
+        [%log.debug "source type lowering rejected an unsupported type"
+          ~source_type:(Delator.Field.string source_type)
+          ~imported_types:
+            (Delator.Field.int (List.length context.imported.imported_types))];
+        Error
+          (Diagnostic.make
+             (Diagnostic.Unsupported_construct Diagnostic.Unsupported_type)
+             (span context location)
+          |> Diagnostic.with_message
+               (Printf.sprintf
+                  "VeroCaml cannot use the inferred type %s in verified code."
+                  source_type))
   let normalized_type context location typ =
     let substitutions =
       Option.fold ~none:[]
@@ -10857,6 +10892,30 @@ module Public = struct
                         Callback_contract_private.extract
                           context.contract_carriers lowered_body
                       in
+                      let* () =
+                        if function_.rec_flag <> Asttypes.Recursive then Ok ()
+                        else
+                          match contracts.Sst.decreases with
+                          | [ _ ] -> Ok ()
+                          | [] ->
+                              Error
+                                (Diagnostic.make
+                                   (Diagnostic.Invalid_recursive_rank
+                                      (Printf.sprintf
+                                         "Recursive function %S needs one decreases clause. Add [%%verocaml.decreases ...] at the beginning of its body."
+                                         function_.function_id.function_name))
+                                   (span context
+                                      function_.value_binding.vb_loc))
+                          | _ :: _ :: _ ->
+                              Error
+                                (Diagnostic.make
+                                   (Diagnostic.Invalid_recursive_rank
+                                      (Printf.sprintf
+                                         "Recursive function %S has more than one decreases clause; keep exactly one."
+                                         function_.function_id.function_name))
+                                   (span context
+                                      function_.value_binding.vb_loc))
+                      in
                       let declaration_span =
                         span context function_.value_binding.vb_loc
                       in
@@ -10982,6 +11041,12 @@ module Public = struct
                 (Diagnostic.Unsupported_construct
                    Diagnostic.Partial_function_parameter)
                 (span context location));
+          parameter_pattern_error =
+            (fun location ->
+              Diagnostic.make
+                (Diagnostic.Unsupported_construct
+                   Diagnostic.Refutable_parameter_pattern)
+                (span context location));
         }
         [] parameters
     in
@@ -11077,6 +11142,10 @@ module Public = struct
                         (fun location ->
                           callback_diagnostic context
                             Diagnostic.Partial_function_parameter location);
+                      parameter_pattern_error =
+                        (fun location ->
+                          callback_diagnostic context
+                            Diagnostic.Refutable_parameter_pattern location);
                     }
                     [] params
                 in
@@ -11089,6 +11158,28 @@ module Public = struct
                 let* contracts, body =
                   Callback_contract_private.extract context.contract_carriers
                     lowered_body
+                in
+                let* () =
+                  if function_.rec_flag <> Asttypes.Recursive then Ok ()
+                  else
+                    match contracts.Sst.decreases with
+                    | [ _ ] -> Ok ()
+                    | [] ->
+                        Error
+                          (Diagnostic.make
+                             (Diagnostic.Invalid_recursive_rank
+                                (Printf.sprintf
+                                   "Recursive function %S needs one decreases clause. Add [%%verocaml.decreases ...] at the beginning of its body."
+                                   function_.function_id.function_name))
+                             (span context function_.value_binding.vb_loc))
+                    | _ :: _ :: _ ->
+                        Error
+                          (Diagnostic.make
+                             (Diagnostic.Invalid_recursive_rank
+                                (Printf.sprintf
+                                   "Recursive function %S has more than one decreases clause; keep exactly one."
+                                   function_.function_id.function_name))
+                             (span context function_.value_binding.vb_loc))
                 in
                 let declaration_span =
                   span context function_.value_binding.vb_loc
@@ -12771,14 +12862,17 @@ module Public = struct
     in
     let* broadcast_scan =
       Broadcast.authenticate_typedtree
-        ~imported_declaration_paths:
+        ~imported_declarations:
           (imported.imported_callables
           |> List.filter_map (fun callable ->
-                 Option.map (Fun.const callable.imported_path)
+                 Option.map
+                   (Fun.const (callable.imported_path, callable.imported_uid))
                    callable.imported_broadcast_trigger_span))
-        ~imported_group_paths:
+        ~imported_groups:
           (List.map
-             (fun group -> group.imported_broadcast_group_path)
+             (fun group ->
+               ( group.imported_broadcast_group_path,
+                 group.imported_broadcast_group_uid ))
              imported.imported_broadcast_groups)
         ~source_file ~imports
         ~artifact:proof_capture_artifact structure

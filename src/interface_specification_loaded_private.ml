@@ -834,18 +834,18 @@ let run_loaded_consumer ~threads ~solver_policy ?external_specifications environ
             ~diagnostic:(Sst_validation.to_diagnostic validation_error)
             (Sst_validation.error_to_string validation_error)
       | Error (Invariant_error invariant_error) ->
-          error ~unit_name:consumer.unit_name
+          internal_error ~unit_name:consumer.unit_name
             (Type_invariant.error_to_string invariant_error)
       | Error
           (Pipeline_error (Verification_pipeline.Engine_error engine_error)) ->
-          error ~unit_name:consumer.unit_name
+          internal_error ~unit_name:consumer.unit_name
             (Symbolic_executor_private.error_to_string engine_error)
       | Error
           (Pipeline_error
             (Verification_pipeline.Setup_error
               (Verification_pipeline.Internal_setup_error message)))
       | Error (Pipeline_error (Verification_pipeline.Solve_error message)) ->
-          error ~unit_name:consumer.unit_name message
+          internal_error ~unit_name:consumer.unit_name message
       | Error
           (Pipeline_error
             (Verification_pipeline.Setup_error
@@ -854,7 +854,7 @@ let run_loaded_consumer ~threads ~solver_policy ?external_specifications environ
           error ~unit_name:consumer.unit_name
             (Solver_backend.error_to_string solver_error)
       | Error (Internal_error message) ->
-          error ~unit_name:consumer.unit_name message)
+          internal_error ~unit_name:consumer.unit_name message)
 [@@delator.instrument] [@@delator.level debug]
 
 let verify_loaded_with_policy ~threads ~solver_policy ~external_specifications
@@ -912,6 +912,8 @@ let error_unit_name (error : error) = error.unit_name
 let error_message (error : error) = error.message
 let error_diagnostic =
   Interface_specification_environment_private.error_diagnostic
+let error_is_internal =
+  Interface_specification_environment_private.error_is_internal
 let error = Interface_specification_environment_private.error
 
 module For_testing = struct

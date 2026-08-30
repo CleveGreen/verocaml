@@ -170,6 +170,7 @@ val scoped_row_cmt : scoped_row -> string
 val error_unit_name : error -> string option
 val error_message : error -> string
 val error_diagnostic : error -> Diagnostic.t option
+val error_is_internal : error -> bool
 
 val status : result -> status
 val semantic_sst : result -> string

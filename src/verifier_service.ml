@@ -609,6 +609,7 @@ let verify_scope request =
 let error_unit_name = Interface_specification_loaded_private.error_unit_name
 let error_message = Interface_specification_loaded_private.error_message
 let error_diagnostic = Interface_specification_loaded_private.error_diagnostic
+let error_is_internal = Interface_specification_loaded_private.error_is_internal
 let status result = result.status
 let semantic_sst result = Lazy.force result.semantic_sst
 let vir result = result.vir

@@ -6,6 +6,7 @@ type target = Broadcast_scope_private.target = {
 type group = {
   group_id : string;
   group_name : string;
+  group_path : string;
   group_targets : target list;
   group_span : Diagnostic.span;
 }
@@ -23,7 +24,7 @@ val authenticate :
   source_file:string ->
   artifact:Typedtree_adapter_issuance_private.proof_capture_artifact option ->
   resolves_to_marker:(Path.t -> bool) ->
-  resolve_imported_target:(Path.t -> target option) ->
+  resolve_imported_target:(Path.t -> string -> target option) ->
   imported_declaration_ids:string list ->
   imported_group_ids:string list ->
   Typedtree.structure ->

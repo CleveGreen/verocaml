@@ -10,6 +10,7 @@ type target = Broadcast_scope_private.target = {
 type group = {
   group_id : string;
   group_name : string;
+  group_path : string;
   group_targets : target list;
   group_span : Diagnostic.span;
 }
@@ -190,8 +191,15 @@ let carrier_body resolves_to_marker metadata binding =
       fail binding.vb_expr.exp_loc
         "broadcast carrier is not one canonical thunk"
 
-let collect_target_paths resolves_to_marker expression =
-  let paths = ref [] in
+type target_reference = {
+  target_path : Path.t;
+  target_uid : string;
+}
+
+let compiler_uid uid = Format.asprintf "%a" Types.Uid.print uid
+
+let collect_target_references resolves_to_marker expression =
+  let references = ref [] in
   let default = Tast_iterator.default_iterator in
   let iterator =
     {
@@ -199,14 +207,24 @@ let collect_target_paths resolves_to_marker expression =
       expr =
         (fun self expression ->
           (match expression.exp_desc with
-          | Texp_ident (path, _, _, _, _) when not (resolves_to_marker path) ->
-              paths := path :: !paths
+          | Texp_ident (path, _, description, _, _)
+            when not (resolves_to_marker path) ->
+              let target_uid = compiler_uid description.Types.val_uid in
+              [%log.trace "collected broadcast target reference"
+                ~path:(Delator.Field.string (Path.name path))
+                ~value_uid:(Delator.Field.string target_uid)];
+              references :=
+                {
+                  target_path = path;
+                  target_uid;
+                }
+                :: !references
           | _ -> ());
           default.expr self expression);
     }
   in
   iterator.expr iterator expression;
-  List.rev !paths
+  List.rev !references
 
 let trigger_locations ~artifact ~source_file ~resolves_to_marker binding =
   let found = ref [] in
@@ -249,9 +267,11 @@ let trigger_locations ~artifact ~source_file ~resolves_to_marker binding =
 
 let path_ident = function Path.Pident ident -> Some ident | _ -> None
 
-let target_for_path declarations groups resolve_imported_target location path =
+let target_for_reference declarations groups resolve_imported_target location
+    reference =
+  let path = reference.target_path in
   let imported () =
-    match resolve_imported_target path with
+    match resolve_imported_target path reference.target_uid with
     | Some target ->
         [%log.trace "resolved imported broadcast target"
           ~path:(Delator.Field.string (Path.name path))
@@ -288,13 +308,13 @@ let target_for_path declarations groups resolve_imported_target location path =
 let targets_for_carrier declarations groups resolve_imported_target
     resolves_to_marker metadata binding =
   let* body = carrier_body resolves_to_marker metadata binding in
-  collect_target_paths resolves_to_marker body
+  collect_target_references resolves_to_marker body
   |> List.fold_left
-       (fun result path ->
+       (fun result reference ->
          let* targets = result in
          let* target =
-           target_for_path declarations groups resolve_imported_target
-             binding.vb_loc path
+           target_for_reference declarations groups resolve_imported_target
+             binding.vb_loc reference
          in
          Ok (target :: targets))
        (Ok [])
@@ -406,7 +426,7 @@ let expression_wrappers ~source_file carriers binding =
   iterator.expr iterator binding.vb_expr;
   List.rev !wrappers
 
-let authenticate_carriers ~source_file ~resolves_to_marker
+let authenticate_carriers ~source_file ~structure_path ~resolves_to_marker
     ~resolve_imported_target ~imported_declaration_ids ~imported_group_ids
     ~top_level ~bindings declarations =
   let* group_seeds =
@@ -482,6 +502,8 @@ let authenticate_carriers ~source_file ~resolves_to_marker
               {
                 group_id = carrier.carrier_id;
                 group_name = carrier.carrier_name;
+                group_path =
+                  String.concat "." (structure_path @ [ carrier.carrier_name ]);
                 group_targets = carrier.carrier_targets;
                 group_span = carrier.carrier_span;
               }
@@ -540,6 +562,7 @@ let authenticate_structure ~source_file ~artifact ~resolves_to_marker
   in
   let* carriers, groups =
     authenticate_carriers ~source_file ~resolves_to_marker
+      ~structure_path:inventory.structure_path
       ~resolve_imported_target ~imported_declaration_ids ~imported_group_ids
       ~top_level ~bindings declarations
   in

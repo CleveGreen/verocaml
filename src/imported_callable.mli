@@ -41,6 +41,7 @@ type provider_callable = {
 
 type provider_broadcast_group = {
   resolved_path : string;
+  binding_uid : string;
   target_paths : string list;
 }
 
@@ -99,6 +100,7 @@ type callable_snapshot = {
 
 type broadcast_group_snapshot = {
   path : string;
+  binding_uid : string;
   target_paths : string list;
 }
 

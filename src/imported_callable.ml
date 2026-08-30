@@ -41,6 +41,7 @@ type provider_callable = {
 
 type provider_broadcast_group = {
   resolved_path : string;
+  binding_uid : string;
   target_paths : string list;
 }
 
@@ -93,6 +94,7 @@ type callable_snapshot = {
 
 type broadcast_group_snapshot = {
   path : string;
+  binding_uid : string;
   target_paths : string list;
 }
 
@@ -1372,7 +1374,8 @@ let provider_snapshot implementation program description direct_dependencies =
       String.concat ";"
         (List.map
            (fun (group : provider_broadcast_group) ->
-             group.resolved_path ^ "=" ^ String.concat "," group.target_paths)
+             group.resolved_path ^ "#" ^ group.binding_uid ^ "="
+             ^ String.concat "," group.target_paths)
            description.broadcast_groups);
       String.concat ","
         (List.map
@@ -1434,6 +1437,7 @@ let validate_description (description : provider_description) =
   else
     let invalid_group (group : provider_broadcast_group) =
       group.resolved_path = ""
+      || group.binding_uid = ""
       || group.target_paths = []
       || List.exists (String.equal "") group.target_paths
       || not
@@ -1667,10 +1671,14 @@ let create_unchecked providers =
     match overlapping external_type_specifications with
     | None -> Ok ()
     | Some (left, right, left_path, right_path) ->
+        let target =
+          if String.equal left_path right_path then left_path
+          else left_path ^ " and " ^ right_path
+        in
         Error
           (Printf.sprintf
-             "[VERO_DEPENDENCY] overlapping external type specifications from %s and %s target %s / %s"
-             left right left_path right_path)
+             "Libraries %s and %s both provide external type specifications for %s. Remove one of the overlapping specification dependencies."
+             left right target)
   in
   let rec mappings mapped = function
     | [] -> Ok (List.rev mapped)
@@ -1761,6 +1769,7 @@ let create_unchecked providers =
           (fun (group : provider_broadcast_group) ->
             {
               path = group.resolved_path;
+              binding_uid = group.binding_uid;
               target_paths = group.target_paths;
             })
           scope.mapping_description.broadcast_groups)
@@ -1788,14 +1797,16 @@ let create_unchecked providers =
     match String.split_on_char '.' path with root :: _ -> root | [] -> ""
   in
   let resolve_target group_path target =
-    let candidates =
+    let _attempted =
       [
         target;
         path_root group_path ^ "." ^ target;
         path_parent group_path ^ "." ^ target;
       ]
-      |> List.sort_uniq String.compare |> List.filter known_path
+      |> List.sort_uniq String.compare
     in
+    let candidates = List.filter known_path _attempted in
+    let _known_paths = declaration_paths @ group_paths in
     match candidates with
     | [ resolved ] ->
         [%log.trace "resolved imported broadcast group target"
@@ -1804,11 +1815,20 @@ let create_unchecked providers =
           ~resolved_target:(Delator.Field.string resolved)];
         Ok resolved
     | [] ->
+        [%log.debug "imported broadcast group target did not resolve"
+          ~group:(Delator.Field.string group_path)
+          ~source_target:(Delator.Field.string target)
+          ~attempted:(Delator.Field.string (String.concat "," _attempted))
+          ~known:(Delator.Field.string (String.concat "," _known_paths))];
         Error
           (Printf.sprintf
              "[VERO_DEPENDENCY] imported broadcast group %s has unknown target %s"
              group_path target)
     | _ :: _ :: _ ->
+        [%log.warn "imported broadcast group target is ambiguous"
+          ~group:(Delator.Field.string group_path)
+          ~source_target:(Delator.Field.string target)
+          ~matches:(Delator.Field.string (String.concat "," candidates))];
         Error
           (Printf.sprintf
              "[VERO_DEPENDENCY] imported broadcast group %s has ambiguous target %s"
@@ -1835,6 +1855,7 @@ let create_unchecked providers =
     (fun (_group : broadcast_group_snapshot) ->
       [%log.trace "mapped imported broadcast group"
         ~path:(Delator.Field.string _group.path)
+        ~value_uid:(Delator.Field.string _group.binding_uid)
         ~targets:(Delator.Field.int (List.length _group.target_paths))])
     mapped_broadcast_groups;
   [%log.debug "mapped imported broadcast metadata"
@@ -1885,7 +1906,8 @@ let create_unchecked providers =
             ^ String.concat "|"
                 (List.map
                    (fun (group : broadcast_group_snapshot) ->
-                     group.path ^ "=" ^ String.concat "," group.target_paths)
+                     group.path ^ "#" ^ group.binding_uid ^ "="
+                     ^ String.concat "," group.target_paths)
                    mapped_broadcast_groups)
         in
         Ok

@@ -47,6 +47,7 @@ type unsupported_construct =
   | Aggregate
   | Mutation
   | Unsupported_pattern
+  | Refutable_parameter_pattern
   | Unsupported_expression
   | Malformed_ghost_call
   | Callback_authentication
@@ -76,6 +77,11 @@ type classification =
       caller_name : string;
       callee_name : string;
       callee_mode : string;
+    }
+  | Invalid_verification_call of {
+      callee_name : string;
+      callee_mode : string;
+      context : string;
     }
   | Invalid_imported_specification of string
   | Invalid_semantic_program of {
@@ -170,13 +176,16 @@ let code_and_message = function
   | Input_io_error -> ("VERO_INPUT_IO", "input could not be read")
   | Invalid_recursive_rank detail ->
       ("VERO_INVALID_RECURSIVE_RANK", detail)
-  | Invalid_broadcast detail -> ("VERO_BROADCAST_AUTHENTICATION", detail)
+  | Invalid_broadcast _ ->
+      ( "VERO_INVALID_BROADCAST",
+        "VeroCaml could not validate this broadcast declaration or activation." )
   | Invalid_symbolic_declaration detail ->
       ("VERO_SYMBOLIC_DECLARATION", detail)
   | Invalid_symbolic_application detail ->
       ("VERO_SYMBOLIC_APPLICATION", detail)
-  | Invalid_symbolic_authentication detail ->
-      ("VERO_SYMBOLIC_AUTHENTICATION", detail)
+  | Invalid_symbolic_authentication _ ->
+      ( "VERO_INVALID_SYMBOLIC",
+        "VeroCaml could not validate this symbolic declaration or use." )
   | Executable_function_in_specification { function_name } ->
       ( "VERO_EXEC_IN_SPEC",
         Printf.sprintf
@@ -187,6 +196,10 @@ let code_and_message = function
         Printf.sprintf
           "Executable function %S uses %s-only function %S without marking that call as ghost."
           caller_name callee_mode callee_name )
+  | Invalid_verification_call { callee_name; callee_mode; context } ->
+      ( "VERO_CALL_CONTEXT",
+        Printf.sprintf "The %s %S cannot be called from %s." callee_mode
+          callee_name context )
   | Invalid_imported_specification detail ->
       ( "VERO_DEPENDENCY",
         "Imported specification authentication failed: " ^ detail )
@@ -202,7 +215,7 @@ let code_and_message = function
       match construct with
       | Unsupported_type ->
           ( "VERO_UNSUPPORTED_TYPE",
-            "This type is not supported in verified code." )
+            "VeroCaml cannot determine a supported logical representation for this type." )
       | Unsupported_structure_item ->
           ( "VERO_UNSUPPORTED_STRUCTURE_ITEM",
             "This top-level declaration is not supported in a verified compilation unit."
@@ -219,15 +232,16 @@ let code_and_message = function
           ("VERO_UNSUPPORTED_MUTUAL_RECURSION", "mutual recursion is not supported")
       | Unsupported_generic_use ->
           ( "VERO_UNSUPPORTED_GENERIC_USE",
-            "this generic use is not supported in verified code" )
+            "VeroCaml cannot represent this generic use in its supported first-order logic." )
       | Higher_order_function ->
           ( "VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION",
-            "nested and higher-order functions are not supported" )
+            "This function value is outside the supported verified-callback subset." )
       | Higher_order_call ->
-          ("VERO_UNSUPPORTED_HIGHER_ORDER_CALL", "higher-order calls are not supported")
+          ( "VERO_UNSUPPORTED_HIGHER_ORDER_CALL",
+            "This higher-order call is outside the supported verified-callback subset." )
       | Unknown_or_external_call ->
           ( "VERO_UNSUPPORTED_EXTERNAL_CALL",
-            "unknown and external calls are not supported" )
+            "This call has no verified implementation or imported specification." )
       | Loop -> ("VERO_UNSUPPORTED_LOOP", "loops are not supported")
       | Effect -> ("VERO_UNSUPPORTED_EFFECT", "effects are not supported")
       | Exception ->
@@ -257,26 +271,29 @@ let code_and_message = function
       | Unsupported_pattern ->
           ( "VERO_UNSUPPORTED_PATTERN",
             "VeroCaml cannot verify this pattern." )
+      | Refutable_parameter_pattern ->
+          ( "VERO_REFUTABLE_PARAMETER",
+            "Verified function parameters must use irrefutable patterns." )
       | Unsupported_expression ->
           ( "VERO_UNSUPPORTED_EXPRESSION",
             "VeroCaml cannot verify this expression." )
       | Malformed_ghost_call ->
           ( "VERO_MALFORMED_GHOST_CALL",
-            "This retained ghost call does not match the output of the VeroCaml PPX."
+            "This VeroCaml annotation is not valid in its current context."
           )
       | Callback_authentication ->
-          ( "VERO_CALLBACK_AUTHENTICATION",
-            "callback identity, shape, certificate, session, or call edge is not authenticated"
+          ( "VERO_INVALID_CALLBACK",
+            "VeroCaml could not authenticate this callback at the call site."
           )
       | Callback_policy ->
           ( "VERO_CALLBACK_POLICY",
-            "callback use is outside the local verified-callback policy" )
+            "This callback cannot be used from this verified call site." )
       | Callback_contract ->
           ( "VERO_CALLBACK_CONTRACT",
             "verified callbacks require explicit requires and ensures clauses" )
       | Quantifier_authentication ->
-          ( "VERO_QUANTIFIER_AUTHENTICATION",
-            "quantifier identity, carrier, binder, or lexical owner is not authenticated"
+          ( "VERO_INVALID_QUANTIFIER",
+            "VeroCaml could not authenticate this forall or exists expression."
           )
       | Quantifier_trigger ->
           ( "VERO_QUANTIFIER_TRIGGER",
@@ -309,15 +326,61 @@ let default_submessages = function
              "Otherwise, explicitly mark the call to %S as ghost code."
              callee_name);
       ]
+  | Invalid_verification_call { callee_name; callee_mode; context } ->
+      (if String.equal callee_mode "proof" then
+         [
+           Hint
+             "If the enclosing function is intended to be a proof, add [@@verocaml.proof] after its definition.";
+         ]
+       else if String.equal callee_mode "specification" then
+         [
+           Hint
+             "If the enclosing function is intended to be a specification, add [@@verocaml.spec] after its definition.";
+         ]
+       else [])
+      @ [
+          Hint
+            (Printf.sprintf
+               "Otherwise, move the call to %S into a compatible verification context."
+               callee_name);
+          Hint (Printf.sprintf "The current context is %s." context);
+        ]
   | Invalid_imported_specification _ ->
       [
         Hint
           "Rebuild the provider and consumer together, and ensure the consumer directly imports every specification provider and external target it uses.";
       ]
+  | Invalid_broadcast _ ->
+      [
+        Hint
+          "Broadcast declarations must be proofs or axioms with one explicit trigger; activations must name exported broadcast declarations or groups.";
+        Hint "Rebuild the project with the matching VeroCaml PPX.";
+      ]
+  | Invalid_symbolic_authentication _ ->
+      [
+        Hint
+          "Use [%%verocaml.symbolic val ...] in specification or proof code and rebuild with the matching VeroCaml PPX.";
+      ]
   | Unsupported_construct Unsupported_type ->
       [
         Hint
-          "Use a supported scalar or immutable algebraic data type, or provide an external type specification.";
+          "Use a scalar or immutable algebraic data type, or import a library that provides an external type specification for this type.";
+      ]
+  | Unsupported_construct Unsupported_generic_use ->
+      [
+        Hint
+          "If OCaml inferred a more general type than intended, add a source type annotation; otherwise rewrite this use with supported first-order values.";
+      ]
+  | Unsupported_construct Higher_order_function
+  | Unsupported_construct Higher_order_call ->
+      [
+        Hint
+          "Use a named verified callback with explicit requires and ensures clauses, or move the higher-order operation outside verified code.";
+      ]
+  | Unsupported_construct Unknown_or_external_call ->
+      [
+        Hint
+          "Add a verified library dependency or provide an external function specification in a dependency library.";
       ]
   | Unsupported_construct Unsupported_structure_item ->
       [
@@ -331,17 +394,34 @@ let default_submessages = function
       ]
   | Unsupported_construct Unsupported_pattern ->
       [ Hint "Rewrite the match using supported variable and constructor patterns." ]
+  | Unsupported_construct Refutable_parameter_pattern ->
+      [
+        Hint
+          "Bind the parameter to a name, then destructure it with match inside the function body.";
+      ]
   | Unsupported_construct Unsupported_expression ->
       [ Hint "Rewrite this expression using supported pure VeroCaml operations." ]
   | Unsupported_construct Malformed_ghost_call ->
       [
         Hint
-          "Recompile the source with the matching VeroCaml PPX and verify the newly generated CMT.";
+          "Check that the enclosing function has the intended [@@verocaml.spec], [@@verocaml.proof], or [@@verocaml.axiom] attribute.";
+        Hint
+          "Then rebuild through Dune so the compiler, PPX, and verifier use the same VeroCaml version.";
+      ]
+  | Unsupported_construct Callback_authentication
+  | Unsupported_construct Callback_policy ->
+      [
+        Hint
+          "Use a named callback from the same verified module and give it explicit requires and ensures clauses.";
+      ]
+  | Unsupported_construct Quantifier_authentication ->
+      [
+        Hint
+          "Write the quantifier with the supported forall or exists specification function and rebuild with the matching VeroCaml PPX.";
       ]
   | Unsupported_target _ | Unsupported_input _ | Malformed_input
   | Incompatible_magic | Input_io_error | Invalid_recursive_rank _
-  | Invalid_broadcast _ | Invalid_symbolic_declaration _
-  | Invalid_symbolic_application _ | Invalid_symbolic_authentication _
+  | Invalid_symbolic_declaration _ | Invalid_symbolic_application _
   | Invalid_semantic_program _ | Unsupported_construct _ ->
       []
 
@@ -354,6 +434,18 @@ let make classification span =
     ~start_column:(Delator.Field.int span.start_pos.column)
     ~end_line:(Delator.Field.int span.end_pos.line)
     ~end_column:(Delator.Field.int span.end_pos.column)];
+  (match classification with
+  | Invalid_broadcast _detail | Invalid_symbolic_authentication _detail ->
+      [%log.debug "diagnostic internal detail"
+        ~code:(Delator.Field.string code)
+        ~detail:(Delator.Field.string _detail)]
+  | Unsupported_target _ | Unsupported_input _ | Malformed_input
+  | Incompatible_magic | Input_io_error | Invalid_recursive_rank _
+  | Invalid_symbolic_declaration _ | Invalid_symbolic_application _
+  | Executable_function_in_specification _ | Unannotated_erased_call _
+  | Invalid_verification_call _ | Invalid_imported_specification _
+  | Invalid_semantic_program _ | Unsupported_construct _ ->
+      ());
   {
     classification;
     code;

@@ -178,6 +178,11 @@ let stderr_lines row =
       | Scoped_verified -> (
           match Verifier_service.error_diagnostic error with
           | Some diagnostic -> [ frontend_error diagnostic ]
+          | None when Verifier_service.error_is_internal error ->
+              [
+                internal_error
+                  "VeroCaml could not prepare this verification request. This is a verifier bug, not a failed proof. Re-run with DELATOR_LOG=debug to capture diagnostic details.";
+              ]
           | None ->
               [
                 dependency_error

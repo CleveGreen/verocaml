@@ -89,9 +89,14 @@ let lower ?(allow_public_parametric_signatures = false) ?external_specifications
       imported_broadcast_groups =
         List.map
           (fun (group : Imported_callable.broadcast_group_snapshot) ->
+            [%log.trace "installing imported broadcast group identity"
+              ~path:(Delator.Field.string group.path)
+              ~value_uid:(Delator.Field.string group.binding_uid)
+              ~targets:(Delator.Field.int (List.length group.target_paths))];
             {
               Typedtree_adapter_private.Public.imported_broadcast_group_path =
                 group.path;
+              imported_broadcast_group_uid = group.binding_uid;
               imported_broadcast_target_paths = group.target_paths;
             })
           (Imported_callable.broadcast_groups imported);

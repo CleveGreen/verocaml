@@ -31,36 +31,80 @@ type imported_group = {
 
 type entry = { program : Sst.program Weak.t; theorems : theorem list }
 
+type imported_identity_resolution =
+  | Missing_identity
+  | Unique_identity of string
+  | Ambiguous_identity of string list
+
 let entries : entry list ref = ref []
 
 let ( let* ) result continuation =
   match result with Ok value -> continuation value | Error _ as error -> error
 
-let authenticate_typedtree ?(imported_declaration_paths = [])
-    ?(imported_group_paths = []) ~source_file ~imports ~artifact structure =
-  let resolve_imported_target path =
-    let path = Path.name path in
-    if List.mem path imported_declaration_paths then
+let authenticate_typedtree ?(imported_declarations = [])
+    ?(imported_groups = []) ~source_file ~imports ~artifact structure =
+  let resolve_imported_target _path uid =
+    let _source_path = Path.name _path in
+    let resolve candidates =
+      let canonical_paths =
+        List.filter
+          (fun (_, candidate_uid) -> String.equal uid candidate_uid)
+          candidates
+        |> List.map fst |> List.sort_uniq String.compare
+      in
+      match canonical_paths with
+      | [] -> Missing_identity
+      | [ canonical_path ] -> Unique_identity canonical_path
+      | paths -> Ambiguous_identity paths
+    in
+    let target target_group canonical_path =
+      [%log.trace "resolved imported broadcast value identity"
+        ~source_path:(Delator.Field.string _source_path)
+        ~canonical_path:(Delator.Field.string canonical_path)
+        ~value_uid:(Delator.Field.string uid)
+        ~group:(Delator.Field.bool target_group)];
       Some
         {
-          Broadcast_scope_private.target_id = "broadcast:" ^ path;
-          target_group = false;
+          Broadcast_scope_private.target_id =
+            (if target_group then "broadcast-group:" else "broadcast:")
+            ^ canonical_path;
+          target_group;
         }
-    else if List.mem path imported_group_paths then
-      Some
-        {
-          Broadcast_scope_private.target_id = "broadcast-group:" ^ path;
-          target_group = true;
-        }
-    else None
+    in
+    match (resolve imported_declarations, resolve imported_groups) with
+    | Unique_identity path, Missing_identity -> target false path
+    | Missing_identity, Unique_identity path -> target true path
+    | Missing_identity, Missing_identity ->
+        [%log.debug "imported broadcast value identity did not resolve"
+          ~source_path:(Delator.Field.string _source_path)
+          ~value_uid:(Delator.Field.string uid)
+          ~declarations:
+            (Delator.Field.int (List.length imported_declarations))
+          ~groups:(Delator.Field.int (List.length imported_groups))];
+        None
+    | declaration_resolution, group_resolution ->
+        let _resolution = function
+          | Missing_identity -> "missing"
+          | Unique_identity path -> "unique:" ^ path
+          | Ambiguous_identity paths ->
+              "ambiguous:" ^ String.concat "," paths
+        in
+        [%log.warn "conflicting imported broadcast value identity"
+          ~source_path:(Delator.Field.string _source_path)
+          ~value_uid:(Delator.Field.string uid)
+          ~declaration_resolution:
+            (Delator.Field.string (_resolution declaration_resolution))
+          ~group_resolution:
+            (Delator.Field.string (_resolution group_resolution))];
+        None
   in
   Typedtree_broadcast_private.authenticate ~source_file ~artifact
     ~resolves_to_marker:(Broadcast_scope_private.canonical_marker_path imports)
     ~resolve_imported_target
     ~imported_declaration_ids:
-      (List.map (fun path -> "broadcast:" ^ path) imported_declaration_paths)
+      (List.map (fun (path, _) -> "broadcast:" ^ path) imported_declarations)
     ~imported_group_ids:
-      (List.map (fun path -> "broadcast-group:" ^ path) imported_group_paths)
+      (List.map (fun (path, _) -> "broadcast-group:" ^ path) imported_groups)
     structure
   |> Result.map_error (fun error ->
          Diagnostic.make

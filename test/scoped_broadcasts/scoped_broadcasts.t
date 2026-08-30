@@ -330,13 +330,13 @@ source/PPX trust boundary.
 
   $ ocamlc -w -A -alert -all -bin-annot -c -o artifacts/raw.cmo fixtures/negative_foreign_or_stale.ml
   $ ./scoped_broadcasts_tool.exe diagnostic artifacts/raw.cmt
-  rejected=adapter code=VERO_BROADCAST_AUTHENTICATION solver=0 z3=0/0 detail=raw broadcast syntax was not rewritten by the authenticated PPX
+  rejected=adapter code=VERO_INVALID_BROADCAST solver=0 z3=0/0 detail=VeroCaml could not validate this broadcast declaration or activation.
   $ cat > artifacts/raw-legacy-axiom.ml <<'EOF'
   > let raw_broadcast value = value [@@verocaml.broadcast_axiom]
   > EOF
   $ ocamlc -w -A -alert -all -bin-annot -c -o artifacts/raw-legacy-axiom.cmo artifacts/raw-legacy-axiom.ml
   $ ./scoped_broadcasts_tool.exe diagnostic artifacts/raw-legacy-axiom.cmt
-  rejected=adapter code=VERO_BROADCAST_AUTHENTICATION solver=0 z3=0/0 detail=raw broadcast syntax was not rewritten by the authenticated PPX
+  rejected=adapter code=VERO_INVALID_BROADCAST solver=0 z3=0/0 detail=VeroCaml could not validate this broadcast declaration or activation.
   $ cat > artifacts/source-forged-declaration.ml <<'EOF'
   > let forged (value : int) : unit =
   >   [%verocaml.assert value = value]; ()
@@ -390,7 +390,7 @@ source/PPX trust boundary.
   $ ./scoped_broadcasts_tool.exe diagnostic artifacts/scope-span.cmt | grep -q 'solver=0 z3=0/0' && echo "carrier:scope-span zero-work"
   carrier:scope-span zero-work
   $ ./scoped_broadcasts_tool.exe wrong-artifact artifacts/group_positive.cmt artifacts/reorder_a.cmt
-  wrong-artifact code=VERO_BROADCAST_AUTHENTICATION solver=0 z3=0/0
+  wrong-artifact code=VERO_INVALID_BROADCAST solver=0 z3=0/0
 
 False but authenticated claims enter bounded solver work rather than becoming
 unsupported, while inactive declarations remain inert.
@@ -488,10 +488,10 @@ broadcast theorem.
   $ interface_ml interface_mismatch_consumer
   $ (cd artifacts && OCAML_COLOR=never ../../../src/verocaml.exe verify interface_mismatch_consumer.cmt --dependency interface_mismatch.cmt > interface_mismatch.out 2>&1); test $? -ne 0
   $ grep '^verocaml: error' artifacts/interface_mismatch.out
-  verocaml: error[VERO_DEPENDENCY] unit Interface_mismatch_consumer: [VERO_DEPENDENCY] public broadcast declaration does not match one authenticated implementation proof
+  verocaml: error[VERO_DEPENDENCY] unit Interface_mismatch_consumer: The interface exports broadcast proof "missing_implementation_marker", but the implementation does not define matching [@@verocaml.broadcast] proof.
   $ interface_mli interface_invalid_groups
   $ interface_ml interface_invalid_groups
   $ interface_ml interface_invalid_groups_consumer
   $ (cd artifacts && OCAML_COLOR=never ../../../src/verocaml.exe verify interface_invalid_groups_consumer.cmt --dependency interface_provider.cmt --dependency interface_invalid_groups.cmt > interface_invalid_groups.out 2>&1); test $? -ne 0
   $ grep '^Error:' artifacts/interface_invalid_groups.out
-  Error: [VERO_BROADCAST_AUTHENTICATION] broadcast target is not an authenticated local or imported declaration or group
+  Error: [VERO_INVALID_BROADCAST] VeroCaml could not validate this broadcast declaration or activation.

@@ -75,8 +75,8 @@ consumer verification can depend on candidate order.
   verocaml: verified dependency unit=Catalog_box interface-digest=<digest> direct=none transitive=none trust=none
   verocaml: verified file=artifacts/catalog_consumer.cmt functions=0 obligations=0
   $ code=0; OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/catalog_consumer.cmt --dependency artifacts/catalog_box.cmt --dependency artifacts/catalog_box_duplicate.cmt --timeout-ms 10000 > artifacts/catalog-overlap.out 2>&1 || code=$?; test "$code" = 2
-  $ grep -F 'overlapping external type specifications from Catalog_box' artifacts/catalog-overlap.out
-  verocaml: error[VERO_DEPENDENCY] unit Catalog_consumer: [VERO_DEPENDENCY] overlapping external type specifications from Catalog_box and Catalog_box_duplicate target External_types.box / External_types.box
+  $ grep -F 'Libraries Catalog_box and Catalog_box_duplicate both provide external type specifications' artifacts/catalog-overlap.out
+  verocaml: error[VERO_DEPENDENCY] unit Catalog_consumer: Libraries Catalog_box and Catalog_box_duplicate both provide external type specifications for External_types.box. Remove one of the overlapping specification dependencies.
   $ code=0; OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/catalog_local_overlap.cmt --dependency artifacts/catalog_box.cmt --timeout-ms 10000 > artifacts/catalog-local-overlap.out 2>&1 || code=$?; test "$code" = 2
   $ grep -o 'VERO_[A-Z_]*' artifacts/catalog-local-overlap.out | head -1
   VERO_INVALID_PROGRAM

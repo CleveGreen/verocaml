@@ -99,6 +99,8 @@ type staged_dependency = {
 
 val process_issuer : unit ref
 val error : ?unit_name:string -> ?diagnostic:Diagnostic.t -> string -> ('a, error) result
+val internal_error : ?unit_name:string -> string -> ('a, error) result
+val error_is_internal : error -> bool
 val error_to_string : error -> string
 val error_diagnostic : error -> Diagnostic.t option
 val require_handle : handle -> unit

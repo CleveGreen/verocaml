@@ -32,8 +32,29 @@ supported directions for replacing or specifying the type.
   $ cmp artifacts/unsupported-type.source.out artifacts/unsupported-type.cmt.out
   $ cat artifacts/unsupported-type.source.out
   File "fixtures/unsupported_type.ml", line 1, characters 11-17:
-  Error: [VERO_UNSUPPORTED_TYPE] This type is not supported in verified code.
-    Hint: Use a supported scalar or immutable algebraic data type, or provide an external type specification.
+  Error: [VERO_UNSUPPORTED_TYPE] VeroCaml cannot use the inferred type int array in verified code.
+    Hint: Use a scalar or immutable algebraic data type, or import a library that provides an external type specification for this type.
+
+Recursive functions missing a termination measure are rejected at their source
+definition, before semantic validation or solver setup.
+
+  $ retained missing_decreases
+  $ for route in source cmt; do if test "$route" = source; then input=fixtures/missing_decreases.ml; else input=artifacts/missing_decreases.cmt; fi; code=0; OCAML_COLOR=never ../../src/verocaml.exe verify "$input" --threads 1 --timeout-ms 10000 >"artifacts/missing-decreases.$route.out" 2>&1 || code=$?; test "$code" = 2; done
+  $ cmp artifacts/missing-decreases.source.out artifacts/missing-decreases.cmt.out
+  $ cat artifacts/missing-decreases.source.out
+  File "fixtures/missing_decreases.ml", line 1, characters 0-55:
+  Error: [VERO_INVALID_RECURSIVE_RANK] Recursive function "loop" needs one decreases clause. Add [%verocaml.decreases ...] at the beginning of its body.
+
+Refutable function parameters explain the supported rewrite rather than
+escaping as a malformed semantic representation.
+
+  $ retained refutable_parameter
+  $ for route in source cmt; do if test "$route" = source; then input=fixtures/refutable_parameter.ml; else input=artifacts/refutable_parameter.cmt; fi; code=0; OCAML_COLOR=never ../../src/verocaml.exe verify "$input" --threads 1 --timeout-ms 10000 >"artifacts/refutable-parameter.$route.out" 2>&1 || code=$?; test "$code" = 2; done
+  $ cmp artifacts/refutable-parameter.source.out artifacts/refutable-parameter.cmt.out
+  $ cat artifacts/refutable-parameter.source.out
+  File "fixtures/refutable_parameter.ml", line 2, characters 11-22:
+  Error: [VERO_REFUTABLE_PARAMETER] Verified function parameters must use irrefutable patterns.
+    Hint: Bind the parameter to a name, then destructure it with match inside the function body.
 
 Quantifier validation reports the concrete source error instead of the broad
 authentication category.

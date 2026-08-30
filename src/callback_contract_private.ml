@@ -418,7 +418,19 @@ type ('bindings, 'error) parameter_services = {
   parameter_label : Typedtree.arg_label -> string option;
   span : Location.t -> Sst.span;
   partial_error : Location.t -> 'error;
+  parameter_pattern_error : Location.t -> 'error;
 }
+
+let rec irrefutable_parameter_pattern (pattern : Sst.pattern) =
+  match pattern.pattern_desc with
+  | Sst.Bind _ | Sst.Wildcard | Sst.Unit_pattern -> true
+  | Sst.Tuple_pattern components ->
+      List.for_all (fun (_, nested) -> irrefutable_parameter_pattern nested) components
+  | Sst.Record_pattern fields ->
+      List.for_all (fun (_, nested) -> irrefutable_parameter_pattern nested) fields
+  | Sst.Constructor_pattern _ | Sst.Int_pattern _ | Sst.Bool_pattern _
+  | Sst.Owned_tree_cursor_pattern _ | Sst.Or_pattern _ ->
+      false
 
 let lower_parameters services initial parameters =
   let rec lower lowered bindings = function
@@ -450,21 +462,24 @@ let lower_parameters services initial parameters =
               let* optional_pattern, bindings =
                 services.lower_pattern bindings source_pattern
               in
-              lower
-                (Sst.Value_parameter
-                   {
-                     Sst.label =
-                       services.parameter_label parameter.fp_arg_label;
-                     pattern = carrier_pattern;
-                     optional_default =
-                       Some
-                         {
-                           Sst.optional_pattern;
-                           optional_expression = default_expression;
-                         };
-                   }
-                :: lowered)
-                bindings rest
+              if not (irrefutable_parameter_pattern optional_pattern) then
+                Error (services.parameter_pattern_error parameter.fp_loc)
+              else
+                lower
+                  (Sst.Value_parameter
+                     {
+                       Sst.label =
+                         services.parameter_label parameter.fp_arg_label;
+                       pattern = carrier_pattern;
+                       optional_default =
+                         Some
+                           {
+                             Sst.optional_pattern;
+                             optional_expression = default_expression;
+                           };
+                     }
+                  :: lowered)
+                  bindings rest
           | Typedtree.Tparam_pat pattern ->
               if services.is_callback pattern.pat_type then
                 let* callback = services.issue_callback parameter pattern in
@@ -473,16 +488,19 @@ let lower_parameters services initial parameters =
                 let* pattern, bindings =
                   services.lower_pattern bindings pattern
                 in
-                lower
-                  (Sst.Value_parameter
-                     {
-                       Sst.label =
-                         services.parameter_label parameter.fp_arg_label;
-                       pattern;
-                       optional_default = None;
-                     }
-                  :: lowered)
-                  bindings rest
+                if not (irrefutable_parameter_pattern pattern) then
+                  Error (services.parameter_pattern_error parameter.fp_loc)
+                else
+                  lower
+                    (Sst.Value_parameter
+                       {
+                         Sst.label =
+                           services.parameter_label parameter.fp_arg_label;
+                         pattern;
+                         optional_default = None;
+                       }
+                    :: lowered)
+                    bindings rest
   in
   lower [] initial parameters
 

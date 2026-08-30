@@ -41,7 +41,7 @@ solver is entered.
 
   $ for name in negative_missing_contract negative_builtin_grammar negative_partial negative_escape negative_capture negative_recursive negative_equality; do printf '%s: ' "$name"; ./verified_callbacks_tool.exe reject-zero-work "artifacts/$name.cmt"; done
   negative_missing_contract: rejected=pre-solver code=VERO_CALLBACK_CONTRACT driver=1 pipeline=0 solver=0 z3=0/0
-  negative_builtin_grammar: rejected=pre-solver code=VERO_CALLBACK_AUTHENTICATION driver=1 pipeline=0 solver=0 z3=0/0
+  negative_builtin_grammar: rejected=pre-solver code=VERO_INVALID_CALLBACK driver=1 pipeline=0 solver=0 z3=0/0
   negative_partial: rejected=pre-solver code=VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION driver=1 pipeline=0 solver=0 z3=0/0
   negative_escape: rejected=pre-solver code=VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION driver=1 pipeline=0 solver=0 z3=0/0
   negative_capture: rejected=pre-solver code=VERO_UNSUPPORTED_MUTATION driver=1 pipeline=0 solver=0 z3=0/0
