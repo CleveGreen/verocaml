@@ -11,6 +11,15 @@ flags or wrapper/member naming knowledge appear in the consumer.
   $ grep '^verocaml: verified-with-trusted-axioms ' output | sed -E 's#file=[^ ]*/test/vstd_integration/#file=#; s/ obligations=[0-9]+.*/ obligations=<n>/'
   verocaml: verified-with-trusted-axioms file=.vstd_consumer.objs/byte/vstd_consumer.cmt functions=5 obligations=<n>
 
+Generic axioms use the same imported type catalog as ordinary proofs. This
+includes external Option and Result specifications, recursively nested local
+types, and imported abstract parametric types.
+
+  $ root="${PWD%%/_build/*}"; consumer="$root/_build/default/test/vstd_integration/.imported_generic_axiom_consumer.objs/byte/imported_generic_axiom_consumer.cmt"
+  $ OCAML_COLOR=never ../../src/verocaml.exe verify "$consumer" --threads 2 --timeout-ms 20000 > generic-axiom.output 2>&1 || { cat generic-axiom.output; exit 2; }
+  $ grep '^verocaml: verified-with-trusted-axioms ' generic-axiom.output | sed -E 's#file=[^ ]*/test/vstd_integration/#file=#; s/ obligations=[0-9]+.*/ obligations=<n>/'
+  verocaml: verified-with-trusted-axioms file=.imported_generic_axiom_consumer.objs/byte/imported_generic_axiom_consumer.cmt functions=3 obligations=<n>
+
 An ambient Dune =-I= path is not an import.  Linking the library into the
 compile environment without using =Vstd= must not inject its hidden catalogs
 or axioms.

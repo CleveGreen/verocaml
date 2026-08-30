@@ -10712,8 +10712,17 @@ module Public = struct
         Ok (Some index)
     | _ -> unsupported context location Diagnostic.Malformed_ghost_call
   let lower_trusted_external_body source_file imports aggregates functions
-      proof_capture_artifact broadcast_scan symbolic_scan symbolic_definitions
-      mode function_ carrier =
+      imported proof_capture_artifact broadcast_scan symbolic_scan
+      symbolic_definitions mode function_ carrier =
+    [%log.debug "lower trusted external body"
+      ~function_name:
+        (Delator.Field.string function_.function_id.function_name)
+      ~type_binders:
+        (Delator.Field.int (List.length function_.parametric_type_binders))
+      ~imported_types:
+        (Delator.Field.int (List.length imported.imported_types))
+      ~imported_callables:
+        (Delator.Field.int (List.length imported.imported_callables))];
     let context =
       {
         source_file;
@@ -10741,7 +10750,7 @@ module Public = struct
         shared_scalar_aliases = [];
         shared_scalar_next_epoch = 0;
         owned_tree_candidate_roots = [];
-        imported = empty_imported_environment;
+        imported;
         callbacks = empty_callback_lowering_state ();
       }
     in
@@ -11027,7 +11036,7 @@ module Public = struct
     match function_.function_kind with
     | Top_external_body (mode, carrier) ->
         lower_trusted_external_body source_file imports aggregates functions
-          proof_capture_artifact broadcast_scan symbolic_scan
+          imported proof_capture_artifact broadcast_scan symbolic_scan
           symbolic_definitions mode function_ carrier
     | Top_exec | Top_spec _ | Top_type_invariant _ | Top_recursive_spec _ | Top_proof _
     | Top_external_specification _ -> (
