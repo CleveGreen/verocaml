@@ -2307,6 +2307,11 @@ and scalar_selector_services environment :
       translate_aggregate = translate_aggregate environment;
       translate_symbol =
         (fun symbol -> symbol_term environment symbol.Vir.sort symbol);
+      translate_symbolic_application =
+        (fun binder application ->
+          translate_symbolic_application environment
+            (environment.parametric_sort binder)
+            application);
       term_result = of_logic;
       malformed = (fun message -> { span = environment.span; message });
     }
@@ -2317,14 +2322,12 @@ and translate_boolean_selector environment selector source =
   Vir_logic_ir_translation_private.translate_boolean_selector
     (scalar_selector_services environment) selector source
 and translate_parametric environment term =
-  match term.Vir.parametric_desc with
-  | Vir.Parametric_symbolic_application application ->
-      translate_symbolic_application environment
-        (environment.parametric_sort term.parametric_sort)
-        application
-  | Parametric_symbol _ | Parametric_selector _ | Parametric_conditional _ ->
-      Vir_logic_ir_translation_private.translate_parametric
-        (scalar_selector_services environment) term
+  [%log.debug "translating recursive-spec parametric term"
+    ~sort:
+      (Delator.Field.string
+         (Parametric_logic_private.sort_name term.Vir.parametric_sort))];
+  Vir_logic_ir_translation_private.translate_parametric
+    (scalar_selector_services environment) term
 and translate_application environment = function
   | Vir.Integer_application term -> translate_integer environment term
   | Boolean_application term -> translate_boolean environment term

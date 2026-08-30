@@ -346,6 +346,7 @@ type trusted_summary_use =
       function_ref : function_ref;
       mode : Sst.verification_mode;
       call_form : Sst.call_form;
+      broadcast_use : bool;
       declaration_span : span;
       witness_span : span;
       call_span : span;

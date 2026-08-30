@@ -3,7 +3,7 @@ verify through stable query-local UF/constant semantics.
 
   $ mkdir artifacts
   $ retained () { name=$1; source=$2; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$name.cmo" "$source"; }
-  $ for name in scalar_positive nullary_positive polymorphic_nullary_positive parametric_positive adt_positive congruence_control broadcast_axiom_positive inactive_axiom general_trigger_positive negative_semantics negative_exec_use negative_type negative_trigger negative_foreign_or_stale; do retained "$name" "fixtures/$name.ml"; done
+  $ for name in scalar_positive nullary_positive polymorphic_nullary_positive polymorphic_symbolic_unwrap_positive parametric_positive adt_positive congruence_control broadcast_axiom_positive inactive_axiom general_trigger_positive negative_semantics negative_exec_use negative_type negative_trigger negative_foreign_or_stale; do retained "$name" "fixtures/$name.ml"; done
   $ check_route () { name=$1; expected=$2; disposition=$3; for input in "fixtures/$name.ml" "artifacts/$name.cmt"; do for threads in 1 2; do for repeat in 1 2; do out="artifacts/$name.$(basename "$input").$threads.$repeat.out"; if timeout 10 env OCAML_COLOR=never ../../src/verocaml.exe verify "$input" --threads "$threads" --timeout-ms 5000 --rlimit 100000 >"$out" 2>&1; then rc=0; else rc=$?; fi; if test "$disposition" = verified; then test "$rc" = 0; grep -Eq "verified(-with-trusted-axioms)? file=.* functions=$expected obligations=$expected" "$out"; else test "$rc" = 1; grep -q 'result=counterexample' "$out"; fi; done; cmp "artifacts/$name.$(basename "$input").$threads.1.out" "artifacts/$name.$(basename "$input").$threads.2.out"; done; done; echo "$name source+cmt threads=1/2 repeat=stable status=$disposition queries=$expected"; }
   $ check_route scalar_positive 4 verified
   scalar_positive source+cmt threads=1/2 repeat=stable status=verified queries=4
@@ -11,6 +11,8 @@ verify through stable query-local UF/constant semantics.
   nullary_positive source+cmt threads=1/2 repeat=stable status=verified queries=3
   $ check_route polymorphic_nullary_positive 9 verified
   polymorphic_nullary_positive source+cmt threads=1/2 repeat=stable status=verified queries=9
+  $ for input in fixtures/polymorphic_symbolic_unwrap_positive.ml artifacts/polymorphic_symbolic_unwrap_positive.cmt; do for threads in 1 2; do for repeat in 1 2; do out="artifacts/polymorphic-symbolic-unwrap.$(basename "$input").$threads.$repeat.out"; timeout 20 env OCAML_COLOR=never ../../src/verocaml.exe verify "$input" --threads "$threads" --timeout-ms 10000 --rlimit 100000 >"$out" 2>&1; grep -Eq 'verified-with-trusted-axioms file=.* functions=11 obligations=20 trusted-external-bodies=1 trusted-external-body-uses=3' "$out"; done; cmp "artifacts/polymorphic-symbolic-unwrap.$(basename "$input").$threads.1.out" "artifacts/polymorphic-symbolic-unwrap.$(basename "$input").$threads.2.out"; done; done; echo 'polymorphic-symbolic-unwrap source+cmt threads=1/2 repeat=stable functions=11 obligations=20 trusted-generic-axiom=true'
+  polymorphic-symbolic-unwrap source+cmt threads=1/2 repeat=stable functions=11 obligations=20 trusted-generic-axiom=true
   $ check_route parametric_positive 3 verified
   parametric_positive source+cmt threads=1/2 repeat=stable status=verified queries=3
   $ check_route adt_positive 4 verified

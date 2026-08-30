@@ -61,6 +61,10 @@ type 'error scalar_selector_services = {
   translate_integer : Vir.integer_term -> (Logic_ir.term, 'error) result;
   translate_aggregate : Vir.aggregate_term -> (Logic_ir.term, 'error) result;
   translate_symbol : Vir.symbol -> (Logic_ir.term, 'error) result;
+  translate_symbolic_application :
+    Parametric_type.binder ->
+    Vir.recursive_spec_argument Symbolic_application_private.t ->
+    (Logic_ir.term, 'error) result;
   term_result :
     (Logic_ir.term, Logic_ir.error) result -> (Logic_ir.term, 'error) result;
   malformed : string -> 'error;
@@ -125,6 +129,10 @@ type 'error parametric_equality_services = {
     Parametric_type.binder ->
     Vir.selector ->
     Vir.aggregate_term ->
+    (Logic_ir.term, 'error) result;
+  application :
+    Parametric_type.binder ->
+    Vir.recursive_spec_argument Symbolic_application_private.t ->
     (Logic_ir.term, 'error) result;
   translate_boolean : Vir.boolean_term -> (Logic_ir.term, 'error) result;
   term_result :

@@ -133,6 +133,7 @@ type trusted_external_view =
     }
   | Trusted_external_body_use of {
       proof_call : bool;
+      broadcast_use : bool;
       function_ : function_ref;
       declaration_span : Diagnostic.span;
       witness_span : Diagnostic.span;
@@ -353,6 +354,7 @@ let trusted_external_observations (vir : Vir.program) =
                {
                  proof_call =
                    use.mode = Sst.Proof && use.call_form = Sst.Proof_call;
+                 broadcast_use = use.broadcast_use;
                  function_ = function_ref use.function_ref;
                  declaration_span = use.declaration_span;
                  witness_span = use.witness_span;
@@ -361,8 +363,37 @@ let trusted_external_observations (vir : Vir.program) =
                  ensures_count = use.ensures_count;
                })
   in
-  uses
-  @ List.map
+  let uses =
+    List.fold_left
+      (fun observations observation ->
+        match observation with
+        | Trusted_external_body_use use when use.broadcast_use ->
+            if
+              List.exists
+                (function
+                  | Trusted_external_body_use existing
+                    when existing.broadcast_use ->
+                      existing.function_ = use.function_
+                      && existing.declaration_span = use.declaration_span
+                      && existing.witness_span = use.witness_span
+                  | Trusted_external_specification_use _
+                  | Trusted_external_target_specification_use _
+                  | Trusted_external_body_use _
+                  | Trusted_external_body_declaration _ ->
+                      false)
+                observations
+            then observations
+            else observation :: observations
+        | Trusted_external_specification_use _
+        | Trusted_external_target_specification_use _
+        | Trusted_external_body_use _
+        | Trusted_external_body_declaration _ ->
+            observation :: observations)
+      [] uses
+    |> List.rev
+  in
+  let declarations =
+    List.map
       (fun (declaration : Vir.trusted_external_body_declaration) ->
         Trusted_external_body_declaration
           {
@@ -374,6 +405,8 @@ let trusted_external_observations (vir : Vir.program) =
             ensures_count = declaration.ensures_count;
           })
       vir.trusted_external_body_declarations
+  in
+  uses @ declarations
 
 let status = function
   | Verification_pipeline.Verified -> Verified

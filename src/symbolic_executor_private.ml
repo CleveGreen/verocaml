@@ -9420,6 +9420,7 @@ let rec evaluate context expression state =
                                         summary.definition.function_id;
                                     mode = summary.definition.mode;
                                     call_form;
+                                    broadcast_use = false;
                                     declaration_span;
                                     witness_span;
                                     call_span = expression.span;
@@ -11809,9 +11810,51 @@ let lower_summary ?imports ?verification_session
           List.fold_left add uses exit.trusted_summary_uses)
         [] postconditions.paths
     in
-    List.fold_left add dynamic
-      (External_target_specification_use_private.collect ~validated
-         ~caller:definition.function_id)
+    let direct =
+      List.fold_left add dynamic
+        (External_target_specification_use_private.collect ~validated
+           ~caller:definition.function_id)
+    in
+    obligations
+    |> List.fold_left
+         (fun uses (obligation : Vir.obligation) ->
+           Broadcast_vc_private.report obligation
+           |> Option.fold ~none:uses
+                ~some:(fun (report : Broadcast_vc_private.report) ->
+                  report.inserted
+                  |> List.fold_left
+                       (fun uses
+                            (inserted : Broadcast_vc_private.inserted) ->
+                         match (inserted.trusted, inserted.witness_span) with
+                         | true, Some witness_span ->
+                             [%log.debug "retain trusted broadcast axiom use"
+                               ~broadcast_id:
+                                 (Delator.Field.string inserted.broadcast_id)
+                               ~function_name:
+                                 (Delator.Field.string
+                                    inserted.theorem_function_id.function_name)
+                               ~obligation_index:
+                                 (Delator.Field.int
+                                    obligation.Vir.obligation_index)];
+                             add uses
+                               (Vir.Trusted_external_body_use
+                                  {
+                                    function_ref =
+                                      vir_function_ref
+                                        inserted.theorem_function_id;
+                                    mode = Sst.Proof;
+                                    call_form = Sst.Proof_call;
+                                    broadcast_use = true;
+                                    declaration_span =
+                                      inserted.declaration_span;
+                                    witness_span;
+                                    call_span = definition.span;
+                                    requires_count = inserted.requires_count;
+                                    ensures_count = inserted.ensures_count;
+                                  })
+                         | false, _ | true, None -> uses)
+                       uses))
+         direct
   in
   let* shared_scalar_heap_reads, shared_scalar_heap_writes =
     let rec collect reads writes = function

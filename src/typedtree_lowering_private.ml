@@ -82,8 +82,19 @@ let lower ?(allow_public_parametric_signatures = false) ?external_specifications
               imported_uid = callable.binding_uid;
               imported_definition = callable.definition;
               imported_signature = callable.signature;
+              imported_broadcast_trigger_span =
+                callable.broadcast_trigger_span;
             })
           (Imported_callable.callables imported);
+      imported_broadcast_groups =
+        List.map
+          (fun (group : Imported_callable.broadcast_group_snapshot) ->
+            {
+              Typedtree_adapter_private.Public.imported_broadcast_group_path =
+                group.path;
+              imported_broadcast_target_paths = group.target_paths;
+            })
+          (Imported_callable.broadcast_groups imported);
       imported_types =
         List.map
           (fun (typ : Imported_callable.type_snapshot) ->

@@ -23,6 +23,9 @@ val authenticate :
   source_file:string ->
   artifact:Typedtree_adapter_issuance_private.proof_capture_artifact option ->
   resolves_to_marker:(Path.t -> bool) ->
+  resolve_imported_target:(Path.t -> target option) ->
+  imported_declaration_ids:string list ->
+  imported_group_ids:string list ->
   Typedtree.structure ->
   (t, error) result
 
@@ -33,3 +36,5 @@ val active_targets : t -> Typedtree.value_binding -> target list
 val expression_scopes : t -> Typedtree.value_binding -> expression_scope list
 val activation_body : t -> Typedtree.expression -> Typedtree.expression option
 val groups : t -> group list
+
+val declaration_triggers : t -> (string * Location.t list) list

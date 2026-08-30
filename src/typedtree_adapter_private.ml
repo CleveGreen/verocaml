@@ -176,6 +176,24 @@ module Public = struct
     let issued_type_ids expected =
       List.map (fun (type_id, _, _) -> type_id) expected.semantic_types
     in
+    let current_local_semantic_types expected =
+      let issued_type_ids = issued_type_ids expected in
+      List.filter
+        (fun (type_id, _, _) -> List.mem type_id issued_type_ids)
+        semantic_types
+    in
+    let issued_function_ids expected =
+      List.map
+        (fun (definition : Sst.function_definition) -> definition.function_id)
+        expected.semantic_functions
+    in
+    let current_local_semantic_functions expected =
+      let issued_function_ids = issued_function_ids expected in
+      List.filter
+        (fun (definition : Sst.function_definition) ->
+          List.mem definition.function_id issued_function_ids)
+        functions
+    in
     let current_local_abstract_type_ids expected =
       let issued_type_ids =
         issued_type_ids expected
@@ -197,14 +215,10 @@ module Public = struct
       |> List.sort compare
     in
     let semantic_types_match expected =
-      List.for_all
-        (fun issued -> List.mem issued semantic_types)
-        expected.semantic_types
+      expected.semantic_types = current_local_semantic_types expected
     in
     let semantic_functions_match expected =
-      List.for_all
-        (fun issued -> List.mem issued functions)
-        expected.semantic_functions
+      expected.semantic_functions = current_local_semantic_functions expected
     in
     let abstract_type_set_matches expected =
       expected.abstract_type_ids = current_local_abstract_type_ids expected
@@ -239,63 +253,69 @@ module Public = struct
             ~evidence_id:(Delator.Field.string evidence.evidence_id)
             ~issued_abstraction_count:
               (Delator.Field.int (List.length !issued_abstractions))]
-      | expected :: _ ->
+      | _expected :: _ ->
           [%log.debug "same-CMT abstraction authentication mismatch"
             ~evidence_id:(Delator.Field.string evidence.evidence_id)
             ~token_candidate_count:
               (Delator.Field.int (List.length token_candidates))
             ~evidence_identity_matches:
               (Delator.Field.bool
-                 (String.equal expected.evidence_id evidence.evidence_id))
+                 (String.equal _expected.evidence_id evidence.evidence_id))
             ~type_identity_matches:
               (Delator.Field.bool
-                 (expected.abstract_signature_type
+                 (_expected.abstract_signature_type
                     = evidence.abstract_signature_type
-                 && expected.hidden_implementation_type
+                 && _expected.hidden_implementation_type
                     = evidence.hidden_implementation_type
-                 && expected.abstract_signature_type = definition.Sst.type_id))
+                 && _expected.abstract_signature_type = definition.Sst.type_id))
             ~module_identity_matches:
               (Delator.Field.bool
-                 (expected.signature_module_identity
+                 (_expected.signature_module_identity
                     = evidence.signature_module_identity
-                 && expected.implementation_module_identity
+                 && _expected.implementation_module_identity
                     = evidence.implementation_module_identity
-                 && expected.abstract_signature_type_identity
+                 && _expected.abstract_signature_type_identity
                     = evidence.abstract_signature_type_identity
-                 && expected.hidden_implementation_type_identity
+                 && _expected.hidden_implementation_type_identity
                     = evidence.hidden_implementation_type_identity))
             ~span_matches:
               (Delator.Field.bool
-                 (expected.constraint_span = evidence.constraint_span
-                 && expected.declaration_spans = evidence.declaration_spans))
+                 (_expected.constraint_span = evidence.constraint_span
+                 && _expected.declaration_spans = evidence.declaration_spans))
             ~public_surface_matches:
               (Delator.Field.bool
-                 (expected.public_surface = evidence.public_surface))
+                 (_expected.public_surface = evidence.public_surface))
             ~prerequisite_matches:
               (Delator.Field.bool
-                 (expected.owned_tree_prerequisite
+                 (_expected.owned_tree_prerequisite
                     = evidence.owned_tree_prerequisite
-                 && expected.frozen_spine_prerequisite
+                 && _expected.frozen_spine_prerequisite
                     = Sst.frozen_spine_prerequisite evidence))
             ~semantic_types_match:
-              (Delator.Field.bool (semantic_types_match expected))
+              (Delator.Field.bool (semantic_types_match _expected))
             ~issued_semantic_type_count:
-              (Delator.Field.int (List.length expected.semantic_types))
+              (Delator.Field.int (List.length _expected.semantic_types))
             ~current_semantic_type_count:
               (Delator.Field.int (List.length semantic_types))
+            ~current_local_semantic_type_count:
+              (Delator.Field.int
+                 (List.length (current_local_semantic_types _expected)))
             ~semantic_functions_match:
-              (Delator.Field.bool (semantic_functions_match expected))
+              (Delator.Field.bool (semantic_functions_match _expected))
             ~issued_semantic_function_count:
-              (Delator.Field.int (List.length expected.semantic_functions))
+              (Delator.Field.int (List.length _expected.semantic_functions))
             ~current_semantic_function_count:
               (Delator.Field.int (List.length functions))
+            ~current_local_semantic_function_count:
+              (Delator.Field.int
+                 (List.length (current_local_semantic_functions _expected)))
             ~abstract_type_set_matches:
-              (Delator.Field.bool (abstract_type_set_matches expected))
+              (Delator.Field.bool (abstract_type_set_matches _expected))
             ~issued_abstract_type_count:
-              (Delator.Field.int (List.length expected.abstract_type_ids))
+              (Delator.Field.int (List.length _expected.abstract_type_ids))
             ~current_abstract_type_count:
               (Delator.Field.int
-                 (List.length (current_local_abstract_type_ids expected)))]
+                 (List.length (current_local_abstract_type_ids _expected)))]
     else ();
     authenticated
   include Typedtree_surface_private
@@ -1710,6 +1730,11 @@ module Public = struct
     imported_uid : string;
     imported_definition : Sst.function_definition;
     imported_signature : Parametric_signature_private.t;
+    imported_broadcast_trigger_span : Diagnostic.span option;
+  }
+  type imported_broadcast_group = {
+    imported_broadcast_group_path : string;
+    imported_broadcast_target_paths : string list;
   }
   type imported_type = {
     imported_type_path : string;
@@ -1735,6 +1760,7 @@ module Public = struct
   type imported_environment = {
     allow_public_parametric_signatures : bool;
     imported_callables : imported_callable list;
+    imported_broadcast_groups : imported_broadcast_group list;
     imported_types : imported_type list;
     imported_rank_domains : imported_rank_domain list;
     external_target_specifications :
@@ -1744,6 +1770,7 @@ module Public = struct
     {
       allow_public_parametric_signatures = false;
       imported_callables = [];
+      imported_broadcast_groups = [];
       imported_types = [];
       imported_rank_domains = [];
       external_target_specifications = None;
@@ -2016,7 +2043,7 @@ module Public = struct
     with
     | Ok typ -> Ok typ
     | Error Parametric_lowering_private.Polymorphic_source_type ->
-        unsupported context location Diagnostic.Polymorphic_function
+        unsupported context location Diagnostic.Unsupported_generic_use
     | Error Parametric_lowering_private.Higher_order_source_type ->
         unsupported context location Diagnostic.Higher_order_function
     | Error Parametric_lowering_private.Unsupported_source_type ->
@@ -3840,7 +3867,7 @@ module Public = struct
         polymorphic_error =
           (fun expression ->
             Diagnostic.make
-              (Diagnostic.Unsupported_construct Diagnostic.Polymorphic_function)
+              (Diagnostic.Unsupported_construct Diagnostic.Unsupported_generic_use)
               (span context expression.exp_loc));
         higher_order_error =
           (fun expression ->
@@ -3993,7 +4020,7 @@ module Public = struct
                 in
                 loop [] bindings arguments)
         | Tpat_construct (_, _, _, Some _) ->
-            unsupported context pattern.pat_loc Diagnostic.Polymorphic_function
+            unsupported context pattern.pat_loc Diagnostic.Unsupported_generic_use
         | Tpat_record (fields, Asttypes.Closed) ->
             let rec loop lowered bindings = function
               | [] -> finish (Sst.Record_pattern (List.rev lowered)) bindings
@@ -6200,7 +6227,7 @@ module Public = struct
               ~invalid:(fun _ ->
                 Diagnostic.make
                   (Diagnostic.Unsupported_construct
-                     Diagnostic.Polymorphic_function)
+                     Diagnostic.Unsupported_generic_use)
                   (span context application.exp_loc))
               ~span:(span context application.exp_loc) ~result_type ~actuals
               {
@@ -6341,7 +6368,7 @@ module Public = struct
           ~invalid:(fun _ ->
             Diagnostic.make
               (Diagnostic.Unsupported_construct
-                 Diagnostic.Polymorphic_function)
+                 Diagnostic.Unsupported_generic_use)
               (span context expression.exp_loc))
           ~span:(span context expression.exp_loc) ~result_type
           ~function_id:candidate.function_id
@@ -6547,7 +6574,7 @@ module Public = struct
                               ~some:(fun function_ ->
                                 function_.rec_flag = Asttypes.Recursive)
                               context.current_function ->
-                      unsupported_at Diagnostic.Polymorphic_function
+                      unsupported_at Diagnostic.Unsupported_generic_use
                   | Some imported ->
                       lower_direct imported.imported_definition
                         imported.imported_signature))
@@ -6559,7 +6586,7 @@ module Public = struct
     let selected = Callback_call_private.select_candidate candidates in
     match selected with
     | None ->
-        unsupported context application.exp_loc Diagnostic.Polymorphic_function
+        unsupported context application.exp_loc Diagnostic.Unsupported_generic_use
     | Some callee_function ->
         let direct_candidate =
           {
@@ -6654,7 +6681,7 @@ module Public = struct
                   Diagnostic.Callback_policy location message);
             polymorphic_error =
               (fun location ->
-                callback_diagnostic context Diagnostic.Polymorphic_function
+                callback_diagnostic context Diagnostic.Unsupported_generic_use
                   location);
             higher_order_error =
               (fun location ->
@@ -6969,7 +6996,7 @@ module Public = struct
             (Sst.Parameter _ | Sst.Application _ | Sst.Tuple _ | Sst.Aggregate _)
           ->
             unsupported context application.exp_loc
-              Diagnostic.Polymorphic_function
+              Diagnostic.Unsupported_generic_use
         | Ok (Sst.Unit | Sst.Bool)
           when comparison <> Sst.Equal && comparison <> Sst.Not_equal ->
             unsupported context application.exp_loc
@@ -7719,7 +7746,7 @@ module Public = struct
       in
       if List.for_all first_order (generic_signature_types function_)
       then
-        Diagnostic.Polymorphic_function
+        Diagnostic.Unsupported_generic_use
       else Diagnostic.Higher_order_function
     in
     Error
@@ -7768,9 +7795,7 @@ module Public = struct
         | Top_recursive_spec _ ->
             Parametric_function_selection_private.Recursive_spec
         | Top_proof _ -> Parametric_function_selection_private.Proof
-        | Top_external_body _
-          when
-            Broadcast.is_declaration broadcast_scan function_.value_binding ->
+        | Top_external_body (Sst.Proof, _) ->
             Parametric_function_selection_private.Proof
         | Top_type_invariant _ | Top_external_specification _
         | Top_external_body _ ->
@@ -7818,9 +7843,7 @@ module Public = struct
             | Top_exec | Top_spec _ | Top_recursive_spec _ | Top_proof _
             | Top_external_specification _ ->
                 Ok ()
-            | Top_external_body _
-              when
-                Broadcast.is_declaration broadcast_scan function_.value_binding ->
+            | Top_external_body (Sst.Proof, _) ->
                 Ok ()
             | Top_type_invariant _ | Top_external_body _ ->
                 generic_function_diagnostic source_file function_)
@@ -9913,7 +9936,7 @@ module Public = struct
             || List.length parameters <> List.length arguments
           then
             unsupported base_context declaration.typ_loc
-              Diagnostic.Polymorphic_function
+              Diagnostic.Unsupported_generic_use
           else if declaration.typ_private <> Asttypes.Public then
             unsupported base_context declaration.typ_loc Diagnostic.Aggregate
           else if declaration.typ_manifest <> None then
@@ -9962,7 +9985,7 @@ module Public = struct
                       if constructor.cd_vars <> [] || constructor.cd_res <> None
                       then
                         unsupported base_context constructor.cd_loc
-                          Diagnostic.Polymorphic_function
+                          Diagnostic.Unsupported_generic_use
                       else
                         let constructor_id =
                           {
@@ -12738,7 +12761,17 @@ module Public = struct
                   location))
     in
     let* broadcast_scan =
-      Broadcast.authenticate_typedtree ~source_file ~imports
+      Broadcast.authenticate_typedtree
+        ~imported_declaration_paths:
+          (imported.imported_callables
+          |> List.filter_map (fun callable ->
+                 Option.map (Fun.const callable.imported_path)
+                   callable.imported_broadcast_trigger_span))
+        ~imported_group_paths:
+          (List.map
+             (fun group -> group.imported_broadcast_group_path)
+             imported.imported_broadcast_groups)
+        ~source_file ~imports
         ~artifact:proof_capture_artifact structure
     in
     match
@@ -13001,6 +13034,28 @@ module Public = struct
               Broadcast.register ~source_file
                 ~scan:broadcast_scan ~program:authenticated
                 ~sources:(broadcast_sources functions)
+                ~imported_declarations:
+                  (imported.imported_callables
+                  |> List.filter_map (fun callable ->
+                         Option.map
+                           (fun trigger_span ->
+                             {
+                               Broadcast.imported_path = callable.imported_path;
+                               imported_definition =
+                                 callable.imported_definition;
+                               imported_trigger_span = trigger_span;
+                             })
+                           callable.imported_broadcast_trigger_span))
+                ~imported_groups:
+                  (List.map
+                     (fun group ->
+                       {
+                         Broadcast.imported_group_path =
+                           group.imported_broadcast_group_path;
+                         imported_target_paths =
+                           group.imported_broadcast_target_paths;
+                       })
+                     imported.imported_broadcast_groups)
             in
             let imported_application_model callee =
               List.exists

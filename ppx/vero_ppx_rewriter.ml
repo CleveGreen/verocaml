@@ -2458,6 +2458,12 @@ let make (arguments [@delator.skip]) =
         (fun _self signature ->
           if !root_signature then (
             root_signature := false;
+            let signature =
+              rewrite_root_signature_phase ~keep_ghost
+                ~phase:"rewrite broadcast interfaces"
+                (Vero_ppx_broadcast_private.rewrite_signature ~keep_ghost)
+                signature
+            in
             rewrite_root_signature_phase ~keep_ghost
               ~phase:"rewrite instance modes"
               (instance_modes.signature instance_modes)

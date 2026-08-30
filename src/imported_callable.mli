@@ -35,7 +35,13 @@ type provider_callable = {
   definition : Sst.function_definition;
   signature : Parametric_signature_private.t;
   finite_requirements : formal_requirement list;
+  broadcast_trigger_span : Diagnostic.span option;
   model : provider_model option;
+}
+
+type provider_broadcast_group = {
+  resolved_path : string;
+  target_paths : string list;
 }
 
 type provider_type = {
@@ -64,6 +70,7 @@ type provider_description = {
   family_digest : string;
   import_digest : string;
   callables : provider_callable list;
+  broadcast_groups : provider_broadcast_group list;
   types : provider_type list;
   external_specifications : provider_external_specification list;
 }
@@ -80,6 +87,7 @@ type callable_snapshot = {
   definition : Sst.function_definition;
   signature : Parametric_signature_private.t;
   finite_requirements : formal_requirement list;
+  broadcast_trigger_span : Diagnostic.span option;
   provider_unit : string;
   provider_interface : string;
   provider_source : string;
@@ -87,6 +95,11 @@ type callable_snapshot = {
   provider_import : string;
   summary_digest : string;
   model : provider_model option;
+}
+
+type broadcast_group_snapshot = {
+  path : string;
+  target_paths : string list;
 }
 
 type type_snapshot = {
@@ -121,6 +134,7 @@ val provider_matches :
 
 val create : provider list -> (environment, string) result
 val callables : environment -> callable_snapshot list
+val broadcast_groups : environment -> broadcast_group_snapshot list
 val types : environment -> type_snapshot list
 val external_specifications : environment -> external_specification_snapshot list
 val empty : environment

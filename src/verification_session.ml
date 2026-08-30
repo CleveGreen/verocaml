@@ -2130,7 +2130,7 @@ let exact_frozen_call_actual edge ordinal formal actual =
   | (Some _ | None), (Some _ | None) ->
       Error "frozen-spine call actual/ordinal binding mismatch"
 
-let frozen_origin_root_label (root : Vir.aggregate_term) =
+let _frozen_origin_root_label (root : Vir.aggregate_term) =
   match root.aggregate_desc with
   | Vir.Aggregate_symbol symbol ->
       Printf.sprintf "%s#%d" symbol.source_name symbol.symbol_id
@@ -2287,7 +2287,7 @@ let issue_frozen_constructor_result_instance (session : t)
                 (Delator.Field.string callee.function_id.function_name)
               ~callee_index:
                 (Delator.Field.int callee.function_id.function_index)
-              ~root:(Delator.Field.string (frozen_origin_root_label root))
+              ~root:(Delator.Field.string (_frozen_origin_root_label root))
               ~epoch:(Delator.Field.int epoch)]
         | Some _ | None -> ());
         Ok ()
@@ -2738,7 +2738,7 @@ let consume_frozen_call_discharge (session : t) discharge =
             (Delator.Field.int discharge.frozen_discharge_ordinal)
           ~root:
             (Delator.Field.string
-               (frozen_origin_root_label discharge.frozen_discharge_root))
+               (_frozen_origin_root_label discharge.frozen_discharge_root))
           ~epoch:(Delator.Field.int discharge.frozen_discharge_epoch)]
     | Some _ | None -> ());
     Ok ())
@@ -9249,9 +9249,9 @@ type trace_event =
   | Issued
   | Destroy
 
-exception Private_receipt_trace_disabled
+exception Private_receipt_trace_disabled [@@warning "-38"]
 
-let trace session event =
+let trace _session _event =
   try
     [%log.debug "private receipt"
         ~event_kind:
@@ -9260,7 +9260,7 @@ let trace session event =
                 Delator elision remove the gate check with the event. *)
              (match Sys.getenv_opt "VEROCAML_TEST_PRIVATE_RECEIPT_TRACE" with
              | Some "1" -> (
-                 match event with
+                 match _event with
                  | Blocked { reason; _ } -> (
                      match reason with
                      | Blocked_frozen_constructor ->
@@ -9275,10 +9275,10 @@ let trace session event =
                  raise_notrace Private_receipt_trace_disabled))
         ~has_blocked_reason:
           (Delator.Field.bool
-             (match event with Blocked _ -> true | Lowering _ | Issued | Destroy -> false))
+             (match _event with Blocked _ -> true | Lowering _ | Issued | Destroy -> false))
         ~blocked_reason:
           (Delator.Field.string
-             (match event with
+             (match _event with
              | Blocked { reason; _ } -> (
                  match reason with
                  | Blocked_frozen_constructor -> "frozen-constructor"
@@ -9288,173 +9288,173 @@ let trace session event =
              | Lowering _ | Issued | Destroy -> ""))
         ~has_function:
           (Delator.Field.bool
-             (match event with Blocked _ | Lowering _ -> true | Issued | Destroy -> false))
+             (match _event with Blocked _ | Lowering _ -> true | Issued | Destroy -> false))
         ~function_name:
           (Delator.Field.string
-             (match event with
+             (match _event with
              | Blocked { function_id; _ } | Lowering { function_id; _ } ->
                  function_id.Sst.function_name
              | Issued | Destroy -> ""))
         ~function_index:
           (Delator.Field.int
-             (match event with
+             (match _event with
              | Blocked { function_id; _ } | Lowering { function_id; _ } ->
                  function_id.Sst.function_index
              | Issued | Destroy -> -1))
         ~has_schedule:
           (Delator.Field.bool
-             (match event with Lowering _ -> true | Blocked _ | Issued | Destroy -> false))
+             (match _event with Lowering _ -> true | Blocked _ | Issued | Destroy -> false))
         ~source:
           (Delator.Field.bool
-             (match event with
+             (match _event with
              | Lowering { source; _ } -> source
              | Blocked _ | Issued | Destroy -> false))
         ~dependent:
           (Delator.Field.bool
-             (match event with
+             (match _event with
              | Lowering { dependent; _ } -> dependent
              | Blocked _ | Issued | Destroy -> false))
         ~callee_solver_attempts:
-          (Delator.Field.int (counters session).callee_solver_attempts)
+          (Delator.Field.int (counters _session).callee_solver_attempts)
         ~callee_verified_results:
-          (Delator.Field.int (counters session).callee_verified_results)
+          (Delator.Field.int (counters _session).callee_verified_results)
         ~callee_failed_results:
-          (Delator.Field.int (counters session).callee_failed_results)
-        ~dependent_lowerings:(Delator.Field.int (counters session).dependent_lowerings)
+          (Delator.Field.int (counters _session).callee_failed_results)
+        ~dependent_lowerings:(Delator.Field.int (counters _session).dependent_lowerings)
         ~dependent_backend_contexts:
-          (Delator.Field.int (counters session).dependent_backend_contexts)
+          (Delator.Field.int (counters _session).dependent_backend_contexts)
         ~dependent_solver_attempts:
-          (Delator.Field.int (counters session).dependent_solver_attempts)
-        ~receipts_issued:(Delator.Field.int (counters session).receipts_issued)
-        ~receipts_consumed:(Delator.Field.int (counters session).receipts_consumed)
+          (Delator.Field.int (counters _session).dependent_solver_attempts)
+        ~receipts_issued:(Delator.Field.int (counters _session).receipts_issued)
+        ~receipts_consumed:(Delator.Field.int (counters _session).receipts_consumed)
         ~finite_witness_issuances:
-          (Delator.Field.int (counters session).finite_witness_issuances)
+          (Delator.Field.int (counters _session).finite_witness_issuances)
         ~finite_parent_issuances:
-          (Delator.Field.int (counters session).finite_parent_issuances)
+          (Delator.Field.int (counters _session).finite_parent_issuances)
         ~finite_child_derivations:
-          (Delator.Field.int (counters session).finite_child_derivations)
+          (Delator.Field.int (counters _session).finite_child_derivations)
         ~finite_result_promotions:
-          (Delator.Field.int (counters session).finite_result_promotions)
+          (Delator.Field.int (counters _session).finite_result_promotions)
         ~finite_result_witness_records:
-          (Delator.Field.int (counters session).finite_result_witness_records)
+          (Delator.Field.int (counters _session).finite_result_witness_records)
         ~finite_result_path_records:
-          (Delator.Field.int (counters session).finite_result_path_records)
+          (Delator.Field.int (counters _session).finite_result_path_records)
         ~finite_result_manifests:
-          (Delator.Field.int (counters session).finite_result_manifests)
+          (Delator.Field.int (counters _session).finite_result_manifests)
         ~finite_result_completions:
-          (Delator.Field.int (counters session).finite_result_completions)
+          (Delator.Field.int (counters _session).finite_result_completions)
         ~finite_result_finalizations:
-          (Delator.Field.int (counters session).finite_result_finalizations)
+          (Delator.Field.int (counters _session).finite_result_finalizations)
         ~finite_result_consumption_attempts:
-          (Delator.Field.int (counters session).finite_result_consumption_attempts)
+          (Delator.Field.int (counters _session).finite_result_consumption_attempts)
         ~finite_result_consumptions:
-          (Delator.Field.int (counters session).finite_result_consumptions)
-        ~finite_consumptions:(Delator.Field.int (counters session).finite_consumptions)
+          (Delator.Field.int (counters _session).finite_result_consumptions)
+        ~finite_consumptions:(Delator.Field.int (counters _session).finite_consumptions)
         ~finite_formal_assumption_issuances:
-          (Delator.Field.int (counters session).finite_formal_assumption_issuances)
+          (Delator.Field.int (counters _session).finite_formal_assumption_issuances)
         ~finite_formal_transfer_batches:
-          (Delator.Field.int (counters session).finite_formal_transfer_batches)
+          (Delator.Field.int (counters _session).finite_formal_transfer_batches)
         ~finite_formal_transfers:
-          (Delator.Field.int (counters session).finite_formal_transfers)
+          (Delator.Field.int (counters _session).finite_formal_transfers)
         ~finite_formal_transfer_consumptions:
-          (Delator.Field.int (counters session).finite_formal_transfer_consumptions)
-        ~proof_call_visits:(Delator.Field.int (counters session).proof_call_visits)
-        ~proof_call_summaries:(Delator.Field.int (counters session).proof_call_summaries)
+          (Delator.Field.int (counters _session).finite_formal_transfer_consumptions)
+        ~proof_call_visits:(Delator.Field.int (counters _session).proof_call_visits)
+        ~proof_call_summaries:(Delator.Field.int (counters _session).proof_call_summaries)
         ~recursive_spec_result_issuances:
-          (Delator.Field.int (counters session).recursive_spec_result_issuances)
+          (Delator.Field.int (counters _session).recursive_spec_result_issuances)
         ~recursive_spec_result_consumptions:
-          (Delator.Field.int (counters session).recursive_spec_result_consumptions)
+          (Delator.Field.int (counters _session).recursive_spec_result_consumptions)
         ~local_assertion_instances_issued:
-          (Delator.Field.int (counters session).local_assertion_instances_issued)
+          (Delator.Field.int (counters _session).local_assertion_instances_issued)
         ~local_assertion_instances_consumed:
-          (Delator.Field.int (counters session).local_assertion_instances_consumed)
+          (Delator.Field.int (counters _session).local_assertion_instances_consumed)
         ~owned_root_scalar_plans_issued:
-          (Delator.Field.int (counters session).owned_root_scalar_plans_issued)
+          (Delator.Field.int (counters _session).owned_root_scalar_plans_issued)
         ~owned_root_scalar_plans_consumed:
-          (Delator.Field.int (counters session).owned_root_scalar_plans_consumed)
+          (Delator.Field.int (counters _session).owned_root_scalar_plans_consumed)
         ~owned_root_scalar_plans_rejected:
-          (Delator.Field.int (counters session).owned_root_scalar_plans_rejected)
+          (Delator.Field.int (counters _session).owned_root_scalar_plans_rejected)
         ~owned_root_scalar_observations:
-          (Delator.Field.int (counters session).owned_root_scalar_observations)
+          (Delator.Field.int (counters _session).owned_root_scalar_observations)
         ~owned_root_scalar_equations:
-          (Delator.Field.int (counters session).owned_root_scalar_equations)
+          (Delator.Field.int (counters _session).owned_root_scalar_equations)
         ~owned_root_scalar_bridge_paths:
-          (Delator.Field.int (counters session).owned_root_scalar_bridge_paths)
+          (Delator.Field.int (counters _session).owned_root_scalar_bridge_paths)
         ~owned_root_scalar_bridge_equations:
-          (Delator.Field.int (counters session).owned_root_scalar_bridge_equations)
+          (Delator.Field.int (counters _session).owned_root_scalar_bridge_equations)
         ~owned_root_scalar_fresh_successors:
-          (Delator.Field.int (counters session).owned_root_scalar_fresh_successors)
+          (Delator.Field.int (counters _session).owned_root_scalar_fresh_successors)
         ~owned_root_scalar_reconstructions:
-          (Delator.Field.int (counters session).owned_root_scalar_reconstructions)
+          (Delator.Field.int (counters _session).owned_root_scalar_reconstructions)
         ~transition_predecessor_transfers:
-          (Delator.Field.int (counters session).transition_predecessor_transfers)
+          (Delator.Field.int (counters _session).transition_predecessor_transfers)
         ~transition_predecessor_consumptions:
-          (Delator.Field.int (counters session).transition_predecessor_consumptions)
+          (Delator.Field.int (counters _session).transition_predecessor_consumptions)
         ~transition_result_receipts:
-          (Delator.Field.int (counters session).transition_result_receipts)
+          (Delator.Field.int (counters _session).transition_result_receipts)
         ~transition_teardown_removals:
-          (Delator.Field.int (counters session).transition_teardown_removals)
+          (Delator.Field.int (counters _session).transition_teardown_removals)
         ~transition_preservation_obligations:
-          (Delator.Field.int (counters session).transition_preservation_obligations)
+          (Delator.Field.int (counters _session).transition_preservation_obligations)
         ~transition_nested_reconstructions:
-          (Delator.Field.int (counters session).transition_nested_reconstructions)
+          (Delator.Field.int (counters _session).transition_nested_reconstructions)
         ~transition_root_reconstructions:
-          (Delator.Field.int (counters session).transition_root_reconstructions)
+          (Delator.Field.int (counters _session).transition_root_reconstructions)
         ~shared_heap_issuances:
-          (Delator.Field.int (counters session).shared_heap_issuances)
-        ~shared_heap_writes:(Delator.Field.int (counters session).shared_heap_writes)
+          (Delator.Field.int (counters _session).shared_heap_issuances)
+        ~shared_heap_writes:(Delator.Field.int (counters _session).shared_heap_writes)
         ~shared_heap_read_logs:
-          (Delator.Field.int (counters session).shared_heap_read_logs)
+          (Delator.Field.int (counters _session).shared_heap_read_logs)
         ~shared_heap_epoch_advances:
-          (Delator.Field.int (counters session).shared_heap_epoch_advances)
+          (Delator.Field.int (counters _session).shared_heap_epoch_advances)
         ~shared_heap_teardowns:
-          (Delator.Field.int (counters session).shared_heap_teardowns)
+          (Delator.Field.int (counters _session).shared_heap_teardowns)
         ~invariant_cell_entry_eligibilities:
-          (Delator.Field.int (counters session).invariant_cell_entry_eligibilities)
+          (Delator.Field.int (counters _session).invariant_cell_entry_eligibilities)
         ~invariant_cell_constructor_eligibilities:
-          (Delator.Field.int (counters session).invariant_cell_constructor_eligibilities)
+          (Delator.Field.int (counters _session).invariant_cell_constructor_eligibilities)
         ~invariant_cell_closed_initializations:
-          (Delator.Field.int (counters session).invariant_cell_closed_initializations)
+          (Delator.Field.int (counters _session).invariant_cell_closed_initializations)
         ~invariant_cell_opens:
-          (Delator.Field.int (counters session).invariant_cell_opens)
+          (Delator.Field.int (counters _session).invariant_cell_opens)
         ~invariant_cell_updates:
-          (Delator.Field.int (counters session).invariant_cell_updates)
+          (Delator.Field.int (counters _session).invariant_cell_updates)
         ~invariant_cell_closes:
-          (Delator.Field.int (counters session).invariant_cell_closes)
+          (Delator.Field.int (counters _session).invariant_cell_closes)
         ~invariant_cell_effect_instantiations:
-          (Delator.Field.int (counters session).invariant_cell_effect_instantiations)
+          (Delator.Field.int (counters _session).invariant_cell_effect_instantiations)
         ~invariant_cell_terminal_reads:
-          (Delator.Field.int (counters session).invariant_cell_terminal_reads)
+          (Delator.Field.int (counters _session).invariant_cell_terminal_reads)
         ~invariant_cell_teardowns:
-          (Delator.Field.int (counters session).invariant_cell_teardowns)
+          (Delator.Field.int (counters _session).invariant_cell_teardowns)
         ~frozen_constructor_template_issuances:
-          (Delator.Field.int (counters session).frozen_constructor_template_issuances)
+          (Delator.Field.int (counters _session).frozen_constructor_template_issuances)
         ~frozen_constructor_template_teardowns:
-          (Delator.Field.int (counters session).frozen_constructor_template_teardowns)
+          (Delator.Field.int (counters _session).frozen_constructor_template_teardowns)
         ~frozen_conditional_scope_issuances:
-          (Delator.Field.int (counters session).frozen_conditional_scope_issuances)
+          (Delator.Field.int (counters _session).frozen_conditional_scope_issuances)
         ~frozen_conditional_scope_teardowns:
-          (Delator.Field.int (counters session).frozen_conditional_scope_teardowns)
+          (Delator.Field.int (counters _session).frozen_conditional_scope_teardowns)
         ~frozen_result_instance_issuances:
-          (Delator.Field.int (counters session).frozen_result_instance_issuances)
+          (Delator.Field.int (counters _session).frozen_result_instance_issuances)
         ~frozen_result_instance_teardowns:
-          (Delator.Field.int (counters session).frozen_result_instance_teardowns)
+          (Delator.Field.int (counters _session).frozen_result_instance_teardowns)
         ~frozen_call_discharge_issuances:
-          (Delator.Field.int (counters session).frozen_call_discharge_issuances)
+          (Delator.Field.int (counters _session).frozen_call_discharge_issuances)
         ~frozen_call_discharge_consumptions:
-          (Delator.Field.int (counters session).frozen_call_discharge_consumptions)
+          (Delator.Field.int (counters _session).frozen_call_discharge_consumptions)
         ~frozen_call_discharge_teardowns:
-          (Delator.Field.int (counters session).frozen_call_discharge_teardowns)
+          (Delator.Field.int (counters _session).frozen_call_discharge_teardowns)
         ~frozen_descent_witness_issuances:
-          (Delator.Field.int (counters session).frozen_descent_witness_issuances)
+          (Delator.Field.int (counters _session).frozen_descent_witness_issuances)
         ~frozen_descent_witness_consumptions:
-          (Delator.Field.int (counters session).frozen_descent_witness_consumptions)
+          (Delator.Field.int (counters _session).frozen_descent_witness_consumptions)
         ~frozen_descent_witness_teardowns:
-          (Delator.Field.int (counters session).frozen_descent_witness_teardowns)
+          (Delator.Field.int (counters _session).frozen_descent_witness_teardowns)
         ~frozen_observation_consumptions:
-          (Delator.Field.int (counters session).frozen_observation_consumptions)
+          (Delator.Field.int (counters _session).frozen_observation_consumptions)
         ~frozen_observation_teardowns:
-          (Delator.Field.int (counters session).frozen_observation_teardowns)]
+          (Delator.Field.int (counters _session).frozen_observation_teardowns)]
   with Private_receipt_trace_disabled -> ()
 
 type owned_contents_seed_control_capture = {

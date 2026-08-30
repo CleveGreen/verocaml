@@ -302,13 +302,26 @@ let verification_stdout_lines ~display_file result =
             |> trusted_external_line)
           observations
       in
+      let external_spec_uses =
+        List.fold_left
+          (fun count observation ->
+            match Verifier_service.trusted_external_view observation with
+            | Trusted_external_specification_use _
+            | Trusted_external_target_specification_use _ ->
+                count + 1
+            | Trusted_external_body_use _
+            | Trusted_external_body_declaration _ ->
+                count)
+          0 uses
+      in
+      let external_body_uses = List.length uses - external_spec_uses in
       let summary =
         if uses = [] && declarations = [] then
           Printf.sprintf "verocaml: %s file=%s functions=%d obligations=%d"
             (styled "1;32" "verified") display_file
             (Verifier_service.functions result)
             (Verifier_service.obligations result)
-        else if declarations = [] then
+        else if declarations = [] && external_body_uses = 0 then
           Printf.sprintf
             "verocaml: %s file=%s functions=%d obligations=%d \
              trusted-external-spec-uses=%d"
@@ -316,20 +329,8 @@ let verification_stdout_lines ~display_file result =
             display_file
             (Verifier_service.functions result)
             (Verifier_service.obligations result)
-            (List.length uses)
+            external_spec_uses
         else
-          let external_spec_uses =
-            List.fold_left
-              (fun count observation ->
-                match Verifier_service.trusted_external_view observation with
-                | Trusted_external_specification_use _
-                | Trusted_external_target_specification_use _ ->
-                    count + 1
-                | Trusted_external_body_use _
-                | Trusted_external_body_declaration _ ->
-                    count)
-              0 uses
-          in
           Printf.sprintf
             "verocaml: %s file=%s functions=%d obligations=%d \
              trusted-external-bodies=%d trusted-external-body-uses=%d \
@@ -339,7 +340,7 @@ let verification_stdout_lines ~display_file result =
             (Verifier_service.functions result)
             (Verifier_service.obligations result)
             (List.length declarations)
-            (List.length uses - external_spec_uses)
+            external_body_uses
             external_spec_uses
       in
       dependencies @ details @ [ summary ]

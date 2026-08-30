@@ -120,7 +120,7 @@ before a production session, dump, or solver.
   generic_labelled source+cmt functions=1 obligations=1
   $ reject_generic () { n=$1; code=0; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$n.cmt" --timeout-ms 5000 --dump-sst "artifacts/$n.sst" --dump-vir "artifacts/$n.vir" >"artifacts/$n.out" 2>&1 || code=$?; test "$code" = 2; printf '%s: ' "$n"; grep -o 'VERO_[A-Z_]*' "artifacts/$n.out"; test "$(grep -c 'Verification_session: private receipt ' "artifacts/$n.out")" = 0; test ! -e "artifacts/$n.sst"; test ! -e "artifacts/$n.vir"; }
   $ for n in generic_type_changing generic_higher_order generic_foreign_actual; do reject_generic "$n" || exit 1; done
-  generic_type_changing: VERO_UNSUPPORTED_POLYMORPHISM
+  generic_type_changing: VERO_UNSUPPORTED_GENERIC_USE
   generic_higher_order: VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION
   generic_foreign_actual: VERO_UNSUPPORTED_TYPE
   $ separate () { name=$1; variant=$2; directory="artifacts/$name-$variant"; mkdir -p "$directory"; flag=; if test "$variant" = cmti; then flag=-bin-annot; fi; ocamlc -w -A -alert -all $flag -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "$directory/$name.cmi" "fixtures/$name.mli"; test -e "$directory/$name.cmi"; if test "$variant" = cmti; then test -e "$directory/$name.cmti"; else test ! -e "$directory/$name.cmti"; fi; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -I "$directory" -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "$directory/$name.cmo" "fixtures/$name.ml"; }
@@ -141,7 +141,7 @@ cannot hide an exported generic binding from the exact public-path match.
   $ reject_public_generic public-alias artifacts/generic_explicit_alias-cmi-only generic_explicit_alias
   public-alias: VERO_UNSUPPORTED_AGGREGATE
   $ reject_public_generic nested-value artifacts/generic_explicit_nested-cmi-only generic_explicit_nested
-  nested-value: VERO_UNSUPPORTED_POLYMORPHISM
+  nested-value: VERO_UNSUPPORTED_GENERIC_USE
 
 A substituted same-unit CMI fails the CMT/CMI digest binding before lowering.
 

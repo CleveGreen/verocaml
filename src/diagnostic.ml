@@ -30,7 +30,7 @@ type unsupported_construct =
   | Partial_match
   | Partial_function_parameter
   | Mutual_recursion
-  | Polymorphic_function
+  | Unsupported_generic_use
   | Higher_order_function
   | Higher_order_call
   | Unknown_or_external_call
@@ -217,8 +217,9 @@ let code_and_message = function
             "partial function parameters are not supported" )
       | Mutual_recursion ->
           ("VERO_UNSUPPORTED_MUTUAL_RECURSION", "mutual recursion is not supported")
-      | Polymorphic_function ->
-          ("VERO_UNSUPPORTED_POLYMORPHISM", "polymorphic functions are not supported")
+      | Unsupported_generic_use ->
+          ( "VERO_UNSUPPORTED_GENERIC_USE",
+            "this generic use is not supported in verified code" )
       | Higher_order_function ->
           ( "VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION",
             "nested and higher-order functions are not supported" )

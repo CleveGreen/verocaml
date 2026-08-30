@@ -580,6 +580,7 @@ type trusted_summary_use =
       function_ref : function_ref;
       mode : Sst.verification_mode;
       call_form : Sst.call_form;
+      broadcast_use : bool;
       declaration_span : span;
       witness_span : span;
       call_span : span;
@@ -1985,10 +1986,11 @@ let to_string program =
                 use.summary_digest use.requires_count use.ensures_count
           | Trusted_external_body_use use ->
               let mode, call_form =
-                match (use.mode, use.call_form) with
-                | Sst.Proof, Sst.Proof_call ->
+                match (use.broadcast_use, use.mode, use.call_form) with
+                | true, _, _ -> (" mode=proof", " call-form=broadcast")
+                | false, Sst.Proof, Sst.Proof_call ->
                     (" mode=proof", " call-form=proof")
-                | _ -> ("", "")
+                | false, _, _ -> ("", "")
               in
               line buffer 2
                 "trusted-external-body trust=axiomatic%s%s function=%s#%d \

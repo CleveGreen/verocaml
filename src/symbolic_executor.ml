@@ -3153,9 +3153,10 @@ let rec evaluate context expression state =
                                   function_ref =
                                     vir_function_ref
                                       summary.definition.function_id;
-                                  mode = summary.definition.mode;
-                                  call_form;
-                                  declaration_span;
+                                    mode = summary.definition.mode;
+                                    call_form;
+                                    broadcast_use = false;
+                                    declaration_span;
                                   witness_span;
                                   call_span = expression.span;
                                   requires_count =

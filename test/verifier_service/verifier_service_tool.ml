@@ -220,6 +220,7 @@ let trusted_matrix consumer =
           ignore use.ensures_count
       | Trusted_external_body_use use ->
           ignore use.proof_call;
+          ignore use.broadcast_use;
           inspect_function use.function_;
           ignore use.declaration_span;
           ignore use.witness_span;

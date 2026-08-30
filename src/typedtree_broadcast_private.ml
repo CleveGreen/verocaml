@@ -249,11 +249,21 @@ let trigger_locations ~artifact ~source_file ~resolves_to_marker binding =
 
 let path_ident = function Path.Pident ident -> Some ident | _ -> None
 
-let target_for_path declarations groups location path =
+let target_for_path declarations groups resolve_imported_target location path =
+  let imported () =
+    match resolve_imported_target path with
+    | Some target ->
+        [%log.trace "resolved imported broadcast target"
+          ~path:(Delator.Field.string (Path.name path))
+          ~target_id:(Delator.Field.string target.target_id)
+          ~group:(Delator.Field.bool target.target_group)];
+        Ok target
+    | None ->
+        fail location
+          "broadcast target is not an authenticated local or imported declaration or group"
+  in
   match path_ident path with
-  | None ->
-      fail location
-        "broadcast targets must resolve to same-structure identities"
+  | None -> imported ()
   | Some ident -> (
       match
         List.find_opt
@@ -273,20 +283,18 @@ let target_for_path declarations groups location path =
               groups
           with
           | Some (_, _, id, _) -> Ok { target_id = id; target_group = true }
-          | None ->
-              fail location
-                "broadcast target is not an authenticated same-unit \
-                 declaration or group"))
+          | None -> imported ()))
 
-let targets_for_carrier declarations groups resolves_to_marker metadata binding
-    =
+let targets_for_carrier declarations groups resolve_imported_target
+    resolves_to_marker metadata binding =
   let* body = carrier_body resolves_to_marker metadata binding in
   collect_target_paths resolves_to_marker body
   |> List.fold_left
        (fun result path ->
          let* targets = result in
          let* target =
-           target_for_path declarations groups binding.vb_loc path
+           target_for_path declarations groups resolve_imported_target
+             binding.vb_loc path
          in
          Ok (target :: targets))
        (Ok [])
@@ -398,8 +406,9 @@ let expression_wrappers ~source_file carriers binding =
   iterator.expr iterator binding.vb_expr;
   List.rev !wrappers
 
-let authenticate_carriers ~source_file ~resolves_to_marker ~top_level ~bindings
-    declarations =
+let authenticate_carriers ~source_file ~resolves_to_marker
+    ~resolve_imported_target ~imported_declaration_ids ~imported_group_ids
+    ~top_level ~bindings declarations =
   let* group_seeds =
     List.fold_left
       (fun result binding ->
@@ -446,8 +455,8 @@ let authenticate_carriers ~source_file ~resolves_to_marker ~top_level ~bindings
               else Ok ()
             in
             let* targets =
-              targets_for_carrier declarations group_seeds resolves_to_marker
-                metadata binding
+              targets_for_carrier declarations group_seeds
+                resolve_imported_target resolves_to_marker metadata binding
             in
             Ok
               ({
@@ -482,18 +491,21 @@ let authenticate_carriers ~source_file ~resolves_to_marker ~top_level ~bindings
   let* () =
     Broadcast_scope_private.validate_target_graph
       ~declaration_ids:
-        (List.map (fun declaration -> declaration.declaration_id) declarations)
+        (List.map (fun declaration -> declaration.declaration_id) declarations
+        @ imported_declaration_ids)
       ~groups:
         (List.map
            (fun group ->
              (group.group_id, group.group_name, group.group_targets))
-           groups)
+           groups
+        @ List.map (fun id -> (id, id, [])) imported_group_ids)
     |> Result.map_error (fun message ->
            { location = Location.none; message })
   in
   Ok (carriers, groups)
 
 let authenticate_structure ~source_file ~artifact ~resolves_to_marker
+    ~resolve_imported_target ~imported_declaration_ids ~imported_group_ids
     (inventory : Broadcast_scope_private.typedtree_structure) =
   let bindings = inventory.bindings in
   let top_level binding =
@@ -527,8 +539,9 @@ let authenticate_structure ~source_file ~artifact ~resolves_to_marker
     |> Result.map List.rev
   in
   let* carriers, groups =
-    authenticate_carriers ~source_file ~resolves_to_marker ~top_level ~bindings
-      declarations
+    authenticate_carriers ~source_file ~resolves_to_marker
+      ~resolve_imported_target ~imported_declaration_ids ~imported_group_ids
+      ~top_level ~bindings declarations
   in
   let active = ref [] in
   let binding_scopes = ref [] in
@@ -587,7 +600,9 @@ let authenticate_structure ~source_file ~artifact ~resolves_to_marker
       wrappers = !wrappers;
     }
 
-let authenticate ~source_file ~artifact ~resolves_to_marker structure =
+let authenticate ~source_file ~artifact ~resolves_to_marker
+    ~resolve_imported_target ~imported_declaration_ids ~imported_group_ids
+    structure =
   let inventory = Broadcast_scope_private.typedtree_inventory structure in
   match Broadcast_scope_private.typedtree_syntax inventory with
   | Absent -> Ok empty
@@ -612,7 +627,8 @@ let authenticate ~source_file ~artifact ~resolves_to_marker structure =
           let* combined = result in
           let* local =
             authenticate_structure ~source_file ~artifact ~resolves_to_marker
-              structure_inventory
+              ~resolve_imported_target ~imported_declaration_ids
+              ~imported_group_ids structure_inventory
           in
           Ok (append combined local))
         (Ok empty)
@@ -648,3 +664,9 @@ let activation_body scan expression =
        scan.wrappers)
 
 let groups scan = scan.groups
+
+let declaration_triggers scan =
+  List.map
+    (fun declaration ->
+      (declaration.declaration_id, declaration.declaration_triggers))
+    scan.declarations

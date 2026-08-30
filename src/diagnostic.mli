@@ -24,7 +24,7 @@ type unsupported_construct =
   | Partial_match
   | Partial_function_parameter
   | Mutual_recursion
-  | Polymorphic_function
+  | Unsupported_generic_use
   | Higher_order_function
   | Higher_order_call
   | Unknown_or_external_call

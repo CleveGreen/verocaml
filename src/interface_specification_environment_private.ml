@@ -110,6 +110,9 @@ let process_issuer = ref ()
 let error_diagnostics = Error_diagnostics.create 8
 let error_diagnostics_lock = Mutex.create ()
 
+let ( let* ) result continuation =
+  match result with Ok value -> continuation value | Error _ as error -> error
+
 let with_error_diagnostics action =
   Mutex.lock error_diagnostics_lock;
   Fun.protect
@@ -482,9 +485,56 @@ let rec provider_of_root root =
     Verification_driver_private.provider_completion (root_completion root)
     |> Option.get
   in
+  let rec seal_dependencies sealed = function
+    | [] -> Ok (List.rev sealed)
+    | dependency :: rest -> (
+        match provider_of_root dependency with
+        | Error _ as error -> error
+        | Ok provider -> seal_dependencies (provider :: sealed) rest)
+  in
+  let* direct_dependencies =
+    seal_dependencies [] (root_dependencies root)
+  in
+  let* imported = Imported_callable.create direct_dependencies in
   let callable_descriptors =
     Sst_validation.callable_descriptors semantic_snapshot
   and public_models = root_models root in
+  let* broadcast_scan =
+    Typedtree_adapter_private.Public.Broadcast.authenticate_typedtree
+      ~imported_declaration_paths:
+        (Imported_callable.callables imported
+        |> List.filter_map
+             (fun (callable : Imported_callable.callable_snapshot) ->
+               Option.map (Fun.const callable.path)
+                 callable.broadcast_trigger_span))
+      ~imported_group_paths:
+        (Imported_callable.broadcast_groups imported
+        |> List.map
+             (fun (group : Imported_callable.broadcast_group_snapshot) ->
+               group.path))
+      ~source_file:implementation.source_file ~imports:implementation.imports
+      ~artifact:
+        (Some
+           (Typedtree_adapter_private.Public.proof_capture_artifact
+              implementation))
+      implementation.structure
+    |> Result.map_error (fun diagnostic ->
+           Printf.sprintf "[VERO_DEPENDENCY] provider broadcast metadata failed [%s]: %s"
+             diagnostic.Diagnostic.code diagnostic.message)
+  in
+  let broadcast_triggers =
+    Typedtree_broadcast_private.declaration_triggers broadcast_scan
+  in
+  [%log.debug "authenticated provider broadcast interface"
+    ~unit_name:(Delator.Field.string unit_name)
+    ~interface_declarations:
+      (Delator.Field.int
+         (List.length implementation.interface_broadcast_declarations))
+    ~interface_groups:
+      (Delator.Field.int
+         (List.length implementation.interface_broadcast_groups))
+    ~implementation_declarations:
+      (Delator.Field.int (List.length broadcast_triggers))];
   let callables =
     root_callables root
     |> List.filter_map (fun (callable : public_callable) ->
@@ -575,6 +625,34 @@ let rec provider_of_root root =
                    with
                    | Error _ -> None
                    | Ok signature ->
+                   let broadcast_trigger_span =
+                     if
+                       List.mem definition.function_id.function_name
+                         implementation.interface_broadcast_declarations
+                     then
+                       match
+                         List.assoc_opt
+                           ("broadcast:" ^ definition.function_id.function_name)
+                           broadcast_triggers
+                       with
+                       | Some [ location ] ->
+                           Some
+                             (Diagnostic.span_of_location
+                                ~fallback_file:implementation.source_file
+                                location)
+                       | Some ([] | _ :: _ :: _) | None -> None
+                     else None
+                   in
+                   [%log.trace "classified provider broadcast callable"
+                     ~unit_name:(Delator.Field.string unit_name)
+                     ~path:(Delator.Field.string resolved_path)
+                     ~declared:
+                       (Delator.Field.bool
+                          (List.mem definition.function_id.function_name
+                             implementation.interface_broadcast_declarations))
+                     ~authenticated:
+                       (Delator.Field.bool
+                          (Option.is_some broadcast_trigger_span))];
                    Some {
                      Imported_callable.resolved_path;
                      binding_uid = callable_binding_uid;
@@ -587,6 +665,7 @@ let rec provider_of_root root =
                               ordinal)
                           definition.parameters
                        |> List.filter_map Fun.id);
+                     broadcast_trigger_span;
                      model =
                        public_models
                        |> List.find_opt (fun (model : public_model) ->
@@ -601,6 +680,21 @@ let rec provider_of_root root =
                               });
                    })
            | true, _, _, _ -> None)
+  in
+  let exported_broadcasts =
+    callables
+    |> List.filter_map (fun (callable : Imported_callable.provider_callable) ->
+           Option.map (Fun.const callable.resolved_path)
+             callable.broadcast_trigger_span)
+    |> List.map (fun path ->
+           let prefix = unit_name ^ "." in
+           String.sub path (String.length prefix)
+             (String.length path - String.length prefix))
+    |> List.sort_uniq String.compare
+  in
+  let declared_broadcasts =
+    List.sort_uniq String.compare
+      implementation.interface_broadcast_declarations
   in
   let external_specifications =
     root_external_specifications root
@@ -684,6 +778,24 @@ let rec provider_of_root root =
              rank_profile_digest;
            })
   in
+  if exported_broadcasts <> declared_broadcasts then
+    ([%log.warn "provider broadcast interface mismatch"
+       ~unit_name:(Delator.Field.string unit_name)
+       ~declared:(Delator.Field.int (List.length declared_broadcasts))
+       ~authenticated:(Delator.Field.int (List.length exported_broadcasts))];
+    Error
+      "[VERO_DEPENDENCY] public broadcast declaration does not match one authenticated implementation proof"
+    )
+  else
+  let broadcast_groups =
+    List.map
+      (fun (group : Cmt_input.interface_broadcast_group) ->
+        {
+          Imported_callable.resolved_path = unit_name ^ "." ^ group.group_path;
+          target_paths = group.group_targets;
+        })
+      implementation.interface_broadcast_groups
+  in
   let description =
   {
     Imported_callable.unit_name = unit_name;
@@ -692,24 +804,19 @@ let rec provider_of_root root =
     family_digest = root_family_digest root;
     import_digest = root_import_digest root;
     callables;
+    broadcast_groups;
     types;
     external_specifications;
   }
   in
-  let rec seal_dependencies sealed = function
-    | [] -> Ok (List.rev sealed)
-    | dependency :: rest -> (
-        match provider_of_root dependency with
-        | Error _ as error -> error
-        | Ok provider -> seal_dependencies (provider :: sealed) rest)
-  in
-  match seal_dependencies [] (root_dependencies root) with
-  | Error _ as error -> error
-  | Ok direct_dependencies ->
-      Imported_callable.seal_provider
-        ~provider_completion ~implementation
-        ~program:(Sst_validation.program semantic_snapshot)
-        ~direct_dependencies description
+  [%log.debug "prepared provider broadcast exports"
+    ~unit_name:(Delator.Field.string unit_name)
+    ~declarations:(Delator.Field.int (List.length exported_broadcasts))
+    ~groups:(Delator.Field.int (List.length broadcast_groups))];
+  Imported_callable.seal_provider
+    ~provider_completion ~implementation
+    ~program:(Sst_validation.program semantic_snapshot)
+    ~direct_dependencies description
 
 let rec seal_roots sealed = function
   | [] -> Imported_callable.create (List.rev sealed)

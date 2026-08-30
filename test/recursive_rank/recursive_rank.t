@@ -107,7 +107,7 @@ behavior but receive zero rank domains.
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
   accepted rank-domains=0
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
-  VERO_UNSUPPORTED_POLYMORPHISM: polymorphic functions are not supported @ gadt.ml:2:2-2:14
+  VERO_UNSUPPORTED_GENERIC_USE: this generic use is not supported in verified code @ gadt.ml:2:2-2:14
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
   VERO_UNSUPPORTED_TYPE: This type is not supported in verified code. @ object_proxy.ml:3:13-3:26
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0

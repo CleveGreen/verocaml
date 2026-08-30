@@ -46,6 +46,10 @@ val fold_equal :
   symbol:(Parametric_type.binder -> Vir.symbol -> 'a) ->
   selector:(Parametric_type.binder -> Vir.selector -> Vir.aggregate_term -> 'a) ->
   conditional:(Vir.boolean_term -> 'a -> 'a -> 'a) ->
+  application:
+    (Parametric_type.binder ->
+    Vir.recursive_spec_argument Symbolic_application_private.t ->
+    'a) ->
   Vir.parametric_term ->
   Vir.parametric_term ->
   ('a * 'a, string) result
@@ -54,6 +58,10 @@ val fold :
   symbol:(Vir.symbol -> 'a) ->
   selector:(Vir.selector -> Vir.aggregate_term -> 'a) ->
   conditional:(Vir.boolean_term -> 'a -> 'a -> 'a) ->
+  application:
+    (Parametric_type.binder ->
+    Vir.recursive_spec_argument Symbolic_application_private.t ->
+    'a) ->
   Vir.parametric_term ->
   'a
 

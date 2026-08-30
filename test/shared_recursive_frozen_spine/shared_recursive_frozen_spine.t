@@ -52,8 +52,8 @@ prevents tail preservation.
   status=counterexample functions=3 obligations=20 shared=1/1/1/1 invariant=1/1/0/0/0 recursive-results=9/0 generic-finite=0/0/0 frozen-template=1/1 frozen-conditional=2/2 frozen-instance=0/0 frozen-discharge=0/0/0 frozen-witness=0/0/0 frozen-observation=0/0
   $ sed 's/node.value <- value$/let _ = value in ()/' fixtures/exact_pfc.ml > artifacts/delete_write.ml
   $ ../../src/verocaml.exe verify artifacts/delete_write.ml > artifacts/delete_write.out 2>&1; test $? -eq 2
-  $ grep -o 'polymorphic functions are not supported' artifacts/delete_write.out
-  polymorphic functions are not supported
+  $ grep -o 'this generic use is not supported in verified code' artifacts/delete_write.out
+  this generic use is not supported in verified code
   $ cp fixtures/exact_pfc.ml artifacts/wrong_tail.ml
   $ sed -i '47c\\      contents node = More (value, End)];' artifacts/wrong_tail.ml
   $ ../../src/verocaml.exe verify artifacts/wrong_tail.ml > artifacts/wrong_tail.out 2>&1; test $? -eq 1

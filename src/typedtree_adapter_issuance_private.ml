@@ -54,14 +54,28 @@ let authenticate_shared_scalar_function ~program ~definition =
 
 let authenticate_logical_builtin_artifact artifact ~source_file =
   let implementation = artifact.proof_capture_implementation in
-  artifact.proof_capture_artifact_issuer == proof_capture_artifact_issuer
-  && String.equal implementation.Cmt_input.source_file source_file
-  && implementation.implementation_metadata_valid
-  && implementation.has_implementation_shape
-  && Cmt_input.retained_preprocessing implementation
-  && List.exists
-       (String.equal "retained-v1")
-       implementation.implementation_family_markers
+  let issuer =
+    artifact.proof_capture_artifact_issuer == proof_capture_artifact_issuer
+  and source = String.equal implementation.Cmt_input.source_file source_file
+  and metadata = implementation.implementation_metadata_valid
+  and shape = implementation.has_implementation_shape
+  and retained = Cmt_input.retained_preprocessing implementation
+  and family =
+    List.exists
+      (String.equal "retained-v1")
+      implementation.implementation_family_markers
+  in
+  let authenticated = issuer && source && metadata && shape && retained && family in
+  [%log.trace "authenticate retained logical artifact"
+    ~unit_name:(Delator.Field.string implementation.unit_name)
+    ~issuer:(Delator.Field.bool issuer)
+    ~source:(Delator.Field.bool source)
+    ~metadata:(Delator.Field.bool metadata)
+    ~implementation_shape:(Delator.Field.bool shape)
+    ~retained:(Delator.Field.bool retained)
+    ~family:(Delator.Field.bool family)
+    ~authenticated:(Delator.Field.bool authenticated)];
+  authenticated
 
 type rank_type_identity = {
   rank_type_id : Sst.type_id;

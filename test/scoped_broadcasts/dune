@@ -24,6 +24,7 @@
  (deps
   mutate_broadcast_carrier.py
   (glob_files fixtures/*.ml)
+  (glob_files fixtures/*.mli)
   scoped_broadcasts_tool.exe
   ../../verocaml.install
   ../../src/verocaml.exe

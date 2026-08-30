@@ -10,6 +10,12 @@ let legacy_axiom_name = "verocaml.broadcast_axiom"
 let carrier_attribute_name = "verocaml.internal.broadcast.carrier.v1"
 let declaration_attribute_name = "verocaml.internal.broadcast.declaration.v1"
 let scope_attribute_name = "verocaml.internal.broadcast.scope.v1"
+let interface_declaration_attribute_name =
+  "verocaml.internal.broadcast.interface_declaration.v1"
+let interface_group_attribute_name =
+  "verocaml.internal.broadcast.interface_group.v1"
+let retained_family_attribute_name =
+  "verocaml.internal.artifact_family.retained-v1"
 
 type target = { path : Longident.t Location.loc }
 
@@ -116,6 +122,14 @@ let internal_attribute ~name ~payload ~loc =
     attr_loc = loc;
   }
 
+let retained_family_attribute loc =
+  let loc = ghost loc in
+  {
+    attr_name = { txt = retained_family_attribute_name; loc };
+    attr_payload = PStr [];
+    attr_loc = loc;
+  }
+
 let carrier_attribute ~kind ~id ?(source_name = "") loc =
   let start_, stop = offsets loc in
   internal_attribute ~name:carrier_attribute_name ~loc
@@ -131,6 +145,17 @@ let scope_attribute ~id loc =
   let start_, stop = offsets loc in
   internal_attribute ~name:scope_attribute_name ~loc
     ~payload:(Printf.sprintf "%s|%d|%d" id start_ stop)
+
+let interface_declaration_attribute loc =
+  internal_attribute ~name:interface_declaration_attribute_name ~loc
+    ~payload:"v1"
+
+let target_name target =
+  String.concat "." (Longident.flatten target.path.txt)
+
+let interface_group_attribute group =
+  internal_attribute ~name:interface_group_attribute_name ~loc:group.loc
+    ~payload:("v1|" ^ String.concat ";" (List.map target_name group.targets))
 
 let marker ~loc text =
   let loc = ghost loc in
@@ -177,7 +202,8 @@ let carrier_expression ~kind ~id ~loc targets =
 let activation_binding ~kind ~id ~loc targets =
   let loc = ghost loc in
   Vb.mk ~loc
-    ~attrs:[ carrier_attribute ~kind ~id loc ]
+    ~attrs:
+      [ carrier_attribute ~kind ~id loc; retained_family_attribute loc ]
     (Pat.any ~loc ())
     (carrier_expression ~kind ~id ~loc targets)
 
@@ -188,6 +214,7 @@ let group_binding group =
       [
         carrier_attribute ~kind:"group" ~id:group.id ~source_name:group.name
           group.loc;
+        retained_family_attribute group.loc;
       ]
     (Pat.var ~loc { txt = group.name; loc })
     (carrier_expression ~kind:"group" ~id:group.id ~loc:group.loc group.targets)
@@ -305,6 +332,121 @@ let rewrite_structure ~keep_ghost structure =
           ]
       | _ -> [ item ])
     structure
+
+let rewrite_signature_declaration ~keep_ghost value =
+  match public_declaration_attributes value.pval_attributes with
+  | [] -> value
+  | attribute :: _ when legacy_declaration_attribute attribute ->
+      Location.raise_errorf ~loc:attribute.attr_loc
+        "legacy [@@%s] syntax is invalid; use [@@%s]"
+        attribute.attr_name.txt declaration_name
+  | [ attribute ] ->
+      validate_empty attribute;
+      [%log.trace "rewrite broadcast interface declaration"
+        ~name:(Delator.Field.string value.pval_name.txt)
+        ~keep_ghost:(Delator.Field.bool keep_ghost)];
+      let remaining =
+        List.filter
+          (fun candidate ->
+            not (String.equal candidate.attr_name.txt declaration_name))
+          value.pval_attributes
+      in
+      {
+        value with
+        pval_attributes =
+          (if keep_ghost then
+             interface_declaration_attribute attribute.attr_loc :: remaining
+           else remaining);
+      }
+  | first :: _ ->
+      Location.raise_errorf ~loc:first.attr_loc
+        "a declaration accepts exactly one [@@%s] marker" declaration_name
+
+let group_signature_item group =
+  let loc = ghost group.loc in
+  let unit_type = Typ.constr ~loc { txt = Longident.Lident "unit"; loc } [] in
+  Sig.value ~loc
+    (Val.mk ~loc ~attrs:[ interface_group_attribute group ]
+       { txt = group.name; loc }
+       (Typ.arrow ~loc Nolabel unit_type unit_type [] []))
+
+let rewrite_signature_level ~keep_ghost signature =
+  let groups =
+    List.filter_map
+      (fun item ->
+        match item.psig_desc with
+        | Psig_attribute attribute
+          when String.equal attribute.attr_name.txt group_name ->
+            Some (group_of_attribute item.psig_loc attribute)
+        | _ -> None)
+      signature.psg_items
+  in
+  let sorted =
+    List.sort (fun left right -> String.compare left.name right.name) groups
+  in
+  let rec reject_duplicate = function
+    | left :: (right :: _ as rest) ->
+        if String.equal left.name right.name then
+          Location.raise_errorf ~loc:left.loc
+            "duplicate broadcast group %S in one signature" left.name
+        else reject_duplicate rest
+    | [] | [ _ ] -> ()
+  in
+  reject_duplicate sorted;
+  List.iter
+    (fun _group ->
+      [%log.trace "rewrite broadcast interface group"
+        ~group:(Delator.Field.string _group.name)
+        ~targets:(Delator.Field.int (List.length _group.targets))
+        ~keep_ghost:(Delator.Field.bool keep_ghost)])
+    groups;
+  let emitted_groups = ref false in
+  let group_items () =
+    emitted_groups := true;
+    if keep_ghost then List.map group_signature_item groups else []
+  in
+  let rewritten =
+    {
+      signature with
+      psg_items =
+        List.concat_map
+          (fun item ->
+            match item.psig_desc with
+            | Psig_attribute attribute
+              when String.equal attribute.attr_name.txt group_name ->
+                if !emitted_groups then [] else group_items ()
+            | Psig_value value ->
+                [
+                  {
+                    item with
+                    psig_desc =
+                      Psig_value
+                        (rewrite_signature_declaration ~keep_ghost value);
+                  };
+                ]
+            | _ -> [ item ])
+          signature.psg_items;
+    }
+  in
+  [%log.debug "rewrote broadcast interface signature"
+    ~keep_ghost:(Delator.Field.bool keep_ghost)
+    ~input_items:(Delator.Field.int (List.length signature.psg_items))
+    ~output_items:(Delator.Field.int (List.length rewritten.psg_items))
+    ~groups:(Delator.Field.int (List.length groups))];
+  rewritten
+
+let rewrite_signature ~keep_ghost signature =
+  let default = Ast_mapper.default_mapper in
+  let mapper =
+    {
+      default with
+      signature =
+        (fun self signature ->
+          rewrite_signature_level ~keep_ghost signature
+          |> default.signature self);
+    }
+  in
+  mapper.signature mapper signature
 
 let activation_payload expression payload =
   let payload =

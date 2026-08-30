@@ -140,8 +140,20 @@ let symbol_string ~span_string (symbol : Vir.symbol) =
     | Result -> "result")
     (span_string symbol.span)
 
-let fold_equal ~symbol ~selector ~conditional (left : Vir.parametric_term)
-    (right : Vir.parametric_term) =
+let _parametric_desc_name = function
+  | Vir.Parametric_symbol _ -> "symbol"
+  | Vir.Parametric_selector _ -> "selector"
+  | Vir.Parametric_conditional _ -> "conditional"
+  | Vir.Parametric_symbolic_application _ -> "symbolic-application"
+
+let fold_equal ~symbol ~selector ~conditional ~application
+    (left : Vir.parametric_term) (right : Vir.parametric_term) =
+  [%log.debug "folding parametric equality"
+    ~left_sort:(Delator.Field.string (sort_name left.parametric_sort))
+    ~right_sort:(Delator.Field.string (sort_name right.parametric_sort))
+    ~left_kind:(Delator.Field.string (_parametric_desc_name left.parametric_desc))
+    ~right_kind:
+      (Delator.Field.string (_parametric_desc_name right.parametric_desc))];
   Result.bind (validate left) (fun () ->
       Result.bind (validate right) (fun () ->
           if
@@ -149,15 +161,14 @@ let fold_equal ~symbol ~selector ~conditional (left : Vir.parametric_term)
               right.parametric_sort
             <> 0
           then Error "parametric equality crosses named sorts"
-          else if
-            (match (left.parametric_desc, right.parametric_desc) with
-            | Vir.Parametric_symbolic_application _, _
-            | _, Vir.Parametric_symbolic_application _ ->
-                true
-            | _ -> false)
-          then Error "symbolic parametric application requires its identity owner"
           else
             let rec translate term =
+              [%log.trace "folding parametric equality operand"
+                ~sort:
+                  (Delator.Field.string (sort_name term.Vir.parametric_sort))
+                ~kind:
+                  (Delator.Field.string
+                     (_parametric_desc_name term.parametric_desc))];
               match term.Vir.parametric_desc with
               | Vir.Parametric_symbol value -> symbol term.parametric_sort value
               | Vir.Parametric_selector (field, source) ->
@@ -166,21 +177,24 @@ let fold_equal ~symbol ~selector ~conditional (left : Vir.parametric_term)
                 ->
                   conditional condition (translate consequent)
                     (translate alternative)
-              | Vir.Parametric_symbolic_application _ ->
-                  assert false
+              | Vir.Parametric_symbolic_application value ->
+                  application term.parametric_sort value
             in
             Ok (translate left, translate right)))
 
-let rec fold ~symbol ~selector ~conditional term =
+let rec fold ~symbol ~selector ~conditional ~application term =
+  [%log.trace "folding parametric term"
+    ~sort:(Delator.Field.string (sort_name term.Vir.parametric_sort))
+    ~kind:(Delator.Field.string (_parametric_desc_name term.parametric_desc))];
   match term.Vir.parametric_desc with
   | Vir.Parametric_symbol value -> symbol value
   | Vir.Parametric_selector (field, source) -> selector field source
   | Vir.Parametric_conditional (condition, consequent, alternative) ->
       conditional condition
-        (fold ~symbol ~selector ~conditional consequent)
-        (fold ~symbol ~selector ~conditional alternative)
-  | Vir.Parametric_symbolic_application _ ->
-      invalid_arg "symbolic parametric application requires its identity owner"
+        (fold ~symbol ~selector ~conditional ~application consequent)
+        (fold ~symbol ~selector ~conditional ~application alternative)
+  | Vir.Parametric_symbolic_application value ->
+      application term.parametric_sort value
 
 let rec fold_function ~symbol ~conditional ~application term =
   if not (Spec_function_type_private.is_function_binder term.Vir.parametric_sort)

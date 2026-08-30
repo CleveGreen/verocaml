@@ -150,6 +150,10 @@ type 'error scalar_selector_services = {
   translate_integer : Vir.integer_term -> (Logic_ir.term, 'error) result;
   translate_aggregate : Vir.aggregate_term -> (Logic_ir.term, 'error) result;
   translate_symbol : Vir.symbol -> (Logic_ir.term, 'error) result;
+  translate_symbolic_application :
+    Parametric_type.binder ->
+    Vir.recursive_spec_argument Symbolic_application_private.t ->
+    (Logic_ir.term, 'error) result;
   term_result :
     (Logic_ir.term, Logic_ir.error) result -> (Logic_ir.term, 'error) result;
   malformed : string -> 'error;
@@ -202,13 +206,11 @@ let translate_parametric services (term : Vir.parametric_term) =
   let ( let* ) result continuation =
     match result with Ok value -> continuation value | Error _ as error -> error
   in
-  match term.parametric_desc with
-  | Vir.Parametric_symbolic_application _ ->
-      Error
-        (services.malformed
-           "symbolic parametric application requires its identity owner")
-  | Parametric_symbol _ | Parametric_selector _ | Parametric_conditional _ ->
-      Parametric_logic_private.fold term ~symbol:services.translate_symbol
+  [%log.debug "translating parametric VIR term"
+    ~sort:
+      (Delator.Field.string
+         (Parametric_logic_private.sort_name term.parametric_sort))];
+  Parametric_logic_private.fold term ~symbol:services.translate_symbol
     ~selector:(fun selector source ->
       let* function_ =
         services.selector_function selector
@@ -225,6 +227,7 @@ let translate_parametric services (term : Vir.parametric_term) =
       Logic_ir.ite ~span:services.span condition ~then_:consequent
         ~else_:alternative
       |> services.term_result)
+    ~application:services.translate_symbolic_application
 
 type 'error integer_core_services = {
   span : Diagnostic.span;
@@ -399,6 +402,10 @@ type 'error parametric_equality_services = {
     Vir.selector ->
     Vir.aggregate_term ->
     (Logic_ir.term, 'error) result;
+  application :
+    Parametric_type.binder ->
+    Vir.recursive_spec_argument Symbolic_application_private.t ->
+    (Logic_ir.term, 'error) result;
   translate_boolean : Vir.boolean_term -> (Logic_ir.term, 'error) result;
   term_result :
     (Logic_ir.term, Logic_ir.error) result -> (Logic_ir.term, 'error) result;
@@ -419,7 +426,8 @@ let translate_parametric_equality services left right =
   in
   let* left, right =
     Parametric_logic_private.fold_equal ~symbol:services.symbol
-      ~selector:services.selector ~conditional left right
+      ~selector:services.selector ~conditional ~application:services.application
+      left right
     |> Result.map_error services.malformed
   in
   let* left = left in
@@ -1254,6 +1262,8 @@ and parametric state term =
         ~conditional:(fun condition consequent alternative ->
           Logic_ir.ite ~span:state.span (boolean state condition)
             ~then_:consequent ~else_:alternative |> logic_or_fail)
+        ~application:(fun binder application ->
+          symbolic_application state (parametric_sort state binder) application)
 and application state = function
   | Vir.Integer_application term -> integer state term
   | Boolean_application term -> boolean state term

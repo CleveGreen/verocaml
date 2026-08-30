@@ -429,3 +429,69 @@ wrong-kind, wrong-type, and incomplete-trigger forms.
   result=engine:cap: malformed SST: broadcast instance cap exceeded: 17 > 16 solver=0 z3=0/0 live=0
   $ ./scoped_broadcasts_tool.exe vector-unit
   vector rejects=8 accepted=1 binders=2 trigger=1
+
+Retained interfaces export broadcast declarations and groups as ordinary
+library metadata.  Consumers can activate declarations directly, activate a
+provider group, activate a group from a second interface that names external
+declarations, or forward an imported group through another interface.  The
+same path supports polymorphic symbolic triggers at distinct concrete types.
+
+  $ cp fixtures/interface_*.ml fixtures/interface_*.mli artifacts/
+  $ interface_mli () { (cd artifacts && ocamlc -w -A -alert -all -bin-annot -I ../../../runtime/.vero_ghost.objs/byte -I . -ppx "../../../ppx/vero_ppx.exe --keep-ghost" -c "$1.mli"); }
+  $ interface_ml () { (cd artifacts && ocamlc -w -A -alert -all -bin-annot -I ../../../runtime/.vero_ghost.objs/byte -I . -ppx "../../../ppx/vero_ppx.exe --keep-ghost" -c "$1.ml"); }
+  $ interface_mli interface_provider
+  $ interface_ml interface_provider
+  $ interface_mli interface_groups
+  $ interface_ml interface_groups
+  $ for unit in interface_direct_consumer interface_provider_group_consumer interface_external_group_consumer interface_forwarded_group_consumer interface_polymorphic_consumer interface_nested_types_consumer interface_proved_consumer; do interface_ml "$unit"; done
+  $ for unit in interface_direct_consumer interface_provider_group_consumer; do for threads in 1 2; do (cd artifacts && OCAML_COLOR=never ../../../src/verocaml.exe verify "$unit.cmt" --dependency interface_provider.cmt --threads "$threads" --timeout-ms 10000 --dump-vir "$unit.$threads.vir" > "$unit.$threads.out" 2>&1); grep -q '^verocaml: verified-with-trusted-axioms .* functions=1 obligations=2 trusted-external-bodies=0 trusted-external-body-uses=2 trusted-external-spec-uses=0$' "artifacts/$unit.$threads.out" || exit 1; done; cmp "artifacts/$unit.1.vir" "artifacts/$unit.2.vir" || exit 1; echo "$unit interface-import threads=1/2 stable verified"; done
+  interface_direct_consumer interface-import threads=1/2 stable verified
+  interface_provider_group_consumer interface-import threads=1/2 stable verified
+  $ for unit in interface_external_group_consumer interface_forwarded_group_consumer; do for threads in 1 2; do (cd artifacts && OCAML_COLOR=never ../../../src/verocaml.exe verify "$unit.cmt" --dependency interface_provider.cmt --dependency interface_groups.cmt --threads "$threads" --timeout-ms 10000 --dump-vir "$unit.$threads.vir" > "$unit.$threads.out" 2>&1); grep -q '^verocaml: verified-with-trusted-axioms .* functions=1 obligations=2 trusted-external-bodies=0 trusted-external-body-uses=2 trusted-external-spec-uses=0$' "artifacts/$unit.$threads.out" || exit 1; done; cmp "artifacts/$unit.1.vir" "artifacts/$unit.2.vir" || exit 1; echo "$unit cross-interface threads=1/2 stable verified"; done
+  interface_external_group_consumer cross-interface threads=1/2 stable verified
+  interface_forwarded_group_consumer cross-interface threads=1/2 stable verified
+  $ for threads in 1 2; do (cd artifacts && OCAML_COLOR=never ../../../src/verocaml.exe verify interface_polymorphic_consumer.cmt --dependency interface_provider.cmt --dependency interface_groups.cmt --threads "$threads" --timeout-ms 10000 --dump-vir "interface_polymorphic_consumer.$threads.vir" > "interface_polymorphic_consumer.$threads.out" 2>&1); grep -q '^verocaml: verified-with-trusted-axioms .* functions=2 obligations=2 trusted-external-bodies=0 trusted-external-body-uses=1 trusted-external-spec-uses=0$' "artifacts/interface_polymorphic_consumer.$threads.out" || exit 1; done
+  $ cmp artifacts/interface_polymorphic_consumer.1.vir artifacts/interface_polymorphic_consumer.2.vir && echo "interface_polymorphic_consumer types=int/bool threads=1/2 stable verified"
+  interface_polymorphic_consumer types=int/bool threads=1/2 stable verified
+  $ for threads in 1 2; do (cd artifacts && OCAML_COLOR=never ../../../src/verocaml.exe verify interface_nested_types_consumer.cmt --dependency interface_provider.cmt --dependency interface_groups.cmt --threads "$threads" --timeout-ms 10000 --dump-vir "interface_nested_types_consumer.$threads.vir" > "interface_nested_types_consumer.$threads.out" 2>&1); grep -q '^verocaml: verified-with-trusted-axioms .* functions=2 obligations=2 trusted-external-bodies=0 trusted-external-body-uses=1 trusted-external-spec-uses=0$' "artifacts/interface_nested_types_consumer.$threads.out" || exit 1; done
+  $ cmp artifacts/interface_nested_types_consumer.1.vir artifacts/interface_nested_types_consumer.2.vir && echo "interface_nested_types_consumer option-option/result/user-type threads=1/2 stable verified"
+  interface_nested_types_consumer option-option/result/user-type threads=1/2 stable verified
+  $ for threads in 1 2; do (cd artifacts && OCAML_COLOR=never ../../../src/verocaml.exe verify interface_proved_consumer.cmt --dependency interface_provider.cmt --dependency interface_groups.cmt --threads "$threads" --timeout-ms 10000 --dump-vir "interface_proved_consumer.$threads.vir" > "interface_proved_consumer.$threads.out" 2>&1); grep -q '^verocaml: verified file=interface_proved_consumer.cmt functions=2 obligations=2$' "artifacts/interface_proved_consumer.$threads.out" || exit 1; done
+  $ cmp artifacts/interface_proved_consumer.1.vir artifacts/interface_proved_consumer.2.vir && echo "interface_proved_consumer imported-lemma threads=1/2 stable verified"
+  interface_proved_consumer imported-lemma threads=1/2 stable verified
+  $ grep -q 'call-form=broadcast function=Interface_provider.zero_axiom' artifacts/interface_direct_consumer.1.out
+  $ grep -q 'call-form=broadcast function=Interface_provider.option_unwrap_axiom' artifacts/interface_polymorphic_consumer.1.out
+  $ grep -q 'forall .*:pattern (Interface_provider.is_zero' artifacts/interface_forwarded_group_consumer.1.vir
+  $ grep -q 'forall .*:pattern (Interface_provider.option_present' artifacts/interface_polymorphic_consumer.1.vir
+  $ grep -q 'forall .*:pattern (Interface_provider.nested_present' artifacts/interface_nested_types_consumer.1.vir
+  $ grep -q 'Interface_provider.nested_fact' artifacts/interface_nested_types_consumer.1.vir
+  $ grep -q 'forall .*:pattern (Interface_provider.reflexive_probe' artifacts/interface_proved_consumer.1.vir
+  $ ! grep -q 'trusted-external-body.*reflexive_lemma' artifacts/interface_proved_consumer.1.vir
+
+Source and retained-CMT routes produce the same quantified program for both a
+forwarded interface group and its polymorphic counterpart.
+
+  $ for unit in interface_forwarded_group_consumer interface_polymorphic_consumer interface_nested_types_consumer; do (cd artifacts && OCAML_COLOR=never ../../../src/verocaml.exe verify "$unit.ml" --dependency interface_provider.cmt --dependency interface_groups.cmt --threads 2 --timeout-ms 10000 --dump-vir "$unit.source.vir" > "$unit.source.out" 2>&1); cmp "artifacts/$unit.2.vir" "artifacts/$unit.source.vir" || exit 1; grep -q '^verocaml: verified-with-trusted-axioms ' "artifacts/$unit.source.out" || exit 1; echo "$unit source+cmt parity verified"; done
+  interface_forwarded_group_consumer source+cmt parity verified
+  interface_polymorphic_consumer source+cmt parity verified
+  interface_nested_types_consumer source+cmt parity verified
+  $ (cd artifacts && OCAML_COLOR=never ../../../src/verocaml.exe verify interface_proved_consumer.ml --dependency interface_provider.cmt --dependency interface_groups.cmt --threads 2 --timeout-ms 10000 --dump-vir interface_proved_consumer.source.vir > interface_proved_consumer.source.out 2>&1)
+  $ cmp artifacts/interface_proved_consumer.2.vir artifacts/interface_proved_consumer.source.vir && grep -q '^verocaml: verified file=interface_proved_consumer.ml functions=2 obligations=2$' artifacts/interface_proved_consumer.source.out && echo "interface_proved_consumer source+cmt parity verified"
+  interface_proved_consumer source+cmt parity verified
+
+Public broadcast declarations remain tied to one authenticated implementation
+proof, and an interface group cannot promote an ordinary imported proof into a
+broadcast theorem.
+
+  $ interface_mli interface_mismatch
+  $ interface_ml interface_mismatch
+  $ interface_ml interface_mismatch_consumer
+  $ (cd artifacts && OCAML_COLOR=never ../../../src/verocaml.exe verify interface_mismatch_consumer.cmt --dependency interface_mismatch.cmt > interface_mismatch.out 2>&1); test $? -ne 0
+  $ grep '^verocaml: error' artifacts/interface_mismatch.out
+  verocaml: error[VERO_DEPENDENCY] unit Interface_mismatch_consumer: [VERO_DEPENDENCY] public broadcast declaration does not match one authenticated implementation proof
+  $ interface_mli interface_invalid_groups
+  $ interface_ml interface_invalid_groups
+  $ interface_ml interface_invalid_groups_consumer
+  $ (cd artifacts && OCAML_COLOR=never ../../../src/verocaml.exe verify interface_invalid_groups_consumer.cmt --dependency interface_provider.cmt --dependency interface_invalid_groups.cmt > interface_invalid_groups.out 2>&1); test $? -ne 0
+  $ grep '^Error:' artifacts/interface_invalid_groups.out
+  Error: [VERO_BROADCAST_AUTHENTICATION] broadcast target is not an authenticated local or imported declaration or group

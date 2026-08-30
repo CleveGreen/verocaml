@@ -24,12 +24,12 @@ snapshot digests; all other source SST content is stable.
   $ echo 'positive source+cmt threads=1/2 repeats=stable source-sst=normalized cmt-sst=exact vir=exact-per-route'
   positive source+cmt threads=1/2 repeats=stable source-sst=normalized cmt-sst=exact vir=exact-per-route
   $ tail -1 artifacts/source.1.1.out | sed -E 's#file=[^ ]+#file=<source>#'
-  verocaml: verified-with-trusted-axioms file=<source> functions=21 obligations=118 trusted-external-bodies=15 trusted-external-body-uses=3 trusted-external-spec-uses=0
+  verocaml: verified-with-trusted-axioms file=<source> functions=21 obligations=118 trusted-external-bodies=15 trusted-external-body-uses=17 trusted-external-spec-uses=0
   $ tail -1 artifacts/cmt.1.1.out | sed -E 's#file=[^ ]+#file=<retained-cmt>#'
-  verocaml: verified-with-trusted-axioms file=<retained-cmt> functions=21 obligations=118 trusted-external-bodies=15 trusted-external-body-uses=3 trusted-external-spec-uses=0
+  verocaml: verified-with-trusted-axioms file=<retained-cmt> functions=21 obligations=118 trusted-external-bodies=15 trusted-external-body-uses=17 trusted-external-spec-uses=0
 
 The stable retained dumps pin the complete logical surface, proof/VC totals,
-trusted law declarations, and the three explicit extensionality calls.
+trusted law declarations, and every explicit or broadcast trusted-law use.
 
   $ sst=artifacts/cmt.1.1.sst; vir=artifacts/cmt.1.1.vir; printf 'sst functions=%s symbolic=%s axiomatic=%s extensionality-calls=%s\n' "$(grep -c '^function ' "$sst")" "$(grep -c 'body symbolic-declaration ' "$sst")" "$(grep -c 'body trusted-external-body trust=axiomatic' "$sst")" "$(grep -c 'proof-call axiom_extensionality#' "$sst")"; printf 'vir proofs=%s obligations=%s\n' "$(grep -c '^function ' "$vir")" "$(grep -c '^  vc ' "$vir")"
   sst functions=74 symbolic=8 axiomatic=15 extensionality-calls=3

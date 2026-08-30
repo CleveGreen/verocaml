@@ -2,7 +2,20 @@ type theorem_kind = Proved_lemma | Trusted_axiom
 type source_role = Proved_body | Trusted_proof_body | Other_body
 type theorem
 
+type imported_declaration = {
+  imported_path : string;
+  imported_definition : Sst.function_definition;
+  imported_trigger_span : Diagnostic.span;
+}
+
+type imported_group = {
+  imported_group_path : string;
+  imported_target_paths : string list;
+}
+
 val authenticate_typedtree :
+  ?imported_declaration_paths:string list ->
+  ?imported_group_paths:string list ->
   source_file:string ->
   imports:Cmt_input.import array ->
   artifact:Typedtree_adapter_issuance_private.proof_capture_artifact option ->
@@ -35,6 +48,8 @@ val register :
   scan:Typedtree_broadcast_private.t ->
   program:Sst.program ->
   sources:(Typedtree.value_binding * Sst.function_id) list ->
+  imported_declarations:imported_declaration list ->
+  imported_groups:imported_group list ->
   (unit, Diagnostic.t) result
 
 val theorems : program:Sst.program -> theorem list

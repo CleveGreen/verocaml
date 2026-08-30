@@ -6,6 +6,7 @@ type declaration = {
   kind : declaration_kind;
   declaration_span : Diagnostic.span;
   witness_span : Diagnostic.span option;
+  preverified : bool;
 }
 
 type target = { target_id : string; target_group : bool }
@@ -343,6 +344,7 @@ let validate_target_graph ~declaration_ids ~groups =
           kind = Proved;
           declaration_span = placeholder;
           witness_span = None;
+          preverified = false;
         })
       declaration_ids
   in
@@ -383,6 +385,19 @@ let find program =
     (live_entries ())
 
 let register ~program ~declarations ~groups ~scopes =
+  [%log.debug "register broadcast scope graph"
+    ~declarations:(Delator.Field.int (List.length declarations))
+    ~groups:(Delator.Field.int (List.length groups))
+    ~scopes:(Delator.Field.int (List.length scopes))];
+  List.iter
+    (fun _scope ->
+      [%log.trace "register broadcast function scope"
+        ~function_name:
+          (Delator.Field.string _scope.function_id.Sst.function_name)
+        ~function_index:(Delator.Field.int _scope.function_id.function_index)
+        ~targets:(Delator.Field.int (List.length _scope.targets))
+        ~expressions:(Delator.Field.int (List.length _scope.expressions))])
+    scopes;
   let* () =
     unique_by (fun declaration -> declaration.declaration_id) declarations
     |> Result.map_error (fun id -> "duplicate broadcast declaration " ^ id)
@@ -407,7 +422,8 @@ let register ~program ~declarations ~groups ~scopes =
   let completed =
     List.filter_map
       (fun declaration ->
-        if declaration.kind = Trusted then Some declaration.declaration_id
+        if declaration.kind = Trusted || declaration.preverified then
+          Some declaration.declaration_id
         else None)
       declarations
   in
@@ -533,7 +549,15 @@ let active ~program ~function_id ~span =
   match find program with
   | None -> Error "broadcast scope is absent or stale"
   | Some entry -> (
-      let* selections = expand entry (targets_for entry function_id span) in
+      let targets = targets_for entry function_id span in
+      [%log.debug "resolve active broadcast scope"
+        ~function_name:(Delator.Field.string function_id.Sst.function_name)
+        ~function_index:(Delator.Field.int function_id.function_index)
+        ~targets:(Delator.Field.int (List.length targets))];
+      let* selections = expand entry targets in
+      [%log.trace "expanded active broadcast scope"
+        ~function_name:(Delator.Field.string function_id.function_name)
+        ~selections:(Delator.Field.int (List.length selections))];
       match
         List.find_opt
           (fun selection ->
@@ -577,7 +601,10 @@ let proved_prerequisites ~program function_id =
       | Ok selections ->
           List.filter_map
             (fun selection ->
-              if selection.declaration.kind = Proved then
+              if
+                selection.declaration.kind = Proved
+                && not selection.declaration.preverified
+              then
                 Some selection.declaration.function_id
               else None)
             selections)

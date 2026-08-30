@@ -170,7 +170,7 @@ binding, retained carrier, or runtime ghost call.
   $ artifacts/proof_erased.native
 
 All declaration-role conflicts name the real roles.  Duplicate modifiers and
-roles, payloads, local/misplaced forms, recursion, generic/nonunit signatures,
+roles, payloads, local/misplaced forms, recursion, nonunit signatures,
 unsupported clauses, unauthenticated carriers, replay, and wrong-stage calls
 reject at their assigned boundaries.
 
@@ -189,13 +189,20 @@ reject at their assigned boundaries.
   $ ppx_proof_failure proof_assertion "allows only requires and ensures"
   $ ppx_proof_failure proof_decreases "allows only requires and ensures"
   $ retained_reject () { n=$1; retained_proof "$n"; OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$n.cmt" >"artifacts/$n.verify" 2>&1 && return 1; grep -F "$2" "artifacts/$n.verify" >/dev/null; }
-  $ retained_reject proof_generic VERO_UNSUPPORTED_POLYMORPHISM
   $ retained_reject proof_nonunit VERO_MALFORMED_GHOST_CALL
   $ retained_reject proof_wrong_stage VERO_ERASED_CALL
   $ for n in proof_raw_attribute proof_counterfeit proof_foreign_carrier; do ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -c -o "artifacts/$n.cmo" "fixtures/$n.ml"; ./trusted_external_bodies_tool.exe reject "artifacts/$n.cmt"; done
   adapter rejected: VERO_MALFORMED_GHOST_CALL
   adapter rejected: VERO_MALFORMED_GHOST_CALL
   adapter rejected: VERO_MALFORMED_GHOST_CALL
+
+Generic trusted Proof bodies retain their type binders and verify as explicit
+axioms rather than being rejected as if polymorphism were unsupported.
+
+  $ retained_proof proof_generic
+  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/proof_generic.cmt | grep -E 'trusted external body declaration|verified-with-trusted-axioms'
+  verocaml: trusted external body declaration trust=axiomatic mode=proof function=trusted#0 declaration-span=fixtures/proof_generic.ml:1:0-5:18 witness-span=fixtures/proof_generic.ml:4:0-4:26 requires=0 ensures=1 body=unchecked
+  verocaml: verified-with-trusted-axioms file=artifacts/proof_generic.cmt functions=0 obligations=0 trusted-external-bodies=1 trusted-external-body-uses=0 trusted-external-spec-uses=0
   $ retained_proof proof_replay
   $ ./trusted_external_bodies_tool.exe replay artifacts/proof_replay.cmt
   replayed combined-role carriers rejected in one process recursive=0/0 solver=0 z3=0/0

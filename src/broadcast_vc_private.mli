@@ -1,5 +1,6 @@
 type inserted = {
   broadcast_id : string;
+  theorem_function_id : Sst.function_id;
   type_vector : Parametric_type.t list;
   qid : string;
   skid : string;
@@ -7,6 +8,8 @@ type inserted = {
   trusted : bool;
   declaration_span : Diagnostic.span;
   witness_span : Diagnostic.span option;
+  requires_count : int;
+  ensures_count : int;
   selecting_paths : string list list;
 }
 

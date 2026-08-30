@@ -62,8 +62,9 @@ let lower ?allow_imported_opens implementation =
           | Ok () -> (
               match Finite_formal_requirement.seal implementation program with
               | Ok () -> Ok program
-              | Error message ->
-                  [%log.debug "finite-formal sealing failed" ~message];
+              | Error _message ->
+                  [%log.debug "finite-formal sealing failed"
+                    ~message:(Delator.Field.string _message)];
                   Error
                     (Diagnostic.make
                        (Diagnostic.Unsupported_construct

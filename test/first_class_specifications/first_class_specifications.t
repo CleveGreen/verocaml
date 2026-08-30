@@ -9,8 +9,9 @@ stable across retained source, CMT, repetition, and worker count.
   verocaml: verified file=<fixture> functions=1 obligations=19
   verocaml: verified file=<fixture> functions=1 obligations=1
   $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/broadcast_symbolic.cmt --threads 1 --timeout-ms 5000 --rlimit 100000 2>&1 | grep -E '^(verocaml: trusted|verocaml: verified)' | sed -E 's/file=[^ ]+/file=<fixture>/; s/(declaration|witness)-span=[^ ]+/\1-span=<span>/g'
+  verocaml: trusted external body trust=axiomatic mode=proof call-form=broadcast function=image_axiom#5 declaration-span=<span> witness-span=<span> call=fixtures/broadcast_symbolic.ml:17:0-24:6 requires=0 ensures=1 body=unchecked result=constrained-only-by-ensures
   verocaml: trusted external body declaration trust=axiomatic mode=proof function=image_axiom#5 declaration-span=<span> witness-span=<span> requires=0 ensures=1 body=unchecked
-  verocaml: verified-with-trusted-axioms file=<fixture> functions=2 obligations=5 trusted-external-bodies=1 trusted-external-body-uses=0 trusted-external-spec-uses=0
+  verocaml: verified-with-trusted-axioms file=<fixture> functions=2 obligations=5 trusted-external-bodies=1 trusted-external-body-uses=1 trusted-external-spec-uses=0
   $ for route in fixtures/core.ml artifacts/core.cmt; do tag=$(basename "$route"); for threads in 1 2; do OCAML_COLOR=never ../../src/verocaml.exe verify "$route" --threads "$threads" --timeout-ms 5000 --rlimit 100000 --dump-sst "artifacts/$tag.$threads.sst" --dump-vir "artifacts/$tag.$threads.vir" >"artifacts/$tag.$threads.out"; done; cmp "artifacts/$tag.1.out" "artifacts/$tag.2.out"; cmp "artifacts/$tag.1.sst" "artifacts/$tag.2.sst"; cmp "artifacts/$tag.1.vir" "artifacts/$tag.2.vir"; done
   $ sed '/^instance-modes$/,$d' artifacts/core.ml.1.sst > artifacts/source.semantic.sst
   $ sed '/^instance-modes$/,$d' artifacts/core.cmt.1.sst > artifacts/cmt.semantic.sst
@@ -46,7 +47,7 @@ terms. Both routes produce identical VIR across source, retained CMT, and worker
   $ grep -Eq '\(ite \(= \$spec_lambda_arg\$[0-9]+ 4\) 42 \$spec_lambda_arg\$[0-9]+\)' artifacts/parametric_branching.ml.1.vir
   $ ! grep -Eq 'Param_.*generic_project' artifacts/parametric_branching.ml.1.vir
   $ grep '^verocaml: verified' artifacts/parametric_branching.ml.1.out | sed -E 's/file=[^ ]+/file=<fixture>/'
-  verocaml: verified-with-trusted-axioms file=<fixture> functions=1 obligations=4 trusted-external-bodies=1 trusted-external-body-uses=0 trusted-external-spec-uses=0
+  verocaml: verified-with-trusted-axioms file=<fixture> functions=1 obligations=4 trusted-external-bodies=1 trusted-external-body-uses=1 trusted-external-spec-uses=0
   $ echo "generic-body=int formula-ite=authenticated source-cmt=true threads=1/2"
   generic-body=int formula-ite=authenticated source-cmt=true threads=1/2
 

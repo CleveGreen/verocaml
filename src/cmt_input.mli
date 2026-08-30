@@ -3,6 +3,11 @@ type import = {
   crc : string option;
 }
 
+type interface_broadcast_group = {
+  group_path : string;
+  group_targets : string list;
+}
+
 type implementation = private {
   (* Exact compiler metadata retained as an untrusted decoding result. *)
   metadata : Cmt_format.cmt_infos;
@@ -31,6 +36,8 @@ type implementation = private {
   interface_family_markers : string list;
   interface_mode_signatures : (string * string option) list;
   interface_finite_signatures : (string * string option) list;
+  interface_broadcast_declarations : string list;
+  interface_broadcast_groups : interface_broadcast_group list;
   declaration_dependency_count : int;
   has_implementation_shape : bool;
   identifier_occurrence_count : int;

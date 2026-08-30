@@ -18,6 +18,17 @@ type binding = {
   definition : Sst.function_definition;
 }
 
+type imported_declaration = {
+  imported_path : string;
+  imported_definition : Sst.function_definition;
+  imported_trigger_span : Diagnostic.span;
+}
+
+type imported_group = {
+  imported_group_path : string;
+  imported_target_paths : string list;
+}
+
 type entry = { program : Sst.program Weak.t; theorems : theorem list }
 
 let entries : entry list ref = ref []
@@ -25,9 +36,31 @@ let entries : entry list ref = ref []
 let ( let* ) result continuation =
   match result with Ok value -> continuation value | Error _ as error -> error
 
-let authenticate_typedtree ~source_file ~imports ~artifact structure =
+let authenticate_typedtree ?(imported_declaration_paths = [])
+    ?(imported_group_paths = []) ~source_file ~imports ~artifact structure =
+  let resolve_imported_target path =
+    let path = Path.name path in
+    if List.mem path imported_declaration_paths then
+      Some
+        {
+          Broadcast_scope_private.target_id = "broadcast:" ^ path;
+          target_group = false;
+        }
+    else if List.mem path imported_group_paths then
+      Some
+        {
+          Broadcast_scope_private.target_id = "broadcast-group:" ^ path;
+          target_group = true;
+        }
+    else None
+  in
   Typedtree_broadcast_private.authenticate ~source_file ~artifact
     ~resolves_to_marker:(Broadcast_scope_private.canonical_marker_path imports)
+    ~resolve_imported_target
+    ~imported_declaration_ids:
+      (List.map (fun path -> "broadcast:" ^ path) imported_declaration_paths)
+    ~imported_group_ids:
+      (List.map (fun path -> "broadcast-group:" ^ path) imported_group_paths)
     structure
   |> Result.map_error (fun error ->
          Diagnostic.make
@@ -120,12 +153,7 @@ let trigger_head expression =
       Error
         "broadcast trigger must be one supported non-nullary logical application"
 
-let find_trigger locations definition =
-  let trigger_spans =
-    List.map
-      (Diagnostic.span_of_location ~fallback_file:definition.Sst.span.file)
-      locations
-  in
+let find_trigger_spans trigger_spans (definition : Sst.function_definition) =
   let found = ref [] in
   let rec visit (expression : Sst.expression) =
     if List.exists (same_span expression.Sst.span) trigger_spans then
@@ -222,49 +250,49 @@ let validate_type_coverage definition type_pattern =
   | Some _ ->
       Error "broadcast trigger does not determine every theorem type binder"
 
+let theorem_of_definition ~theorem_id ~trigger_spans definition =
+  let* theorem_kind, theorem_witness_span = kind_and_provenance definition in
+  let* theorem_formals = declaration_formals definition in
+  let* theorem_trigger = find_trigger_spans trigger_spans definition in
+  let* theorem_trigger_head, theorem_trigger_type_pattern =
+    trigger_head theorem_trigger
+  in
+  let* () =
+    match
+      List.find_opt
+        (fun formal -> not (expression_uses formal theorem_trigger))
+        theorem_formals
+    with
+    | None -> Ok ()
+    | Some formal -> Error ("broadcast trigger omits formal " ^ formal.name)
+  in
+  let* () = validate_type_coverage definition theorem_trigger_type_pattern in
+  Ok
+    {
+      theorem_id;
+      theorem_kind;
+      theorem_definition = definition;
+      theorem_formals;
+      theorem_trigger;
+      theorem_trigger_head;
+      theorem_trigger_type_pattern;
+      theorem_declaration_span = definition.span;
+      theorem_witness_span;
+    }
+
 let theorem_of_binding scan binding =
   match Typedtree_broadcast_private.declaration_id scan binding.source_binding with
   | None -> Ok None
   | Some theorem_id ->
       let definition = binding.definition in
-      let* theorem_kind, theorem_witness_span =
-        kind_and_provenance definition
+      let trigger_spans =
+        Typedtree_broadcast_private.trigger_locations scan binding.source_binding
+        |> List.map
+             (Diagnostic.span_of_location
+                ~fallback_file:definition.Sst.span.file)
       in
-      let* theorem_formals = declaration_formals definition in
-      let* theorem_trigger =
-        find_trigger
-          (Typedtree_broadcast_private.trigger_locations scan
-             binding.source_binding)
-          definition
-      in
-      let* theorem_trigger_head, theorem_trigger_type_pattern =
-        trigger_head theorem_trigger
-      in
-      let* () =
-        match
-          List.find_opt
-            (fun formal -> not (expression_uses formal theorem_trigger))
-            theorem_formals
-        with
-        | None -> Ok ()
-        | Some formal -> Error ("broadcast trigger omits formal " ^ formal.name)
-      in
-      let* () =
-        validate_type_coverage definition theorem_trigger_type_pattern
-      in
-      Ok
-        (Some
-           {
-             theorem_id;
-             theorem_kind;
-             theorem_definition = definition;
-             theorem_formals;
-             theorem_trigger;
-             theorem_trigger_head;
-             theorem_trigger_type_pattern;
-             theorem_declaration_span = definition.span;
-             theorem_witness_span;
-           })
+      theorem_of_definition ~theorem_id ~trigger_spans definition
+      |> Result.map Option.some
 
 let weak_program program =
   let weak = Weak.create 1 in
@@ -288,8 +316,9 @@ let entry program =
         (Weak.get entry.program 0))
     (live_entries ())
 
-let register_bindings ~scan ~program ~bindings =
-  let* theorems =
+let register_bindings ~scan ~program ~bindings ~imported_declarations
+    ~imported_groups =
+  let* local_theorems =
     List.fold_left
       (fun result binding ->
         let* theorems = result in
@@ -301,6 +330,21 @@ let register_bindings ~scan ~program ~bindings =
       (Ok []) bindings
     |> Result.map List.rev
   in
+  let* imported_theorems =
+    List.fold_left
+      (fun result imported ->
+        let* theorems = result in
+        let* theorem =
+          theorem_of_definition
+            ~theorem_id:("broadcast:" ^ imported.imported_path)
+            ~trigger_spans:[ imported.imported_trigger_span ]
+            imported.imported_definition
+        in
+        Ok (theorem :: theorems))
+      (Ok []) imported_declarations
+    |> Result.map List.rev
+  in
+  let theorems = local_theorems @ imported_theorems in
   let declarations =
     List.map
       (fun theorem ->
@@ -313,10 +357,16 @@ let register_bindings ~scan ~program ~bindings =
             | Trusted_axiom -> Trusted);
           declaration_span = theorem.theorem_declaration_span;
           witness_span = theorem.theorem_witness_span;
+          preverified =
+            List.exists
+              (fun imported ->
+                String.equal theorem.theorem_id
+                  ("broadcast:" ^ imported.imported_path))
+              imported_declarations;
         })
       theorems
   in
-  let groups =
+  let local_groups =
     Typedtree_broadcast_private.groups scan
     |> List.map (fun (group : Typedtree_broadcast_private.group) ->
         {
@@ -326,6 +376,54 @@ let register_bindings ~scan ~program ~bindings =
           span = group.group_span;
         })
   in
+  let imported_declaration_paths =
+    List.map (fun declaration -> declaration.imported_path) imported_declarations
+  and imported_group_paths =
+    List.map (fun group -> group.imported_group_path) imported_groups
+  in
+  let* imported_groups =
+    List.fold_left
+      (fun result group ->
+        let* groups = result in
+        let* targets =
+          List.fold_left
+            (fun result path ->
+              let* targets = result in
+              if List.mem path imported_declaration_paths then
+                Ok
+                  ({
+                     Broadcast_scope_private.target_id = "broadcast:" ^ path;
+                     target_group = false;
+                   }
+                  :: targets)
+              else if List.mem path imported_group_paths then
+                Ok
+                  ({
+                     Broadcast_scope_private.target_id =
+                       "broadcast-group:" ^ path;
+                     target_group = true;
+                   }
+                  :: targets)
+              else
+                Error
+                  (Printf.sprintf "imported broadcast group %s lost target %s"
+                     group.imported_group_path path))
+            (Ok []) group.imported_target_paths
+          |> Result.map List.rev
+        in
+        Ok
+          ({
+             Broadcast_scope_private.group_id =
+               "broadcast-group:" ^ group.imported_group_path;
+             group_name = group.imported_group_path;
+             targets;
+             span = Diagnostic.file_span group.imported_group_path;
+           }
+          :: groups))
+      (Ok []) imported_groups
+    |> Result.map List.rev
+  in
+  let groups = local_groups @ imported_groups in
   let scopes =
     List.map
       (fun binding ->
@@ -361,7 +459,8 @@ let register_bindings ~scan ~program ~bindings =
          (live_entries ());
   Ok ()
 
-let register ~source_file ~scan ~program ~sources =
+let register ~source_file ~scan ~program ~sources ~imported_declarations
+    ~imported_groups =
   let bindings =
     List.filter_map
       (fun (source_binding, function_id) ->
@@ -373,7 +472,13 @@ let register ~source_file ~scan ~program ~sources =
              program.Sst.functions))
       sources
   in
-  register_bindings ~scan ~program ~bindings
+  [%log.debug "register broadcast metadata"
+    ~local_sources:(Delator.Field.int (List.length bindings))
+    ~imported_declarations:
+      (Delator.Field.int (List.length imported_declarations))
+    ~imported_groups:(Delator.Field.int (List.length imported_groups))];
+  register_bindings ~scan ~program ~bindings ~imported_declarations
+    ~imported_groups
   |> Result.map_error (fun message ->
          Diagnostic.make (Diagnostic.Invalid_broadcast message)
            (match program.Sst.functions with

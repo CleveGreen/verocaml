@@ -116,27 +116,27 @@ private authority. Compiler-invalid label and optional forwarding forms reject
 on the source route. Compiler-valid negatives also reject from retained CMT.
 
   $ reject () { input=$1; name=$2; expected=$3; code=0; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify "$input" --threads 1 --timeout-ms 5000 --dump-sst "artifacts/$name.sst" --dump-vir "artifacts/$name.vir" >"artifacts/$name.out" 2>&1 || code=$?; test "$code" = 2; actual=$(grep -Eo 'VERO_[A-Z_]+' "artifacts/$name.out" | head -1); printf '%s: code=%s\n' "$name" "$actual"; test "$actual" = "$expected"; test "$(grep -c 'Verification_session: private receipt ' "artifacts/$name.out")" = 0; test ! -e "artifacts/$name.sst"; test ! -e "artifacts/$name.vir"; }
-  $ for spec in 'eq_parameter VERO_UNSUPPORTED_POLYMORPHISM' 'eq_tuple VERO_UNSUPPORTED_POLYMORPHISM' 'eq_option VERO_UNSUPPORTED_POLYMORPHISM' 'eq_list VERO_UNSUPPORTED_POLYMORPHISM' 'partial_application VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION' 'callback VERO_CALLBACK_CONTRACT' 'generic_mutation VERO_UNSUPPORTED_MUTATION' 'inferred_generic_recursion VERO_DEPENDENCY' 'explicit_polymorphic_recursion VERO_UNSUPPORTED_POLYMORPHISM' 'open_aggregate VERO_DEPENDENCY'; do set -- $spec; reject "fixtures/$1.ml" "source-$1" "$2"; done
-  source-eq_parameter: code=VERO_UNSUPPORTED_POLYMORPHISM
-  source-eq_tuple: code=VERO_UNSUPPORTED_POLYMORPHISM
-  source-eq_option: code=VERO_UNSUPPORTED_POLYMORPHISM
-  source-eq_list: code=VERO_UNSUPPORTED_POLYMORPHISM
+  $ for spec in 'eq_parameter VERO_UNSUPPORTED_GENERIC_USE' 'eq_tuple VERO_UNSUPPORTED_GENERIC_USE' 'eq_option VERO_UNSUPPORTED_GENERIC_USE' 'eq_list VERO_UNSUPPORTED_GENERIC_USE' 'partial_application VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION' 'callback VERO_CALLBACK_CONTRACT' 'generic_mutation VERO_UNSUPPORTED_MUTATION' 'inferred_generic_recursion VERO_DEPENDENCY' 'explicit_polymorphic_recursion VERO_UNSUPPORTED_GENERIC_USE' 'open_aggregate VERO_DEPENDENCY'; do set -- $spec; reject "fixtures/$1.ml" "source-$1" "$2"; done
+  source-eq_parameter: code=VERO_UNSUPPORTED_GENERIC_USE
+  source-eq_tuple: code=VERO_UNSUPPORTED_GENERIC_USE
+  source-eq_option: code=VERO_UNSUPPORTED_GENERIC_USE
+  source-eq_list: code=VERO_UNSUPPORTED_GENERIC_USE
   source-partial_application: code=VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION
   source-callback: code=VERO_CALLBACK_CONTRACT
   source-generic_mutation: code=VERO_UNSUPPORTED_MUTATION
   source-inferred_generic_recursion: code=VERO_DEPENDENCY
-  source-explicit_polymorphic_recursion: code=VERO_UNSUPPORTED_POLYMORPHISM
+  source-explicit_polymorphic_recursion: code=VERO_UNSUPPORTED_GENERIC_USE
   source-open_aggregate: code=VERO_DEPENDENCY
-  $ for spec in 'eq_parameter VERO_UNSUPPORTED_POLYMORPHISM' 'eq_tuple VERO_UNSUPPORTED_POLYMORPHISM' 'eq_option VERO_UNSUPPORTED_POLYMORPHISM' 'eq_list VERO_UNSUPPORTED_POLYMORPHISM' 'partial_application VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION' 'callback VERO_CALLBACK_CONTRACT' 'generic_mutation VERO_UNSUPPORTED_MUTATION' 'inferred_generic_recursion VERO_DEPENDENCY' 'explicit_polymorphic_recursion VERO_UNSUPPORTED_POLYMORPHISM' 'open_aggregate VERO_DEPENDENCY'; do set -- $spec; reject "artifacts/$1.cmt" "retained-$1" "$2"; done
-  retained-eq_parameter: code=VERO_UNSUPPORTED_POLYMORPHISM
-  retained-eq_tuple: code=VERO_UNSUPPORTED_POLYMORPHISM
-  retained-eq_option: code=VERO_UNSUPPORTED_POLYMORPHISM
-  retained-eq_list: code=VERO_UNSUPPORTED_POLYMORPHISM
+  $ for spec in 'eq_parameter VERO_UNSUPPORTED_GENERIC_USE' 'eq_tuple VERO_UNSUPPORTED_GENERIC_USE' 'eq_option VERO_UNSUPPORTED_GENERIC_USE' 'eq_list VERO_UNSUPPORTED_GENERIC_USE' 'partial_application VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION' 'callback VERO_CALLBACK_CONTRACT' 'generic_mutation VERO_UNSUPPORTED_MUTATION' 'inferred_generic_recursion VERO_DEPENDENCY' 'explicit_polymorphic_recursion VERO_UNSUPPORTED_GENERIC_USE' 'open_aggregate VERO_DEPENDENCY'; do set -- $spec; reject "artifacts/$1.cmt" "retained-$1" "$2"; done
+  retained-eq_parameter: code=VERO_UNSUPPORTED_GENERIC_USE
+  retained-eq_tuple: code=VERO_UNSUPPORTED_GENERIC_USE
+  retained-eq_option: code=VERO_UNSUPPORTED_GENERIC_USE
+  retained-eq_list: code=VERO_UNSUPPORTED_GENERIC_USE
   retained-partial_application: code=VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION
   retained-callback: code=VERO_CALLBACK_CONTRACT
   retained-generic_mutation: code=VERO_UNSUPPORTED_MUTATION
   retained-inferred_generic_recursion: code=VERO_DEPENDENCY
-  retained-explicit_polymorphic_recursion: code=VERO_UNSUPPORTED_POLYMORPHISM
+  retained-explicit_polymorphic_recursion: code=VERO_UNSUPPORTED_GENERIC_USE
   retained-open_aggregate: code=VERO_DEPENDENCY
   $ reject fixtures/missing_label.ml source-missing_label VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION
   source-missing_label: code=VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION

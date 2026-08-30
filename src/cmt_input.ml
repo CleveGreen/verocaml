@@ -3,6 +3,11 @@ type import = {
   crc : string option;
 }
 
+type interface_broadcast_group = {
+  group_path : string;
+  group_targets : string list;
+}
+
 type implementation = {
   metadata : Cmt_format.cmt_infos;
   embedded_interface_metadata : Cmi_format.cmi_infos_lazy option;
@@ -30,6 +35,8 @@ type implementation = {
   interface_family_markers : string list;
   interface_mode_signatures : (string * string option) list;
   interface_finite_signatures : (string * string option) list;
+  interface_broadcast_declarations : string list;
+  interface_broadcast_groups : interface_broadcast_group list;
   declaration_dependency_count : int;
   has_implementation_shape : bool;
   identifier_occurrence_count : int;
@@ -416,8 +423,90 @@ let interface_finite_signatures interface =
   duplicates signatures;
   signatures
 
+let strict_interface_attribute name attributes =
+  let matching =
+    List.filter
+      (fun attribute -> String.equal attribute.Parsetree.attr_name.txt name)
+      attributes
+  in
+  match matching with
+  | [] -> None
+  | _ :: _ :: _ -> raise (Failure ("duplicate " ^ name ^ " metadata"))
+  | [ attribute ] ->
+      if
+        not
+          (attribute.attr_loc.Location.loc_ghost
+          && attribute.attr_name.loc.loc_ghost)
+      then raise (Failure ("non-ghost " ^ name ^ " metadata"))
+      else
+        match attribute.attr_payload with
+        | PStr
+            [
+              {
+                pstr_desc =
+                  Pstr_eval
+                    ( {
+                        pexp_desc =
+                          Pexp_constant (Pconst_string (value, _, _));
+                        _;
+                      },
+                      [] );
+                _;
+              };
+            ] ->
+            Some value
+        | _ -> raise (Failure ("malformed " ^ name ^ " metadata"))
+
+let interface_broadcast_declaration =
+  strict_interface_attribute
+    "verocaml.internal.broadcast.interface_declaration.v1"
+
+let interface_broadcast_group =
+  strict_interface_attribute "verocaml.internal.broadcast.interface_group.v1"
+
+let value_path key =
+  let prefix = "value:" in
+  if String.starts_with ~prefix key then
+    String.sub key (String.length prefix) (String.length key - String.length prefix)
+  else raise (Failure "broadcast interface metadata is not attached to a value")
+
+let interface_broadcast_declarations interface =
+  interface_signatures interface_broadcast_declaration interface
+  |> List.filter_map (fun (path, payload) ->
+         match payload with
+         | None -> None
+         | Some "v1" ->
+             let path = value_path path in
+             [%log.trace "decoded broadcast interface declaration"
+               ~path:(Delator.Field.string path)];
+             Some path
+         | Some _ ->
+             raise (Failure "unknown broadcast declaration interface metadata"))
+
+let interface_broadcast_groups interface =
+  interface_signatures interface_broadcast_group interface
+  |> List.filter_map (fun (path, payload) ->
+         match payload with
+         | None -> None
+         | Some payload when String.starts_with ~prefix:"v1|" payload ->
+             let body =
+               String.sub payload 3 (String.length payload - 3)
+             in
+             let group_targets =
+               if String.equal body "" then [] else String.split_on_char ';' body
+             in
+             if group_targets = [] || List.exists (String.equal "") group_targets
+             then raise (Failure "empty broadcast interface group")
+             else
+               let group_path = value_path path in
+               [%log.trace "decoded broadcast interface group"
+                 ~path:(Delator.Field.string group_path)
+                 ~targets:(Delator.Field.int (List.length group_targets))];
+               Some { group_path; group_targets }
+         | Some _ -> raise (Failure "unknown broadcast group interface metadata"))
+
 let embedded_interface_metadata = function
-  | None -> (false, None, None, 0, [||], [], [], [])
+  | None -> (false, None, None, 0, [||], [], [], [], [], [])
   | Some interface ->
       let implementation_unit_name =
         match interface.Cmi_format.cmi_kind with
@@ -433,7 +522,9 @@ let embedded_interface_metadata = function
         imports_of_array interface.Cmi_format.cmi_crcs,
         interface_family_markers interface,
         interface_mode_signatures interface,
-        interface_finite_signatures interface )
+        interface_finite_signatures interface,
+        interface_broadcast_declarations interface,
+        interface_broadcast_groups interface )
 
 let adjacent_interface filename =
   let basename =
@@ -676,7 +767,9 @@ let load_internal ?int_size ?interface_info
                       interface_imports,
                       interface_family_markers,
                       interface_mode_signatures,
-                      interface_finite_signatures ) =
+                      interface_finite_signatures,
+                      interface_broadcast_declarations,
+                      interface_broadcast_groups ) =
                   embedded_interface_metadata interface_info
                 in
                 let build_directory, load_path_visible, load_path_hidden =
@@ -720,6 +813,8 @@ let load_internal ?int_size ?interface_info
                     interface_family_markers;
                     interface_mode_signatures;
                     interface_finite_signatures;
+                    interface_broadcast_declarations;
+                    interface_broadcast_groups;
                     declaration_dependency_count =
                       List.length info.Cmt_format.cmt_declaration_dependencies;
                     has_implementation_shape =
@@ -741,7 +836,14 @@ let load_internal ?int_size ?interface_info
                        (List.length implementation.load_path_hidden))
                   ~retained:
                     (Delator.Field.bool
-                       (retained_preprocessing implementation))];
+                       (retained_preprocessing implementation))
+                  ~broadcast_declarations:
+                    (Delator.Field.int
+                       (List.length
+                          implementation.interface_broadcast_declarations))
+                  ~broadcast_groups:
+                    (Delator.Field.int
+                       (List.length implementation.interface_broadcast_groups))];
                 Ok implementation
           with
           | Cmt_format.Error _

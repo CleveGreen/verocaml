@@ -394,9 +394,19 @@ let embedded_public_surface ~unit_name
                     in
                     collect (name :: types) revealed_types callables rest
                 | Sig_value (ident, _, Types.Exported) ->
-                    collect types revealed_types
-                      (qualify (Ident.name ident) :: callables)
-                      rest
+                    let name = qualify (Ident.name ident) in
+                    if
+                      List.exists
+                        (fun (group : Cmt_input.interface_broadcast_group) ->
+                          String.equal group.group_path name)
+                        candidate.interface_broadcast_groups
+                    then (
+                      [%log.trace "exclude broadcast group carrier from callable surface"
+                        ~unit_name:(Delator.Field.string unit_name)
+                        ~path:(Delator.Field.string name)];
+                      collect types revealed_types callables rest)
+                    else
+                      collect types revealed_types (name :: callables) rest
                 | Sig_module
                     (ident, _, declaration, _, Types.Exported) -> (
                     match

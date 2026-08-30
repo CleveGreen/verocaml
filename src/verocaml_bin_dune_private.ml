@@ -244,10 +244,10 @@ let source_filename_of_cmt cmt =
     | Some source, _ -> source
     | None, Some source -> source
     | None, None -> cmt
-  with exn ->
+  with _exn ->
     [%log.debug "could not inspect fallback Dune CMT metadata"
       ~cmt
-      ~exception_text:(Delator.Field.string (Printexc.to_string exn))];
+      ~exception_text:(Delator.Field.string (Printexc.to_string _exn))];
     cmt
 
 let rec cmt_files_below directory =
@@ -269,6 +269,7 @@ let scoped_build_target requested_relative =
 
 let fallback_artifacts ~root ~requested_directory ~requested_relative
     ~build_context =
+  let _requested_directory = requested_directory in
   let target = scoped_build_target requested_relative in
   [%log.debug "build scoped Dune verification fallback"
     ~root

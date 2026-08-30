@@ -35,7 +35,13 @@ type provider_callable = {
   definition : Sst.function_definition;
   signature : Parametric_signature_private.t;
   finite_requirements : formal_requirement list;
+  broadcast_trigger_span : Diagnostic.span option;
   model : provider_model option;
+}
+
+type provider_broadcast_group = {
+  resolved_path : string;
+  target_paths : string list;
 }
 
 type provider_type = {
@@ -64,6 +70,7 @@ type provider_description = {
   family_digest : string;
   import_digest : string;
   callables : provider_callable list;
+  broadcast_groups : provider_broadcast_group list;
   types : provider_type list;
   external_specifications : provider_external_specification list;
 }
@@ -74,6 +81,7 @@ type callable_snapshot = {
   definition : Sst.function_definition;
   signature : Parametric_signature_private.t;
   finite_requirements : formal_requirement list;
+  broadcast_trigger_span : Diagnostic.span option;
   provider_unit : string;
   provider_interface : string;
   provider_source : string;
@@ -81,6 +89,11 @@ type callable_snapshot = {
   provider_import : string;
   summary_digest : string;
   model : provider_model option;
+}
+
+type broadcast_group_snapshot = {
+  path : string;
+  target_paths : string list;
 }
 
 type type_snapshot = {
@@ -115,6 +128,7 @@ type environment = {
   token : unit ref;
   providers : provider list;
   callables : callable_snapshot list;
+  broadcast_groups : broadcast_group_snapshot list;
   types : type_snapshot list;
   external_specifications : external_specification_snapshot list;
   snapshot : string;
@@ -1120,6 +1134,11 @@ let map_type_definition type_ids (definition : Sst.type_definition) =
 
 let transform_callable type_ids function_ids symbolic_declarations
     (provider : provider_description) (callable : provider_callable) =
+  [%log.trace "transform imported callable broadcast metadata"
+    ~provider:(Delator.Field.string provider.unit_name)
+    ~path:(Delator.Field.string callable.resolved_path)
+    ~broadcast:
+      (Delator.Field.bool (Option.is_some callable.broadcast_trigger_span))];
   let offset = binding_offset provider.unit_name in
   let source = callable.definition in
   let function_id = mapped_function_id function_ids source.function_id in
@@ -1244,6 +1263,12 @@ let transform_callable type_ids function_ids symbolic_declarations
          }
       ^ callable.binding_uid ^ provider.interface_digest
       ^ provider.source_digest ^ provider.family_digest ^ provider.import_digest
+      ^ Option.fold ~none:""
+          ~some:(fun span ->
+            Printf.sprintf "%s:%d:%d-%d:%d" span.Diagnostic.file
+              span.start_pos.line span.start_pos.column span.end_pos.line
+              span.end_pos.column)
+          callable.broadcast_trigger_span
       ^ Parametric_signature_private.semantic_fingerprint signature)
   in
   let model =
@@ -1266,6 +1291,7 @@ let transform_callable type_ids function_ids symbolic_declarations
       signature;
       finite_requirements =
         List.map map_requirement callable.finite_requirements;
+      broadcast_trigger_span = callable.broadcast_trigger_span;
       provider_unit = provider.unit_name;
       provider_interface = provider.interface_digest;
       provider_source = provider.source_digest;
@@ -1343,6 +1369,11 @@ let provider_snapshot implementation program description direct_dependencies =
       description.family_digest;
       description.import_digest;
       Sst.to_string program;
+      String.concat ";"
+        (List.map
+           (fun (group : provider_broadcast_group) ->
+             group.resolved_path ^ "=" ^ String.concat "," group.target_paths)
+           description.broadcast_groups);
       String.concat ","
         (List.map
            (fun dependency ->
@@ -1401,45 +1432,56 @@ let validate_description (description : provider_description) =
          description.types
   then Error "[VERO_DEPENDENCY] retained provider compiler UID is incomplete"
   else
-    let invalid_type (typ : provider_type) =
-      let type_id = typ.definition.Sst.type_id in
-      String.equal typ.source_name ""
-      || String.equal typ.source_path ""
-      || not (String.equal type_id.type_name typ.source_name)
-      || (not
-            (String.equal typ.source_path
-               (description.unit_name ^ "." ^ typ.source_name)))
-      || (not
-            (String.equal typ.resolved_path
-               (description.unit_name ^ "." ^ type_id.type_name)))
-      || type_id.type_index < 0
+    let invalid_group (group : provider_broadcast_group) =
+      group.resolved_path = ""
+      || group.target_paths = []
+      || List.exists (String.equal "") group.target_paths
+      || not
+           (String.starts_with
+              ~prefix:(description.unit_name ^ ".")
+              group.resolved_path)
     in
-    if List.exists invalid_type description.types then
-      Error
-        "[VERO_DEPENDENCY] retained provider type identity is noncanonical or \
-         inconsistent"
+    if List.exists invalid_group description.broadcast_groups then
+      Error "[VERO_DEPENDENCY] retained provider broadcast group is malformed"
     else
-      let conflicting_source_family =
-        List.exists
-          (fun (typ : provider_type) ->
-            List.exists
-              (fun (other : provider_type) ->
-                String.equal typ.source_path other.source_path
-                && String.equal typ.source_name other.source_name
-                && not (String.equal typ.binding_uid other.binding_uid))
-              description.types)
-          description.types
+      let invalid_type (typ : provider_type) =
+        let type_id = typ.definition.Sst.type_id in
+        String.equal typ.source_name ""
+        || String.equal typ.source_path ""
+        || not (String.equal type_id.type_name typ.source_name)
+        || not
+             (String.equal typ.source_path
+                (description.unit_name ^ "." ^ typ.source_name))
+        || not
+             (String.equal typ.resolved_path
+                (description.unit_name ^ "." ^ type_id.type_name))
+        || type_id.type_index < 0
       in
-      if conflicting_source_family then
+      if List.exists invalid_type description.types then
         Error
-          "[VERO_DEPENDENCY] retained provider generic-family members have \
-           conflicting compiler identities"
+          "[VERO_DEPENDENCY] retained provider type identity is noncanonical or \
+           inconsistent"
       else
-        let duplicate project compare =
-          let values = List.map project description.types in
-          List.length values <> List.length (List.sort_uniq compare values)
+        let conflicting_source_family =
+          List.exists
+            (fun (typ : provider_type) ->
+              List.exists
+                (fun (other : provider_type) ->
+                  String.equal typ.source_path other.source_path
+                  && String.equal typ.source_name other.source_name
+                  && not (String.equal typ.binding_uid other.binding_uid))
+                description.types)
+            description.types
         in
-        if
+        if conflicting_source_family then
+          Error
+            "[VERO_DEPENDENCY] retained provider generic-family members have \
+             conflicting compiler identities"
+        else if
+          let duplicate project compare =
+            let values = List.map project description.types in
+            List.length values <> List.length (List.sort_uniq compare values)
+          in
           duplicate (fun typ -> typ.definition.Sst.type_id) compare
         then
           Error
@@ -1712,6 +1754,98 @@ let create_unchecked providers =
   let* mapped_external_specifications =
     map_external_specifications [] mappings
   in
+  let raw_mapped_broadcast_groups =
+    List.concat_map
+      (fun scope ->
+        List.map
+          (fun (group : provider_broadcast_group) ->
+            {
+              path = group.resolved_path;
+              target_paths = group.target_paths;
+            })
+          scope.mapping_description.broadcast_groups)
+      mappings
+  in
+  let declaration_paths =
+    mapped_callables
+    |> List.filter_map (fun (callable : callable_snapshot) ->
+           Option.map (Fun.const callable.path) callable.broadcast_trigger_span)
+  in
+  let group_paths =
+    List.map
+      (fun (group : broadcast_group_snapshot) -> group.path)
+      raw_mapped_broadcast_groups
+  in
+  let known_path path =
+    List.mem path declaration_paths || List.mem path group_paths
+  in
+  let path_parent path =
+    match List.rev (String.split_on_char '.' path) with
+    | _leaf :: reversed_parent -> String.concat "." (List.rev reversed_parent)
+    | [] -> ""
+  in
+  let path_root path =
+    match String.split_on_char '.' path with root :: _ -> root | [] -> ""
+  in
+  let resolve_target group_path target =
+    let candidates =
+      [
+        target;
+        path_root group_path ^ "." ^ target;
+        path_parent group_path ^ "." ^ target;
+      ]
+      |> List.sort_uniq String.compare |> List.filter known_path
+    in
+    match candidates with
+    | [ resolved ] ->
+        [%log.trace "resolved imported broadcast group target"
+          ~group:(Delator.Field.string group_path)
+          ~source_target:(Delator.Field.string target)
+          ~resolved_target:(Delator.Field.string resolved)];
+        Ok resolved
+    | [] ->
+        Error
+          (Printf.sprintf
+             "[VERO_DEPENDENCY] imported broadcast group %s has unknown target %s"
+             group_path target)
+    | _ :: _ :: _ ->
+        Error
+          (Printf.sprintf
+             "[VERO_DEPENDENCY] imported broadcast group %s has ambiguous target %s"
+             group_path target)
+  in
+  let rec resolve_groups resolved = function
+    | [] -> Ok (List.rev resolved)
+    | (group : broadcast_group_snapshot) :: rest ->
+        let* target_paths =
+          List.fold_left
+            (fun result target ->
+              let* targets = result in
+              let* target = resolve_target group.path target in
+              Ok (target :: targets))
+            (Ok []) group.target_paths
+          |> Result.map List.rev
+        in
+        resolve_groups ({ group with target_paths } :: resolved) rest
+  in
+  let* mapped_broadcast_groups =
+    resolve_groups [] raw_mapped_broadcast_groups
+  in
+  List.iter
+    (fun (_group : broadcast_group_snapshot) ->
+      [%log.trace "mapped imported broadcast group"
+        ~path:(Delator.Field.string _group.path)
+        ~targets:(Delator.Field.int (List.length _group.target_paths))])
+    mapped_broadcast_groups;
+  [%log.debug "mapped imported broadcast metadata"
+    ~declarations:
+      (Delator.Field.int
+         (List.fold_left
+            (fun count callable ->
+              count
+              + if Option.is_some callable.broadcast_trigger_span then 1 else 0)
+            0 mapped_callables))
+    ~groups:(Delator.Field.int (List.length mapped_broadcast_groups))];
   let numeric_collision identities index =
     let identities = List.sort_uniq compare identities in
     let indices = List.map index identities in
@@ -1747,7 +1881,12 @@ let create_unchecked providers =
                    (fun (specification : external_specification_snapshot) ->
                      specification.provider_unit ^ "#"
                      ^ specification.definition.function_id.function_name)
-                   mapped_external_specifications)
+                 mapped_external_specifications)
+            ^ String.concat "|"
+                (List.map
+                   (fun (group : broadcast_group_snapshot) ->
+                     group.path ^ "=" ^ String.concat "," group.target_paths)
+                   mapped_broadcast_groups)
         in
         Ok
           {
@@ -1755,6 +1894,7 @@ let create_unchecked providers =
             token = ref ();
             providers;
             callables = mapped_callables;
+            broadcast_groups = mapped_broadcast_groups;
             types = mapped_types;
             external_specifications = mapped_external_specifications;
             snapshot;
@@ -1771,6 +1911,7 @@ let empty =
     token = ref ();
     providers = [];
     callables = [];
+    broadcast_groups = [];
     types = [];
     external_specifications = [];
     snapshot = "empty";
@@ -1784,6 +1925,10 @@ let require (environment : environment) =
 let callables environment =
   require environment;
   environment.callables
+
+let broadcast_groups environment =
+  require environment;
+  environment.broadcast_groups
 
 let types environment =
   require environment;
@@ -2608,6 +2753,7 @@ module For_testing = struct
           [ Sst.Exec_instance; Sst.Exec_instance ]
           Sst.Exec_instance;
       finite_requirements = [];
+      broadcast_trigger_span = None;
       model = None;
     }
 
@@ -2741,6 +2887,7 @@ module For_testing = struct
         family_digest = "family";
         import_digest = "imports";
         callables;
+        broadcast_groups = [];
         types;
         external_specifications = [];
       }
@@ -2840,6 +2987,7 @@ module For_testing = struct
           family_digest = "family";
           import_digest = "imports";
           callables = [];
+          broadcast_groups = [];
           types = [ typ ];
           external_specifications = [];
         }

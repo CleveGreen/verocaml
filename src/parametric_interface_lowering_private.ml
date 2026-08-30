@@ -62,11 +62,11 @@ let lower_arguments ~lower_expression ~span ~reject ~application ~signature
     let* type_arguments =
       Parametric_signature_private.infer_partial_type_arguments signature
         ~actual_types ~actual_labels ~actual_result:result_type
-      |> Result.map_error (fun _ -> reject Diagnostic.Polymorphic_function)
+      |> Result.map_error (fun _ -> reject Diagnostic.Unsupported_generic_use)
     in
     let* instantiated =
       Parametric_signature_private.instantiate signature type_arguments
-      |> Result.map_error (fun _ -> reject Diagnostic.Polymorphic_function)
+      |> Result.map_error (fun _ -> reject Diagnostic.Unsupported_generic_use)
     in
     let arguments =
       List.map2

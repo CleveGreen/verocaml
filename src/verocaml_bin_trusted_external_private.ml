@@ -39,7 +39,8 @@ let line = function
         use.requires_count use.ensures_count
   | Trusted_external_body_use use ->
       let mode, call_form =
-        if use.proof_call then (" mode=proof", " call-form=proof")
+        if use.broadcast_use then (" mode=proof", " call-form=broadcast")
+        else if use.proof_call then (" mode=proof", " call-form=proof")
         else ("", "")
       in
       Printf.sprintf

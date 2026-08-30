@@ -182,7 +182,7 @@
   $ classify nonlinear
   VERO_UNSUPPORTED_NONLINEAR_MULTIPLICATION nonlinear.ml:1:36-1:41
   $ classify aggregate_equality
-  VERO_UNSUPPORTED_POLYMORPHISM aggregate_equality.ml:1:57-1:62
+  VERO_UNSUPPORTED_GENERIC_USE aggregate_equality.ml:1:57-1:62
   $ classify wrapping
   VERO_UNSUPPORTED_WRAPPING_ARITHMETIC wrapping.ml:1:25-1:32
   $ classify division

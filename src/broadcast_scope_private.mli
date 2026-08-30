@@ -6,6 +6,7 @@ type declaration = {
   kind : declaration_kind;
   declaration_span : Diagnostic.span;
   witness_span : Diagnostic.span option;
+  preverified : bool;
 }
 
 type target = { target_id : string; target_group : bool }

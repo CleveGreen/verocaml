@@ -1,5 +1,6 @@
 type inserted = {
   broadcast_id : string;
+  theorem_function_id : Sst.function_id;
   type_vector : Parametric_type.t list;
   qid : string;
   skid : string;
@@ -7,6 +8,8 @@ type inserted = {
   trusted : bool;
   declaration_span : Diagnostic.span;
   witness_span : Diagnostic.span option;
+  requires_count : int;
+  ensures_count : int;
   selecting_paths : string list list;
 }
 
@@ -430,6 +433,9 @@ let vector_key vector =
   String.concat "," (List.map Parametric_type.to_string vector)
 
 let candidates ~program selections occurrences =
+  [%log.trace "match broadcast candidates"
+    ~selections:(Delator.Field.int (List.length selections))
+    ~occurrences:(Delator.Field.int (List.length occurrences))];
   List.fold_left
     (fun result selection ->
       let* instances = result in
@@ -499,6 +505,12 @@ let materialize ~program ~function_id ~obligation ~build =
   in
   let occurrences = obligation_occurrences obligation in
   let* candidates = candidates ~program selections occurrences in
+  [%log.debug "materialize broadcast obligation"
+    ~function_name:(Delator.Field.string function_id.Sst.function_name)
+    ~obligation_index:(Delator.Field.int obligation.Vir.obligation_index)
+    ~selections:(Delator.Field.int (List.length selections))
+    ~occurrences:(Delator.Field.int (List.length occurrences))
+    ~candidates:(Delator.Field.int (List.length candidates))];
   if List.length candidates > instance_cap then
     Error
       (Printf.sprintf "broadcast instance cap exceeded: %d > %d"
@@ -520,8 +532,12 @@ let materialize ~program ~function_id ~obligation ~build =
             = Broadcast_declaration_private.Trusted_axiom
           in
           let metadata =
+            let definition =
+              Broadcast_declaration_private.definition theorem
+            in
             {
               broadcast_id = Broadcast_declaration_private.id theorem;
+              theorem_function_id = definition.Sst.function_id;
               type_vector = vector;
               qid = Logic_quantifier_private.vector_qid schema;
               skid = Logic_quantifier_private.vector_skid schema;
@@ -531,6 +547,9 @@ let materialize ~program ~function_id ~obligation ~build =
                 Broadcast_declaration_private.declaration_span theorem;
               witness_span =
                 Broadcast_declaration_private.witness_span theorem;
+              requires_count =
+                List.length definition.Sst.contracts.requires;
+              ensures_count = List.length definition.Sst.contracts.ensures;
               selecting_paths = selection.selecting_paths;
             }
           in

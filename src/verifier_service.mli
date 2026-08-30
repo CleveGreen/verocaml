@@ -121,6 +121,7 @@ type trusted_external_view =
     }
   | Trusted_external_body_use of {
       proof_call : bool;
+      broadcast_use : bool;
       function_ : function_ref;
       declaration_span : Diagnostic.span;
       witness_span : Diagnostic.span;

@@ -200,7 +200,7 @@ created by these commands.
   semantic validation rejected before VIR
   $ recursive_retained recursive_polymorphic
   $ ./proof_mode_tool.exe reject artifacts/recursive_polymorphic.cmt
-  adapter rejected: VERO_UNSUPPORTED_POLYMORPHISM
+  adapter rejected: VERO_UNSUPPORTED_GENERIC_USE
   $ recursive_retained recursive_higher_order
   $ ./proof_mode_tool.exe reject artifacts/recursive_higher_order.cmt
   adapter rejected: VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION
