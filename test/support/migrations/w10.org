@@ -1,0 +1,106 @@
+#+OPTIONS: author:nil toc:nil
+#+TITLE: Solver and Verification Scope Outcome Coverage
+
+This document describes grouped outcome coverage for solver behaviour,
+resource policy, and project verification scope.  Ordinary cases select closed
+semantic facts from Dune-backed fixtures.  Specialist checks cover direct
+backend operation, constrained resources, compiler-prepared artifacts, private
+scope authority, and source architecture.
+
+No assertion in this group is a deliberate presentation contract, so the
+group has no UI golden.
+
+* Solver Backend
+
+Host: ~test/solver_backend/outcome_cases.ml~
+
+Focused alias: ~@test/solver_backend/solver-backend-outcome-check~
+
+- ~arbitrary-precision-arithmetic-verifies~ selects verified status without
+  selecting translated solver text.
+- ~absolute-minimum-overflow-is-counterexample~ selects counterexample status
+  and the upper arithmetic-safety kind for absolute value.
+- ~false-goal-is-counterexample~ selects counterexample status and an assertion
+  kind.
+- ~preceding-safety-discharges-dependent-goal~ selects verified status without
+  selecting obligation order.
+- ~nonpositive-timeout-is-rejected~ checks public configuration rejection
+  structurally.
+
+The ~solver-backend-specialist-check~ alias covers direct ordinary and Z3
+parity, aggregate-sort choice, model projection, capability preflight,
+cleanup, backend isolation, quantified direct solving, and the configured
+backend profile.  A real one-millisecond backend call has an outer
+fifteen-second timeout and accepts any typed backend outcome.  Complete SMT
+text, declaration order, generated binder names, and formatting are not
+presentation contracts.
+
+* Solver Resource Policy
+
+Host: ~test/solver_resource_policy/outcome_cases.ml~
+
+Focused alias:
+~@test/solver_resource_policy/solver-resource-policy-outcome-check~
+
+- ~default-policy-is-finite~ checks that the default timeout and resource limit
+  are positive and finite.
+- ~nonpositive-policy-values-are-rejected~ checks timeout and resource-limit
+  validation.
+- ~explicit-positive-budget-is-preserved~ checks an explicitly supplied
+  positive budget.
+- ~legacy-entry-uses-positive-default~ checks the supported compatibility entry
+  without exposing an exact work count.
+
+The ~solver-resource-policy-specialist-check~ alias covers controlled resource
+exhaustion, controlled timeout, backend-unknown classification, fresh-context
+cleanup and isolation, and direct-route ownership under an outer
+ninety-second timeout.  Exact source call counts for native backends are not
+semantic policy assertions, and no function or obligation maximum is added.
+
+* Verification Scope
+
+Host: ~test/verification_scope/outcome_cases.ml~
+
+Focused alias: ~@test/verification_scope/verification-scope-outcome-check~
+
+The host builds a multi-library Dune project containing retained roots, a
+retained provider, ordinary units, and a retained client of an ordinary
+provider.  Dependencies use regular ~(libraries ...)~ stanzas.
+
+- ~ordinary-root-is-skipped~ selects verified overall status and the skipped
+  ~Legacy~ unit.
+- ~marked-legacy-is-frontend-rejected~ selects frontend rejection,
+  ~VERO_UNSUPPORTED_STRUCTURE_ITEM~, and the rejected unit.
+- ~retained-marker-semantic-parity~ compares marked and unmarked retained
+  builds while excluding only ~source-marking~.
+- ~selected-scope-order-thread-parity~ selects verified roots, dependency
+  success for the provider, representative functions, and closed parity while
+  excluding only ~execution-mode~ and ~inventory-order~.
+- ~copied-artifact-semantic-parity~ compares original and copied artifact
+  projections while excluding only ~artifact-location~.
+- ~partial-failure-preserves-unit-partition~ selects the overall
+  counterexample, its assertion kind, verified and dependency-success units,
+  and the skipped ordinary unit.
+- ~unmarked-provider-call-is-rejected~ selects frontend rejection,
+  ~VERO_UNSUPPORTED_EXTERNAL_CALL~, the rejected client, and skipped provider.
+
+The ~verification-scope-specialist-check~ alias covers duplicate roles,
+wrong-unit or wrong-family CMT and CMI pairs, explicit compilation-unit
+metadata, missing or stale interfaces, compiler marker authentication,
+zero-work private scope authority, and one-way source concentration.  The
+source constraints use inclusive maxima of ~799~ and ~399~, with measured
+values ~259~ and ~250~ and explicit architecture rationales.  They are
+specialist architecture bounds, not semantic resource counts.
+
+* Safe Execution
+
+Every specialist command that reaches a real solver or scope probe has an
+outer timeout in addition to any configured solver timeout.  Deliberate
+timeout, resource, and corrupted-artifact probes are not dependencies of the
+ordinary aliases.
+
+#+begin_src sh
+dune build @test/solver_backend/solver-backend-outcome-check
+dune build @test/solver_resource_policy/solver-resource-policy-outcome-check
+dune build @test/verification_scope/verification-scope-outcome-check
+#+end_src

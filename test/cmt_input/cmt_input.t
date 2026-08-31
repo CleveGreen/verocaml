@@ -1,16 +1,17 @@
-Compile pinned OxCaml implementation, interface, and packed artifacts. The OCaml
-assertion tool checks exact 63-bit bounds, startup-before-I/O target rejection,
-malformed and incompatible artifacts, accepted implementation metadata and
-mode evidence, resolved standard-ref paths, and source-located interface/pack
-classification.
+This transcript is the explicit CMT-loader specialist lane and is not a
+dependency of the ordinary cmt-input outcome alias. Prepared implementation and
+interface status/code behavior is asserted by outcome_cases.ml; the remaining
+direct loader checks cover target bounds, malformed/incompatible artifacts,
+accepted metadata and mode evidence, resolved standard-ref paths, and
+interface/pack classification without asserting diagnostic spans.
+
+Compile pinned OxCaml implementation, interface, and packed artifacts.
 
   $ mkdir artifacts
-  $ cp fixtures/implementation.ml fixtures/interface.mli fixtures/packed_member.ml artifacts/
-  $ (cd artifacts && ocamlc -bin-annot -c implementation.ml)
-  $ (cd artifacts && ocamlc -bin-annot -c interface.mli)
+  $ cp fixtures/packed_member.ml artifacts/
   $ (cd artifacts && ocamlc -bin-annot -c packed_member.ml)
   $ (cd artifacts && ocamlc -bin-annot -pack -o packed.cmo packed_member.cmo)
-  $ ./cmt_input_tool.exe artifacts/implementation.cmt artifacts/interface.cmti artifacts/packed.cmt
+  $ ./cmt_input_tool.exe prepared-implementation.cmt prepared-interface.cmti artifacts/packed.cmt
   CMT input checks passed
 
 An ordinary load authenticates the exact adjacent explicit CMI unit and

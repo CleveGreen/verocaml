@@ -9,4 +9,4 @@ let run () =
   (((receiver packet).ghost <- (rhs () [@ghost])) [@ghost]);
   !effects
 
-let () = Printf.printf "effects=%d\n" (run ())
+let () = if run () <> 0 then failwith "erased update evaluated its effects"

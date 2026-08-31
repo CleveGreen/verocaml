@@ -1,3 +1,12 @@
+Ordinary positive verification, semantic mutants, source-process
+VERO_SOURCE_COMPILE/cleanup facts, and project-shaped import rejection status
+are covered by outcome_cases.ml.  The retained blocks are explicit specialist
+exceptions: baseline lines 8-9 pin absence of private carriers; 46-58 and
+70-81 create and inspect real compiler-partial CMTs; 87-103 retain exact
+VERO_DEPENDENCY/no-output behavior that the grouped fixture API cannot attach
+to an unselected provider; and 108-156 is the private zero-work/forgery matrix.
+They do not participate in owned-recursive-scalar-model-outcome-check.
+
 The accepted positives and focused controls contain no invariant or capability
 carrier and verify through the production CLI.
 
@@ -7,36 +16,6 @@ carrier and verify through the production CLI.
   $ for n in $positives; do retained "$n"; done
   $ if grep -E 'type_invariant|use_type_invariant|closed.valid|invariant receipt' $(for n in $positives; do printf 'fixtures/%s.ml ' "$n"; done); then false; else echo 'positive invariant/capability carriers absent'; fi
   positive invariant/capability carriers absent
-  $ for n in $positives; do OCAML_COLOR=never ../../src/verocaml.exe verify "fixtures/$n.ml" --timeout-ms 5000 | sed -E 's@file=fixtures/[^ ]+@file=FIXTURE@; s/functions=[0-9]+ obligations=[0-9]+/verified-shape/'; done
-  verocaml: verified file=FIXTURE verified-shape
-  verocaml: verified file=FIXTURE verified-shape
-  verocaml: verified file=FIXTURE verified-shape
-  verocaml: verified file=FIXTURE verified-shape
-  verocaml: verified file=FIXTURE verified-shape
-  verocaml: verified file=FIXTURE verified-shape
-  verocaml: verified file=FIXTURE verified-shape
-  verocaml: verified file=FIXTURE verified-shape
-  verocaml: verified file=FIXTURE verified-shape
-
-The explicit cut fixture constructs two Nodes, excludes an empty/singleton
-predecessor with length two and nonempty, and pins the pre-cut head with old.
-
-  $ grep -c 'next = Node' fixtures/nonvacuous_cut.ml
-  1
-  $ grep -F 'shape.has_two_nodes' fixtures/nonvacuous_cut.ml | wc -l
-  3
-  $ grep -F 'view.head = [%verocaml.old (model stack).head]' fixtures/nonvacuous_cut.ml
-        && view.head = [%verocaml.old (model stack).head]
-  $ sed -e '0,/let two_nodes first second/s//let two_nodes first (second : int)/' -e '0,/next = Node { value = second; next = Empty }/s//next = Empty/' fixtures/nonvacuous_cut.ml > artifacts/nonvacuous_cut_singleton_mutant.ml
-  $ if OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/nonvacuous_cut_singleton_mutant.ml --timeout-ms 1000 > artifacts/nonvacuous_cut_singleton_mutant.out 2>&1; then false; else echo 'singleton-predecessor-mutant=rejected'; fi
-  singleton-predecessor-mutant=rejected
-  $ grep -o 'counterexample function=Stack.two_nodes' artifacts/nonvacuous_cut_singleton_mutant.out
-  counterexample function=Stack.two_nodes
-  $ sed '/record.next <- Empty;/d' fixtures/nonvacuous_cut.ml > artifacts/nonvacuous_cut_omit_next_write_mutant.ml
-  $ if OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/nonvacuous_cut_omit_next_write_mutant.ml --timeout-ms 1000 > artifacts/nonvacuous_cut_omit_next_write_mutant.out 2>&1; then false; else echo 'omit-next-write-mutant=rejected'; fi
-  omit-next-write-mutant=rejected
-  $ grep -o 'counterexample function=Stack.cut' artifacts/nonvacuous_cut_omit_next_write_mutant.out
-  counterexample function=Stack.cut
 
 Five retained negative rows reject in the driver. Four source rows reject
 through the production source compiler, produce no requested SST/VIR, and make
@@ -56,17 +35,6 @@ real partial CMTs, which are tested separately at the loader boundary.
   model_effect=source-rejected
   $ source_reject ghost_mode_recovery 'specification code cannot create or receive Tracked values'
   ghost_mode_recovery=source-rejected
-  $ source_cli_reject () { n=$1; pattern=$2; if OCAML_COLOR=never ../../src/verocaml.exe verify "fixtures/$n.ml" --dump-sst "artifacts/$n.source.sst" --dump-vir "artifacts/$n.source.vir" >"artifacts/$n.source" 2>&1; then echo unexpected-success; return 1; else grep -F 'error[VERO_SOURCE_COMPILE]' "artifacts/$n.source" >/dev/null && grep -F "$pattern" "artifacts/$n.source" >/dev/null && test ! -e "artifacts/$n.source.sst" && test ! -e "artifacts/$n.source.vir" && echo "$n=production-source-rejected"; fi; }
-  $ source_cli_reject client_representation_access 'Unbound record field "top"'
-  client_representation_access=production-source-rejected
-  $ source_cli_reject node_escape_or_equality 'expected to be "read_write"'
-  node_escape_or_equality=production-source-rejected
-  $ source_cli_reject model_effect 'expected to be "read_write"'
-  model_effect=production-source-rejected
-  $ source_cli_reject ghost_mode_recovery 'specification code cannot create or receive Tracked values'
-  ghost_mode_recovery=production-source-rejected
-  $ echo 'source-counter-claim=none fresh-process-fail-closed=true'
-  source-counter-claim=none fresh-process-fail-closed=true
   $ for n in client_representation_access node_escape_or_equality model_effect ghost_mode_recovery; do test -s "artifacts/$n.cmt"; wc -c < "artifacts/$n.cmt"; done
   30089
   20557

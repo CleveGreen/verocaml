@@ -1,0 +1,158 @@
+#+OPTIONS: author:nil toc:nil
+#+TITLE: Proof Routing, Totality, and VC Outcome Coverage
+
+This document describes grouped outcome coverage for proof activation, proof
+body assertions, proof modes, direct totality, VC dispatch, and prepared VC
+jobs.  Ordinary cases select status, stable codes, semantic kinds, keyed units,
+named facts, process facts, and closed parity.  Specialist checks retain
+private routing, scheduler, artifact, compiler, runtime, and resource contracts.
+
+This group has no UI golden and no ordinary resource maximum.
+
+* Proof Activation Routing
+
+Host: ~test/proof_activation_routing/outcome_cases.ml~
+
+- ~reached-proof-fanout~ selects the verified unit, representative proof
+  functions, and postcondition or call-precondition kinds.
+- ~ordinary-contract-matches~ selects verified functions plus local-assertion
+  and postcondition kinds.
+- ~external-finite-formal-rejected~ selects process exit ~2~,
+  ~VERO_DEPENDENCY~, and registered colour forwarding.
+- The missing, sibling, later, cross-callable, and opaque reveal cases select
+  counterexample status, the failing function, keyed unit, and postcondition or
+  call-precondition kind.
+
+The specialist lane checks activation issuance and consumption, path routing,
+manifest authentication, rejection before dispatch, and exact private resource
+transitions.
+
+* Proof Body Assertions
+
+Host: ~test/proof_body_assertions/outcome_cases.ml~
+
+Reconstruction and parity cases:
+
+- ~immutable-reconstruction-source-cmt-parity~
+- ~immutable-reconstruction-matrix~
+- ~immutable-reconstruction-cohabitation~
+- ~builtin-assert-source-cmt-parity~
+- ~builtin-assert-noassert-semantic-parity~
+
+These cases select verified or counterexample status, keyed units, named
+functions, local-assertion or postcondition kinds, and declared input or
+compile-mode parity.
+
+Proof-region and fact-flow cases include:
+
+- ~exec-proof-region-fact-export~ and the isolated ~exec-region-*~ cases
+- ~proof-local-assertion-matrix~ and ~finite-empty-node-assertion~
+- ~branch-local-fact-scoping~ and ~one-predecessor-does-not-prove-join~
+- ~recursive-proof-summary~ and ~removed-recursive-summary~
+- the reveal-placement cases and ~simple-local-assertion~
+- ~builtin-assert-false~
+
+Nullary and finite controls include ~finite-empty-node-wrong~,
+~non-nullary-ground-abstains~, ~nullary-recursive-symbolic-positive~,
+~nullary-recursive-wrong-result~, ~nullary-recursive-reachable-false~, and
+~nullary-recursive-symbolic-expected~.  They select the stable verified,
+counterexample, or inconclusive status and the owning local-assertion fact.
+
+Frontend and process cases cover raw, effectful, imported, non-boolean,
+value-position, mutation, and lookalike assertions.  They select the stable
+~VERO_*~ code when available; compiler and semantic-validation failures that
+produce no closed verifier outcome remain specialist exceptions.
+
+The specialist lane covers retained PPX carriers, internal reconstruction
+shape, forced-ground and retry behaviour, path caches, malformed batches,
+session-affine authority, CMT relocation, install and runtime erasure,
+authentication attacks, and cleanup.  Complete SST or VIR output, ordinals,
+generated paths, and exact counters are not ordinary expectations.
+
+* Proof Mode
+
+Host: ~test/proof_mode/outcome_cases.ml~
+
+- ~proof-declarations-and-region~ selects verified proof declarations and
+  assertion, postcondition, and proof-call precondition kinds.
+- ~trusted-external-proof-call~ selects the verified ~assume~ and ~caller~
+  functions and their postconditions.
+- ~recursive-proof-totality~ and ~recursive-bool-proof~ select verified units,
+  functions, entry and recursive-measure facts, and postconditions.
+- ~negative-entry-measure~ and ~non-strict-recursive-measure~ select
+  counterexample units and their failing measure kinds.
+- Stable-code cases cover value-position proof regions, mutation,
+  higher-order use, loops, external calls, recursive polymorphism, and
+  recursive external or higher-order calls.
+
+Specialist checks cover handmade SST, PPX authentication, complete recursive
+lowering, malformed decrease and proof-call input, erasure, and installed
+private surfaces.
+
+* Proof Region Modes
+
+Host: ~test/proof_region_modes/outcome_cases.ml~
+
+- ~trusted-unique-return~ and ~checked-unique-return~ select verified units,
+  functions, postconditions, and proof-call preconditions.
+- ~completed-result-invariant-transition~ and ~recursive-control~ select
+  verified transition and recursion facts.
+- Source-written, old direct-carrier, and
+  ~effectful-proof-region-payload~ cases select frontend rejection and their
+  stable codes.
+
+Specialist checks cover mode capture and remapping, retained and ordinary
+erasure, CMT and Typedtree mutation, validation-stage boundaries, finite
+receipts, lifecycle counters, and trace ordering.
+
+* Direct Totality
+
+Host: ~test/direct_totality/outcome_cases.ml~
+
+- ~countdown-totality~ selects the verified unit and entry, arithmetic, call,
+  recursive nonnegative, strict-descent, and postcondition kinds.
+- ~overflowing-measure-counterexample~ and ~harmless-let-rec~ select their
+  counterexample or verified units and measure facts.
+- ~mutual-recursion-rejected~ and ~loop-rejected~ select frontend rejection,
+  ~VERO_UNSUPPORTED_MUTUAL_RECURSION~ or ~VERO_UNSUPPORTED_LOOP~, and keyed
+  units.
+
+Specialist checks cover SCC and descriptor architecture, installed private
+surfaces, and malformed termination preparation that has no closed projection.
+
+* Function VC Dispatch
+
+Host: ~test/function_vc_dispatch/outcome_cases.ml~
+
+~serial-threaded-semantic-parity~ selects a verified Dune fixture, keyed
+functions and local assertions, explicit execution-mode facts, and closed
+serial/threaded parity.
+
+The specialist lane checks frontier construction, bounded concurrency,
+scheduler lifecycle, lazy SST, cleanup, retained recursive dependencies,
+injected-error ordering, source topology, and private interfaces.
+
+* Prepared VC Jobs
+
+Host: ~test/prepared_vc_jobs/outcome_process_cases.ml~
+
+The cases ~threads-zero~, ~threads-negative~, ~threads-nonnumeric~,
+~threads-overflow~, ~threads-duplicate~, ~threads-missing-value~, and
+~threads-runtime-maximum~ select exit ~2~, ~VERO_CLI~, and registered
+~OCAML_COLOR~ forwarding.
+
+Specialist checks cover the prepared-job bridge, opaque ownership, controlled
+resource exhaustion, recursive scheduling and cutoff, telemetry lifecycle,
+session cleanup, and private interfaces.
+
+* Commands
+
+#+begin_src sh
+dune build @test/proof_activation_routing/proof-activation-routing-outcome-check
+dune build @test/proof_body_assertions/proof-body-assertions-outcome-check
+dune build @test/proof_mode/proof-mode-outcome-check
+dune build @test/proof_region_modes/proof-region-modes-outcome-check
+dune build @test/direct_totality/direct-totality-outcome-check
+dune build @test/function_vc_dispatch/function-vc-dispatch-outcome-check
+dune build @test/prepared_vc_jobs/prepared-vc-jobs-outcome-check
+#+end_src

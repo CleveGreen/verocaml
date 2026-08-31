@@ -17,9 +17,58 @@
   ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
  (libraries verocaml_core compiler-libs.common))
 
+(executable
+ (name verification_scope_architecture_tool)
+ (modules verification_scope_architecture_tool))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support verocaml_core compiler-libs.common))
+
+(rule
+ (targets
+  verification-scope-outcome-cases.result-report
+  verification-scope-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  (glob_files fixtures/*)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   verification-scope-outcome-cases.result-report
+   verification-scope-outcome-cases.failure-archive)))
+
+(rule
+ (alias verification-scope-outcome-check)
+ (deps
+  (:report verification-scope-outcome-cases.result-report)
+  (:archive verification-scope-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
 (cram
+ (alias verification-scope-specialist-check)
+ (runtest_alias false)
  (deps
   (glob_files fixtures/*)
+  verification_scope_architecture_tool.exe
   verification_scope_counter_tool.exe
   ../../src/verocaml.exe
   ../../src/verification_scope_private.ml
@@ -31,4 +80,9 @@
 (alias
  (name verification-scope-check)
  (deps
-  (alias runtest)))
+  (alias verification-scope-outcome-check)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias verification-scope-outcome-check)))

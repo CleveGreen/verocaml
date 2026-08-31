@@ -16,9 +16,63 @@
   ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
  (action
   (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support unix))
+
+(rule
+ (targets
+  trusted-external-bodies-outcome-cases.result-report
+  trusted-external-bodies-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  (glob_files fixtures/*.ml)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   trusted-external-bodies-outcome-cases.result-report
+   trusted-external-bodies-outcome-cases.failure-archive)))
+
+(rule
+ (alias trusted-external-bodies-outcome-check)
+ (deps
+  (:report trusted-external-bodies-outcome-cases.result-report)
+  (:archive trusted-external-bodies-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
 (cram
+ (alias trusted-external-bodies-specialist-check)
+ (runtest_alias false)
  (deps (glob_files fixtures/*.ml) trusted_external_bodies_tool.exe
   ../../ppx/vero_ppx.exe ../../src/verocaml.exe
   ../../runtime/vero_ghost.cma
   ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
-(alias (name trusted-external-bodies-check) (deps (alias runtest)))
+
+(alias
+ (name trusted-external-bodies-check)
+ (deps
+  (alias trusted-external-bodies-outcome-check)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias trusted-external-bodies-outcome-check)))

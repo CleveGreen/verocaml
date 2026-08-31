@@ -1,7 +1,8 @@
 (executable
  (name finite_formal_counter_tool)
  (modules finite_formal_counter_tool finite_formal_counter_prerequisites)
- (flags (:standard -I src/.verocaml_core.objs/byte))
+ (flags
+  (:standard -I src/.verocaml_core.objs/byte))
  (libraries verocaml_core))
 
 (rule
@@ -11,7 +12,52 @@
   ../../src/.verocaml_core.objs/byte/imported_callable.cmi
   ../../src/.verocaml_core.objs/byte/verification_session.cmi)
  (action
-  (with-stdout-to %{targets} (echo "let ready = ()"))))
+  (with-stdout-to
+   %{targets}
+   (echo "let ready = ()"))))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support))
+
+(rule
+ (targets
+  finite-formal-propagation-outcome-cases.result-report
+  finite-formal-propagation-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  (glob_files fixtures/*.ml)
+  (glob_files fixtures/*.mli)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   finite-formal-propagation-outcome-cases.result-report
+   finite-formal-propagation-outcome-cases.failure-archive)))
+
+(rule
+ (alias finite-formal-propagation-outcome-check)
+ (deps
+  (:report finite-formal-propagation-outcome-cases.result-report)
+  (:archive finite-formal-propagation-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
 
 (cram
  (deps
@@ -26,4 +72,10 @@
 
 (alias
  (name finite-formal-propagation-check)
- (deps (alias runtest)))
+ (deps
+  (alias finite-formal-propagation-outcome-check)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias finite-formal-propagation-outcome-check)))

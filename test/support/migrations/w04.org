@@ -1,0 +1,147 @@
+#+OPTIONS: author:nil toc:nil
+#+TITLE: Finite Values, Ranks, and Structural Induction Outcome Coverage
+
+This document describes grouped outcome coverage for finite-formal flow,
+finite-result promotion, rank domains, and structural induction.  Ordinary
+cases select status, stable frontend codes, semantic kinds, keyed units, and
+named functions or obligations.  Specialist checks retain private authority,
+compiler-artifact, runtime, and bounded-resource contracts.
+
+This group has no UI golden.  Complete SST or VIR renders, generated identities,
+ordering, spans, and exact private counters are not ordinary expectations.
+
+* Finite Formal Propagation
+
+Host: ~test/finite_formal_propagation/outcome_cases.ml~
+
+- ~accepted-finite-formal-flows~ selects verified units and representative
+  executable, proof, mode, generic, and recursive-descent facts.
+- ~generic-policy-rejections~ selects frontend rejection, keyed units, and
+  ~VERO_UNSUPPORTED_POLYMORPHISM~,
+  ~VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION~, or ~VERO_UNSUPPORTED_TYPE~.
+- ~public-interface-success~ and ~public-interface-rejections~ cover public
+  proof functions, unit disposition, and stable aggregate or polymorphism
+  codes.
+- ~same-cmt-signature-rejections~ selects
+  ~VERO_UNSUPPORTED_STRUCTURE_ITEM~ for the supported projected boundary.
+- ~retained-provider-consumer~ selects provider and consumer units,
+  representative functions, and call semantics.
+- ~transferred-precondition-failure~ selects the counterexample unit,
+  ~caller~, ~checked~, and ~Call_precondition(checked)~.
+
+Specialist checks cover registry lifecycle, retained ABI and parser attacks,
+transfer counters, adjacent-interface authentication, CMI-only input,
+unprojected malformed-SST failures, PPX marker syntax, compiler output cleanup,
+artifact erasure, and complete internal encoding determinism.
+
+* Finite Induction
+
+Host: ~test/finite_induction/outcome_cases.ml~
+
+~accepted-finite-induction~ selects verified finite-induction, ordinary direct
+return, and push-front units; representative functions including
+~node_eq_refl~ and ~make_n_nodes~; and recursive strict descent.
+
+The specialist lane covers source and install architecture constraints plus
+nonfinite construction barriers that fail before a closed outcome can be
+projected.
+
+* Finite Result Promotion
+
+Host: ~test/finite_result_promotion/outcome_cases.ml~
+
+- ~promotion-successes~ selects the verified unit set, representative
+  construction and consumption functions, and recursive descent.
+- ~failed-obligation-inconclusive~ selects an inconclusive postcondition for
+  ~make_n_nodes~.
+- ~nondecreasing-actual-counterexample~ selects a strict-descent
+  counterexample for ~build~.
+- ~frontend-rejections~ selects keyed units and the applicable stable codes,
+  including ~VERO_MALFORMED_GHOST_CALL~,
+  ~VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION~,
+  ~VERO_UNSUPPORTED_TOP_LEVEL_BINDING~, and
+  ~VERO_UNSUPPORTED_MUTUAL_RECURSION~.
+
+Specialist checks cover publication lifecycle and counters, malformed-SST
+barriers, call-instance authority, mutable or shared carrier rejection, raw
+PPX failure, and retained-result import failures without a closed projection.
+
+* Finite Value Receipts
+
+Host: ~test/finite_value_receipts/outcome_cases.ml~
+
+- ~positive-construction-flows~ selects verified construction and local
+  executable or tracked chains.
+- ~local-result-transfer~ selects the verified ~Box.make~, ~Box.read~, and
+  ~run~ path.
+- ~direct-cycle-rejection~, ~indirect-cycle-rejection~, and
+  ~recursive-factory-rejection~ select frontend status, keyed units, and the
+  stable top-level-binding or structure-item code.
+
+Specialist checks cover receipt identity and lifecycle, completed-callee and
+finalization counters, injected failed transfer, unavailable-receipt barriers,
+and mutable carriers rejected before backend work.
+
+* Parametric Rank Domains
+
+Host: ~test/parametric_rank_domain/outcome_cases.ml~
+
+- ~positive-rank-domains~ selects three verified units, representative rank
+  functions, and recursive descent.
+- ~retained-provider-consumer~ selects the provider and consumer units and
+  representative retained-rank functions.
+- The ~negative_*~ cases select frontend rejection, keyed units, and stable
+  unsupported-structure, aggregate, type, or dependency codes for abstract,
+  cyclic, function, reference, array, mutable, nonuniform, stale, forged,
+  rebound, and unknown payload forms.
+
+Specialist checks cover schema construction, clone repeatability, retained
+payload confidentiality, malformed mutual-SCC or tuple actuals, and source
+concentration constraints.
+
+* Rank-Backed Specifications
+
+Host: ~test/rank_backed_specifications/outcome_cases.ml~
+
+- ~rank-backed-specifications~, ~rank-backed-proof~, and
+  ~shape-only-verification~ select verified units, representative functions,
+  and proof or recursion facts.
+- ~profile-mismatch-rejection~, ~reference-carrier-rejection~,
+  ~function-carrier-rejection~, ~object-carrier-rejection~,
+  ~foreign-carrier-rejection~, and ~abstract-carrier-rejection~ select keyed
+  units and stable frontend codes.
+- ~polymorphic-carrier-accepted~ selects its verified unit.
+- ~no-finite-alias-rejection~, ~no-finite-rebinding-rejection~,
+  ~no-finite-branch-rejection~, ~runtime-cycle-rejection~, and
+  ~runtime-indirect-cycle-rejection~ select keyed units and the applicable
+  malformed-ghost, top-level-binding, or mutual-recursion code.
+
+Specialist checks cover rank descriptor architecture, mixed proof domains,
+installed surface and filesystem isolation, mode forgetting, malformed
+validation barriers, replay attacks, and finite-authority barriers.
+
+* Structural Induction Composition
+
+Host: ~test/structural_induction_composition/outcome_cases.ml~
+
+- ~positive-structural-proofs~ selects verified list and tree units,
+  representative proof functions, postconditions, and recursive descent.
+- ~one-branch-inconclusive~, ~premise-omitted-counterexample~,
+  ~early-assertion-inconclusive~, and ~negative-value-counterexample~ select
+  status, keyed unit, owning function, and postcondition or assertion kind.
+
+Specialist checks cover rank and fuel resources, summary authority, deliberate
+proof mutants, malformed child relations, conditional revisit barriers, and
+private replay or cross-profile attacks.
+
+* Commands
+
+#+begin_src sh
+dune build @test/finite_formal_propagation/finite-formal-propagation-check
+dune build @test/finite_induction/finite-induction-check
+dune build @test/finite_result_promotion/finite-result-promotion-check
+dune build @test/finite_value_receipts/finite-value-receipts-check
+dune build @test/parametric_rank_domain/parametric-rank-domain-check
+dune build @test/rank_backed_specifications/rank-backed-specifications-check
+dune build @test/structural_induction_composition/structural-induction-composition-check
+#+end_src

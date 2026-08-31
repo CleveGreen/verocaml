@@ -1,8 +1,64 @@
 (executable
  (name proof_mode_tool)
  (libraries verocaml_core compiler-libs.common))
+
 (cram
- (deps (glob_files fixtures/*.ml) proof_mode_tool.exe ../../verocaml.install
-  ../../ppx/vero_ppx.exe ../../runtime/vero_ghost.cma
+ (deps
+  (glob_files fixtures/*.ml)
+  proof_mode_tool.exe
+  ../../verocaml.install
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
   ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
-(alias (name proof-mode-check) (deps (alias runtest)))
+
+(alias
+ (name proof-mode-check)
+ (deps
+  (alias runtest)))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support))
+
+(rule
+ (targets
+  proof-mode-outcome-cases.result-report
+  proof-mode-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  integration-library-environment.manifest
+  (glob_files fixtures/*.ml))
+ (action
+  (run
+   %{suite}
+   --produce
+   proof-mode-outcome-cases.result-report
+   proof-mode-outcome-cases.failure-archive)))
+
+(rule
+ (alias proof-mode-outcome-check)
+ (deps
+  (:report proof-mode-outcome-cases.result-report)
+  (:archive proof-mode-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
+(alias
+ (name runtest)
+ (deps
+  (alias proof-mode-outcome-check)))

@@ -4,14 +4,6 @@ terminal immutable snapshot.
 
   $ mkdir artifacts
   $ retained () { n=$1; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$n.cmo" "fixtures/$n.ml"; }
-  $ for n in constructor_drop constructor_zero_head root_rebase nested_cut equal_branch terminal_snapshot; do OCAML_COLOR=never ../../src/verocaml.exe verify "fixtures/$n.ml" --timeout-ms 5000 | sed -E 's#file=.*#file=FIXTURE#'; done
-  verocaml: verified file=FIXTURE
-  verocaml: verified file=FIXTURE
-  verocaml: verified file=FIXTURE
-  verocaml: verified file=FIXTURE
-  verocaml: verified file=FIXTURE
-  verocaml: verified file=FIXTURE
-
   $ for n in constructor_drop constructor_zero_head root_rebase nested_cut equal_branch terminal_snapshot arbitrary_entry use_invariant_from_formal invalid_one_write temporarily_invalid_multi_write copied_or_rebound ghost_forgetting mixed_call_instance_adversary two_valid_call_instances_adversary trusted_transition; do retained "$n"; done
 
 The packaged rejection rows stay on their selected boundaries.  The invalid
@@ -19,20 +11,13 @@ successors reach a concrete preservation counterexample; the temporarily
 invalid first write prevents the later repair from being validated.
 
   $ reject () { n=$1; if OCAML_COLOR=never ../../src/verocaml.exe verify "fixtures/$n.ml" --timeout-ms 5000 >"artifacts/$n.out" 2>&1; then echo unexpected-success; return 1; else echo "$n=rejected"; fi; }
-  $ for n in arbitrary_entry use_invariant_from_formal invalid_one_write temporarily_invalid_multi_write copied_or_rebound ghost_forgetting imported_transition trusted_transition; do reject "$n"; done
+  $ for n in arbitrary_entry use_invariant_from_formal copied_or_rebound ghost_forgetting imported_transition trusted_transition; do reject "$n"; done
   arbitrary_entry=rejected
   use_invariant_from_formal=rejected
-  invalid_one_write=rejected
-  temporarily_invalid_multi_write=rejected
   copied_or_rebound=rejected
   ghost_forgetting=rejected
   imported_transition=rejected
   trusted_transition=rejected
-  $ grep -o 'counterexample function=Stack.invalidate[^ ]* vc=invariant-transition-preservation' artifacts/invalid_one_write.out
-  counterexample function=Stack.invalidate#4 vc=invariant-transition-preservation
-  $ grep -o 'counterexample function=Stack.repair_late[^ ]* vc=invariant-transition-preservation' artifacts/temporarily_invalid_multi_write.out
-  counterexample function=Stack.repair_late#4 vc=invariant-transition-preservation
-  $ test "$(grep -c 'counterexample.*invariant-transition-preservation' artifacts/temporarily_invalid_multi_write.out)" -eq 1
   $ grep -q 'error.*VERO_SOURCE_COMPILE' artifacts/imported_transition.out
   $ test ! -e artifacts/imported_transition.cmt
   $ echo 'negative=imported_transition rejected=source-compiler-before-session lifecycle=0/0/0 teardown=0 dependent=0/0/0 preservation=0'

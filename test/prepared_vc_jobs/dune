@@ -1,7 +1,8 @@
 (executable
  (name prepared_vc_jobs_tool)
  (modules prepared_vc_jobs_tool prepared_vc_jobs_prerequisites)
- (flags (:standard -I src/.verocaml_core.objs/byte))
+ (flags
+  (:standard -I src/.verocaml_core.objs/byte))
  (libraries verocaml_core compiler-libs.common))
 
 (rule
@@ -15,11 +16,13 @@
   ../../src/.verocaml_core.objs/byte/verification_solver_private.cmi
   ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
  (action
-  (with-stdout-to %{targets} (echo "let ready = ()"))))
+  (with-stdout-to
+   %{targets}
+   (echo "let ready = ()"))))
 
 (cram
  (deps
- prepared_vc_jobs_tool.exe
+  prepared_vc_jobs_tool.exe
   (glob_files ../proof_body_assertions/fixtures/*.ml)
   (glob_files ../private_receipt/fixtures/*.ml)
   ../../src/verocaml.exe
@@ -29,4 +32,51 @@
 
 (alias
  (name prepared-vc-jobs-check)
- (deps (alias runtest)))
+ (deps
+  (alias runtest)))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_process_cases)
+ (modules outcome_process_cases integration_environment)
+ (libraries outcome_test_support))
+
+(rule
+ (targets
+  prepared-vc-jobs-outcome-process-cases.result-report
+  prepared-vc-jobs-outcome-process-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_process_cases.exe)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   prepared-vc-jobs-outcome-process-cases.result-report
+   prepared-vc-jobs-outcome-process-cases.failure-archive)))
+
+(rule
+ (alias prepared-vc-jobs-outcome-check)
+ (deps
+  (:report prepared-vc-jobs-outcome-process-cases.result-report)
+  (:archive prepared-vc-jobs-outcome-process-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
+(alias
+ (name runtest)
+ (deps
+  (alias prepared-vc-jobs-outcome-check)))

@@ -1,3 +1,11 @@
+Ordinary verification, counterexample, trusted-body, and project/prepared-CMT
+parity behavior is covered by outcome_cases.ml.  The retained transcript is an
+explicit specialist exception: baseline lines 21-45 pin private heap/SST/VIR
+and backend architecture, 71-78 separates shared and unique lowering, 83-105
+asserts zero-work rejection before the VERO-113 projection exists, 118-131
+guards process-local forgery/lifecycle authority, and 149-152 guards runtime
+erasure.  None participates in shared-scalar-heap-outcome-check.
+
 The bounded shared-scalar slice is authenticated from retained source/CMT
 input. Its positive one- and two-write examples verify, while all lifecycle
 counters balance per symbolic path.
@@ -5,14 +13,6 @@ counters balance per symbolic path.
   $ mkdir artifacts
   $ retained () { n=$1; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$n.cmo" "fixtures/$n.ml"; }
   $ for n in increment_through_alias two_write_exact_alias old_entry_views scalar_result_and_assert mixed_unique_shared overflow_rhs two_formal_counterexample two_formal_false_old wrong_final_constant remove_first_write remove_second_write local_no_disequality forgery_seed; do retained "$n"; done
-  $ ./shared_scalar_heap_tool.exe verify artifacts/increment_through_alias.cmt
-  status=verified functions=1 obligations=3 heap=1/1/4/1/1
-  $ ./shared_scalar_heap_tool.exe verify artifacts/two_write_exact_alias.cmt
-  status=verified functions=1 obligations=10 heap=2/4/14/4/2
-  $ ./shared_scalar_heap_tool.exe verify artifacts/old_entry_views.cmt
-  status=verified functions=2 obligations=4 heap=2/3/6/3/2
-  $ ./shared_scalar_heap_tool.exe verify artifacts/scalar_result_and_assert.cmt
-  status=verified functions=1 obligations=3 heap=1/1/4/1/1
 
 The two-write semantic SST names two ordered epochs. VIR exposes the exact
 newest-first nested integer conditional, entry/current views, and remains
@@ -44,29 +44,9 @@ authority is issued.
   $ ./shared_scalar_heap_tool.exe route artifacts/two_write_exact_alias.cmt
   ordinary=10 direct-z3=10 recursive=0 finite=0 invariant=0 unique=0 recursive-authority=0
 
-Unknown formal identity remains unknown: same-location models invalidate frame
-claims and the false old-y theorem. A local parameter mode introduces no
-disequality. Removing a write or changing the theorem's constant also yields a
-counterexample rather than a vacuous proof. Checked RHS overflow remains a
-separate failing obligation.
-
-  $ for n in two_formal_counterexample two_formal_false_old local_no_disequality wrong_final_constant remove_first_write remove_second_write overflow_rhs; do printf "$n: "; ./shared_scalar_heap_tool.exe verify "artifacts/$n.cmt" | sed -E 's/ functions=.*//'; done
-  two_formal_counterexample: status=counterexample
-  two_formal_false_old: status=counterexample
-  local_no_disequality: status=counterexample
-  wrong_final_constant: status=counterexample
-  remove_first_write: status=counterexample
-  remove_second_write: status=counterexample
-  overflow_rhs: status=counterexample
-  $ ./shared_scalar_heap_tool.exe dump-vir artifacts/overflow_rhs.cmt | grep -E 'arithmetic-(lower|upper)' | sed -E 's/.*(arithmetic-(lower|upper)).*/\1/' | sort -u
-  arithmetic-lower
-  arithmetic-upper
-
 A mixed source unit keeps the existing unique functional transition separate.
 Only the shared function has heap audit records.
 
-  $ ./shared_scalar_heap_tool.exe verify artifacts/mixed_unique_shared.cmt
-  status=verified functions=2 obligations=2 heap=1/1/1/1/1
   $ ./shared_scalar_heap_tool.exe dump-sst artifacts/mixed_unique_shared.cmt > artifacts/mixed.sst
   $ grep -E '^function |mutation-policy bounded|shared-scalar-field-write|      field-write' artifacts/mixed.sst | sed -E 's/ @ .*$//'
   function update_shared#0 mode=exec recursive=false result=unit policy=default-linear/default-z3
@@ -103,11 +83,6 @@ compiled separately so its source record is not local to the consumer CMT.
   reject_shadowing: rejected heap=0/0/0/0/0 vir=0 ordinary=0 direct-z3=0 recursive=0
   reject_third_write: rejected heap=0/0/0/0/0 vir=0 ordinary=0 direct-z3=0 recursive=0
   reject_imported: rejected heap=0/0/0/0/0 vir=0 ordinary=0 direct-z3=0 recursive=0
-  $ ./shared_scalar_heap_tool.exe classify artifacts/reject_trusted_body.cmt
-  accepted
-  $ ./shared_scalar_heap_tool.exe verify artifacts/reject_trusted_body.cmt
-  status=verified functions=0 obligations=0 heap=0/0/0/0/0
-  $ ! ./shared_scalar_heap_tool.exe dump-sst artifacts/reject_trusted_body.cmt | grep -q 'bounded-shared-scalar-heap-v1'
 
 Copied/raw descriptor policy plus forged path, epoch, type and field identities
 cannot recreate the process-local issuance. The capability rejects duplicate
@@ -129,19 +104,6 @@ private issuance is rejected.
   inactive-session: rejected
   $ ./shared_scalar_heap_tool.exe forged-vir-conditional
   forged-vir-conditional: rejected
-
-Direct source verification and retained-CMT verification produce identical
-semantic dumps after removing only the input-authority presentation line.
-
-  $ mkdir artifacts/temp
-  $ TMPDIR="$PWD/artifacts/temp" ../../src/verocaml.exe verify fixtures/increment_through_alias.ml --dump-sst artifacts/source.sst --dump-vir artifacts/source.vir
-  verocaml: verified file=fixtures/increment_through_alias.ml functions=1 obligations=3
-  $ ../../src/verocaml.exe verify artifacts/increment_through_alias.cmt --dump-sst artifacts/cmt.sst --dump-vir artifacts/cmt.vir
-  verocaml: verified file=artifacts/increment_through_alias.cmt functions=1 obligations=3
-  $ sed -E '/^authority=retained /d; s/snapshot=[0-9a-f]+/snapshot=<digest>/g' artifacts/source.sst > artifacts/source.semantic.sst
-  $ sed -E '/^authority=retained /d; s/snapshot=[0-9a-f]+/snapshot=<digest>/g' artifacts/cmt.sst > artifacts/cmt.semantic.sst
-  $ cmp artifacts/source.semantic.sst artifacts/cmt.semantic.sst
-  $ cmp artifacts/source.vir artifacts/cmt.vir
 
 The ordinary erased executable has no verification runtime dependency and the
 same-actual 42 instance evaluates to 86.

@@ -3,7 +3,8 @@
  (modules
   structural_induction_composition_tool
   structural_induction_composition_prerequisites)
- (flags (:standard -I src/.verocaml_core.objs/byte))
+ (flags
+  (:standard -I src/.verocaml_core.objs/byte))
  (libraries verocaml_core compiler-libs.common))
 
 (rule
@@ -13,7 +14,51 @@
   ../../src/.verocaml_core.objs/byte/verification_driver_private.cmi
   ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
  (action
-  (with-stdout-to %{targets} (echo "let ready = ()"))))
+  (with-stdout-to
+   %{targets}
+   (echo "let ready = ()"))))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support))
+
+(rule
+ (targets
+  structural-induction-composition-outcome-cases.result-report
+  structural-induction-composition-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  (glob_files fixtures/*.ml)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   structural-induction-composition-outcome-cases.result-report
+   structural-induction-composition-outcome-cases.failure-archive)))
+
+(rule
+ (alias structural-induction-composition-outcome-check)
+ (deps
+  (:report structural-induction-composition-outcome-cases.result-report)
+  (:archive structural-induction-composition-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
 
 (cram
  (deps
@@ -26,4 +71,10 @@
 
 (alias
  (name structural-induction-composition-check)
- (deps (alias runtest)))
+ (deps
+  (alias structural-induction-composition-outcome-check)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias structural-induction-composition-outcome-check)))

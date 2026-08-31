@@ -1,157 +1,81 @@
-The project command accepts only explicit CMT/CMI pairs.  The ordinary legacy
-unit is compiled without ghost retention; selection skips it before retained
-candidacy and every semantic/backend/private-driver counter remains zero.
+This transcript retains CMT-authentication, private-owner counter, and source-architecture checks.
 
-  $ mkdir ordinary retained copied stale family parameterized argument-for
+  $ mkdir ordinary ordinary-marked retained stale family parameterized argument-for
   $ export PPX_ORDINARY="$PWD/../../ppx/vero_ppx.exe"
   $ export PPX_RETAINED="$PWD/../../ppx/vero_ppx.exe --keep-ghost"
   $ export GHOST="$PWD/../../runtime/.vero_ghost.objs/byte"
   $ compile () { dir=$1; ppx=$2; src=$3; shift 3; (cd "$dir" && ocamlc -w -A -alert -all -bin-annot -I "$GHOST" -ppx "$ppx" "$@" -c "$src"); }
+  $ project () { OCAML_COLOR=never ../../src/verocaml.exe verify-project "$@" --timeout-ms 60000; }
+
+An unselected ordinary root performs no work at any private verification owner.
+
   $ cp fixtures/legacy.ml ordinary/
   $ compile ordinary "$PPX_ORDINARY" legacy.ml
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify-project --root ordinary/legacy.cmt ordinary/legacy.cmi --threads 1 --timeout-ms 60000
-  verocaml: skipped unit=Legacy file=ordinary/legacy.cmt result=skipped
-  $ ./verification_scope_counter_tool.exe skip ordinary/legacy.cmt ordinary/legacy.cmi
+  $ timeout 90s ./verification_scope_counter_tool.exe skip ordinary/legacy.cmt ordinary/legacy.cmi
   skip-counters retained=0 typed-lowering=0 semantic=0 vc=0 backend=0 private-driver=0 provider-reverification=0 solver=0 z3=0/0/0/0/0/0
 
-A marked retained twin enters the existing verifier and receives its normal
-source location.  A marked artifact produced without retention never gets
-relabeled as retained.
+A source marker compiled without retained PPX identity is rejected before
+verification.  Compiler wording is not selected.
 
-  $ cp fixtures/marked_legacy.ml retained/
-  $ compile retained "$PPX_RETAINED" marked_legacy.ml
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify-project --root retained/marked_legacy.cmt retained/marked_legacy.cmi --threads 1 --timeout-ms 60000 >retained/marked.out 2>&1; echo $?
-  2
-  $ cat retained/marked.out
-  File "marked_legacy.ml", lines 3-7, characters 0-3:
-  Error: [VERO_UNSUPPORTED_STRUCTURE_ITEM] This top-level declaration is not supported in a verified compilation unit.
-    Hint: Move this declaration to an unverified dependency, or rewrite it as a supported type or function declaration.
-  verocaml: verified unit=Marked_legacy file=retained/marked_legacy.cmt result=rejected
-  $ mkdir ordinary-marked
   $ cp fixtures/pass_root.ml ordinary-marked/
   $ compile ordinary-marked "$PPX_ORDINARY" pass_root.ml
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify-project --root ordinary-marked/pass_root.cmt ordinary-marked/pass_root.cmi --threads 1 >ordinary-marked/out 2>&1; echo $?
+  $ project --root ordinary-marked/pass_root.cmt ordinary-marked/pass_root.cmi --threads 1 >/dev/null 2>&1; echo $?
   2
-  $ grep -F 'unsupported retained VeroCaml PPX identity' ordinary-marked/out >/dev/null
 
-Explicit force verification remains marker-independent for both source and CMT
-routes.
+Selected retained roots and providers reach every owned verification boundary.
 
-  $ mkdir force-marked force-unmarked
-  $ cp fixtures/pass_root.ml force-marked/pass_root.ml
-  $ tail -n +3 fixtures/pass_root.ml > force-unmarked/pass_root.ml
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify force-marked/pass_root.ml --threads 1 --timeout-ms 60000 | sed 's#force-marked/pass_root.ml#FILE#' > force-marked/source.out
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify force-unmarked/pass_root.ml --threads 1 --timeout-ms 60000 | sed 's#force-unmarked/pass_root.ml#FILE#' > force-unmarked/source.out
-  $ cmp force-marked/source.out force-unmarked/source.out
-  $ compile force-marked "$PPX_RETAINED" pass_root.ml
-  $ compile force-unmarked "$PPX_RETAINED" pass_root.ml
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify force-marked/pass_root.cmt --threads 1 --timeout-ms 60000 | sed 's#force-marked/pass_root.cmt#FILE#' > force-marked/cmt.out
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify force-unmarked/pass_root.cmt --threads 1 --timeout-ms 60000 | sed 's#force-unmarked/pass_root.cmt#FILE#' > force-unmarked/cmt.out
-  $ cmp force-marked/cmt.out force-unmarked/cmt.out
-
-Marked providers are authenticated and reverified in dependency order.  Two
-selected roots contain real solver obligations.  Reversed inventory order and
-serial/threaded scheduling produce the same semantic partition, outcomes,
-counts, and report ordering.
-
-  $ cp fixtures/provider.mli fixtures/provider.ml fixtures/client.ml fixtures/second_root.ml retained/
+  $ cp fixtures/provider.mli fixtures/provider.ml fixtures/client.ml fixtures/fail_root.ml retained/
   $ compile retained "$PPX_RETAINED" provider.mli
   $ compile retained "$PPX_RETAINED" provider.ml
   $ compile retained "$PPX_RETAINED" client.ml
-  $ compile retained "$PPX_RETAINED" second_root.ml
-  $ project () { OCAML_COLOR=never ../../src/verocaml.exe verify-project "$@" --timeout-ms 60000; }
-  $ project --dependency retained/provider.cmt retained/provider.cmi --root retained/second_root.cmt retained/second_root.cmi --root retained/client.cmt retained/client.cmi --threads 1 > retained/order-a.out
-  $ project --root retained/client.cmt retained/client.cmi --root retained/second_root.cmt retained/second_root.cmi --dependency retained/provider.cmt retained/provider.cmi --threads 2 > retained/order-b.out
-  $ cmp retained/order-a.out retained/order-b.out
-  $ cat retained/order-a.out
-  verocaml: verified unit=Client file=retained/client.cmt result=verified functions=1 obligations=1
-  verocaml: verified unit=Second_root file=retained/second_root.cmt result=verified functions=1 obligations=1
-  verocaml: verified-dependency unit=Provider file=retained/provider.cmt result=verified
-  $ ./verification_scope_counter_tool.exe selected retained/client.cmt retained/client.cmi retained/provider.cmt retained/provider.cmi
+  $ compile retained "$PPX_RETAINED" fail_root.ml
+  $ timeout 90s ./verification_scope_counter_tool.exe selected retained/client.cmt retained/client.cmi retained/provider.cmt retained/provider.cmi
   selected-counters retained=advanced typed-lowering=advanced semantic=advanced vc=advanced backend=advanced private-driver=advanced provider-reverification=advanced solver=advanced z3=advanced
 
-Copied artifacts preserve unit, classification, outcome, count, and order fields.
-The intentionally rendered file field continues to show each supplied path.
+Role duplication and explicit CMT/CMI identity, family, parameter, argument-for,
+missing-interface, and stale-interface failures remain preflight checks.
+They are intentionally prepared with compiler flags not represented by an
+ordinary project fixture.
 
-  $ cp retained/client.cmt retained/client.cmi retained/second_root.cmt retained/second_root.cmi retained/provider.cmt retained/provider.cmi copied/
-  $ project --root copied/second_root.cmt copied/second_root.cmi --dependency copied/provider.cmt copied/provider.cmi --root copied/client.cmt copied/client.cmi --threads 1 > copied/raw.out
-  $ grep -c 'file=copied/' copied/raw.out
-  3
-  $ sed 's#file=copied/#file=retained/#g' copied/raw.out > copied/semantic.out
-  $ cmp retained/order-a.out copied/semantic.out
-  $ echo 'copied-report semantic-fields=stable file-field=supplied-path'
-  copied-report semantic-fields=stable file-field=supplied-path
-
-The complete partition is printed even when one selected root fails.  A
-skipped-only inventory succeeds, while a selected counterexample controls the
-final nonzero status.
-
-  $ cp fixtures/fail_root.ml retained/
-  $ compile retained "$PPX_RETAINED" fail_root.ml
-  $ project --root retained/fail_root.cmt retained/fail_root.cmi --root retained/client.cmt retained/client.cmi --dependency retained/provider.cmt retained/provider.cmi --root ordinary/legacy.cmt ordinary/legacy.cmi --threads 1 >retained/partial.out 2>&1; echo $?
-  1
-  $ grep '^verocaml:' retained/partial.out | sed -E 's/span=[^ ]+/span=<span>/'
-  verocaml: counterexample function=reject#0 vc=assertion[0] span=<span> result=counterexample
-  verocaml: verified unit=Client file=retained/client.cmt result=verified functions=1 obligations=1
-  verocaml: verified unit=Fail_root file=retained/fail_root.cmt result=counterexample functions=1 obligations=1
-  verocaml: verified-dependency unit=Provider file=retained/provider.cmt result=verified
-  verocaml: skipped unit=Legacy file=ordinary/legacy.cmt result=skipped
-
-Inventory identity, role, retained-family, and CRC failures all reject before
-any selected verification is dispatched.  The wrong-unit pair is rejected by
-explicit CMI unit/implementation identity.  The same-unit family pair uses an
-ordinary separately compiled interface with a retained implementation, so it
-passes identity and digest authentication before reaching family agreement.
-
-  $ project --root retained/client.cmt retained/client.cmi --dependency retained/provider.cmt retained/provider.cmi --root retained/provider.cmt retained/provider.cmi --threads 1 >retained/duplicate.out 2>&1; echo $?
+  $ project --root retained/client.cmt retained/client.cmi --dependency retained/provider.cmt retained/provider.cmi --root retained/provider.cmt retained/provider.cmi --threads 1 >/dev/null 2>&1; echo $?
   2
-  $ grep -F 'duplicate root/dependency roles' retained/duplicate.out >/dev/null
-  $ ./verification_scope_counter_tool.exe rejected retained/client.cmt retained/fail_root.cmi
-  preflight=load-rejected code=VERO_MALFORMED_INPUT message=input is not a complete typed-tree artifact
+  $ timeout 30s ./verification_scope_counter_tool.exe rejected retained/client.cmt retained/fail_root.cmi | sed -E 's/ message=.*/ message=<omitted>/'
+  preflight=load-rejected code=VERO_MALFORMED_INPUT message=<omitted>
   preflight-counters retained=0 typed-lowering=0 semantic=0 vc=0 backend=0 private-driver=0 provider-reverification=0 solver=0 z3=0/0/0/0/0/0
   $ cp fixtures/family_pair.mli fixtures/family_pair.ml family/
   $ compile family "$PPX_ORDINARY" family_pair.mli
   $ compile family "$PPX_RETAINED" family_pair.ml
-  $ ./verification_scope_counter_tool.exe rejected family/family_pair.cmt family/family_pair.cmi
-  preflight=scope-rejected message=implementation CMT family [retained-v1] and explicit CMI family [ordinary-v1] differ
+  $ timeout 30s ./verification_scope_counter_tool.exe rejected family/family_pair.cmt family/family_pair.cmi | sed -E 's/ message=.*/ message=<omitted>/'
+  preflight=scope-rejected message=<omitted>
   preflight-counters retained=0 typed-lowering=0 semantic=0 vc=0 backend=0 private-driver=0 provider-reverification=0 solver=0 z3=0/0/0/0/0/0
-
-Explicit retained CMT/CMI pairs carrying compilation-unit parameters or
-argument-for metadata reject at CMI preflight.  Neither reaches retained
-candidacy or any downstream owner.
-
   $ cp fixtures/parameter_seed.mli fixtures/parameterized_root.mli fixtures/parameterized_root.ml parameterized/
   $ compile parameterized "$PPX_RETAINED" parameter_seed.mli -as-parameter
   $ compile parameterized "$PPX_RETAINED" parameterized_root.mli -parameter Parameter_seed
   $ compile parameterized "$PPX_RETAINED" parameterized_root.ml -parameter Parameter_seed
-  $ ./verification_scope_counter_tool.exe rejected parameterized/parameterized_root.cmt parameterized/parameterized_root.cmi
-  preflight=load-rejected code=VERO_UNSUPPORTED_CMI_PARAMETERS message=explicit CMI compilation-unit parameters are not supported
+  $ timeout 30s ./verification_scope_counter_tool.exe rejected parameterized/parameterized_root.cmt parameterized/parameterized_root.cmi | sed -E 's/ message=.*/ message=<omitted>/'
+  preflight=load-rejected code=VERO_UNSUPPORTED_CMI_PARAMETERS message=<omitted>
   preflight-counters retained=0 typed-lowering=0 semantic=0 vc=0 backend=0 private-driver=0 provider-reverification=0 solver=0 z3=0/0/0/0/0/0
   $ cp fixtures/argument_target.mli fixtures/argument_for_root.mli fixtures/argument_for_root.ml argument-for/
   $ compile argument-for "$PPX_RETAINED" argument_target.mli -as-parameter
   $ compile argument-for "$PPX_RETAINED" argument_for_root.mli -as-argument-for Argument_target
   $ compile argument-for "$PPX_RETAINED" argument_for_root.ml -as-argument-for Argument_target
-  $ ./verification_scope_counter_tool.exe rejected argument-for/argument_for_root.cmt argument-for/argument_for_root.cmi
-  preflight=load-rejected code=VERO_UNSUPPORTED_CMI_ARGUMENT_FOR message=explicit CMI argument-for metadata is not supported
+  $ timeout 30s ./verification_scope_counter_tool.exe rejected argument-for/argument_for_root.cmt argument-for/argument_for_root.cmi | sed -E 's/ message=.*/ message=<omitted>/'
+  preflight=load-rejected code=VERO_UNSUPPORTED_CMI_ARGUMENT_FOR message=<omitted>
   preflight-counters retained=0 typed-lowering=0 semantic=0 vc=0 backend=0 private-driver=0 provider-reverification=0 solver=0 z3=0/0/0/0/0/0
-  $ project --root retained/client.cmt retained/client.cmi --dependency retained/provider.cmt retained/missing.cmi --threads 1 >retained/missing.out 2>&1; echo $?
+  $ project --root retained/client.cmt retained/client.cmi --dependency retained/provider.cmt retained/missing.cmi --threads 1 >/dev/null 2>&1; echo $?
   2
   $ cp retained/provider.cmi stale/provider.cmi
   $ { cat fixtures/provider.mli; printf '\nval newer : int\n'; } > stale/provider.mli
   $ compile stale "$PPX_RETAINED" provider.mli
-  $ project --root retained/client.cmt retained/client.cmi --dependency retained/provider.cmt stale/provider.cmi --threads 1 >retained/stale.out 2>&1; echo $?
+  $ project --root retained/client.cmt retained/client.cmi --dependency retained/provider.cmt stale/provider.cmi --threads 1 >/dev/null 2>&1; echo $?
   2
 
-A marked client cannot route a call through an unmarked provider.
+The source-size limits are inclusive architecture maxima, not exact baselines:
+the 799/399 caps preserve the existing owner-concentration warning boundary.
+The dependency checks enforce one-way authority without asserting source
+formatting.
 
-  $ mkdir bypass
-  $ cp fixtures/unmarked_provider.ml fixtures/unmarked_client.ml bypass/
-  $ compile bypass "$PPX_ORDINARY" unmarked_provider.ml
-  $ compile bypass "$PPX_RETAINED" unmarked_client.ml
-  $ project --root bypass/unmarked_client.cmt bypass/unmarked_client.cmi --dependency bypass/unmarked_provider.cmt bypass/unmarked_provider.cmi --threads 1 >bypass/out 2>&1; echo $?
-  2
-  $ cat bypass/out
-  File "unmarked_client.ml", line 3, characters 25-57:
-  Error: [VERO_UNSUPPORTED_EXTERNAL_CALL] unknown and external calls are not supported
-  verocaml: verified unit=Unmarked_client file=bypass/unmarked_client.cmt result=rejected
-  verocaml: skipped unit=Unmarked_provider file=bypass/unmarked_provider.cmt result=skipped
+  $ test "$(wc -l < ../../src/verification_scope_private.ml)" -le 799
+  $ test "$(wc -l < ../../src/verocaml_bin_project_private.ml)" -le 399
+  $ ./verification_scope_architecture_tool.exe ../../src/verification_scope_private.ml ../../src/verocaml_bin_project_private.ml ../../src/verocaml_bin.ml
+  architecture scope-owner=private maxima=inclusive dependency=one-way

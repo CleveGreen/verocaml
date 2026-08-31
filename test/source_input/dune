@@ -1,6 +1,50 @@
 (executable
  (name source_input_compiler_helper)
+ (modules source_input_compiler_helper)
  (libraries unix))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest)
+  source_input_compiler_helper.exe)
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_process_cases)
+ (modules outcome_process_cases integration_environment)
+ (libraries outcome_test_support unix))
+
+(rule
+ (targets
+  source-input-outcome-process-cases.result-report
+  source-input-outcome-process-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_process_cases.exe)
+  source_input_compiler_helper.exe
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   source-input-outcome-process-cases.result-report
+   source-input-outcome-process-cases.failure-archive)))
+
+(rule
+ (alias source-input-outcome-check)
+ (deps
+  (:report source-input-outcome-process-cases.result-report)
+  (:archive source-input-outcome-process-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
 
 (cram
  (deps
@@ -15,3 +59,8 @@
  (name source-input-check)
  (deps
   (alias runtest)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias source-input-outcome-check)))

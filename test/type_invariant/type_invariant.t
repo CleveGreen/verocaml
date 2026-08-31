@@ -1,5 +1,5 @@
 Invariant metadata remains authenticated and opaque, but verification does not
-turns type membership, entry parameters, or call results into instance authority.
+turn type membership, entry parameters, or call results into instance authority.
 
   $ mkdir artifacts
   $ retained () { name=$1; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$name.cmo" "fixtures/$name.ml"; }
@@ -24,25 +24,12 @@ SST remains dumpable for diagnostics, but no VIR or backend path is available.
   $ ./type_invariant_tool.exe dump-vir artifacts/authenticated_invariant.cmt 2>&1 | grep -F 'use_type_invariant requires an exact Exec or Tracked instance'
   probe_locality: malformed SST: probe_locality: invalid semantic SST: use_type_invariant requires an exact Exec or Tracked instance at authenticated_invariant.ml:36:32-36:35 at authenticated_invariant.ml:36:32-36:35
 
-A type-level model consequence is still unavailable without an authorized exact
-instance, and direct predicate use supplies no invariant axiom.
-
-  $ retained model_consequence_without_use
-  $ ./type_invariant_tool.exe counterexamples artifacts/model_consequence_without_use.cmt
-  model_consequence_without_use: counterexample assertion
-  $ retained direct_predicate_use
-  $ ./type_invariant_tool.exe counterexamples artifacts/direct_predicate_use.cmt
-  bad: counterexample assertion
-
 Runtime, wrong-type, and direct trusted invariant attempts reject before VIR.
 The compiler still protects the hidden representation.
 
   $ for name in runtime_use wrong_type_use; do retained "$name"; ./type_invariant_tool.exe reject "artifacts/$name.cmt"; done
   semantic invariant gate rejected before VIR
   semantic invariant gate rejected before VIR
-  $ retained trusted_invariant
-  $ ./type_invariant_tool.exe reject artifacts/trusted_invariant.cmt
-  adapter rejected: VERO_UNSUPPORTED_STRUCTURE_ITEM
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/representation_leak.cmo fixtures/representation_leak.ml >/dev/null 2>&1; test $? -ne 0
 
 Call-result and transition receipts remain unresolved. The old transition

@@ -1,0 +1,295 @@
+#+OPTIONS: author:nil toc:nil
+#+TITLE: Outcome-Oriented Tests
+
+The ~outcome_test_support~ library runs verifier scenarios as isolated Dune
+projects and checks a closed projection of their semantic results.  It keeps
+ordinary tests independent of report formatting, diagnostic order, generated
+identifiers, and compiler paths.
+
+* Semantic Outcome Policy
+
+An ordinary test states the smallest stable semantic contract that distinguishes
+the behaviour under test.  Select status, frontend code, semantic kind and owning
+function, unit disposition, named facts, or registered process facts.  Required
+facts are unordered, and additional unselected facts do not fail the case.
+
+Ordinary expectations do not compare:
+
+- complete reports, SST, VIR, stdout, or stderr;
+- prose, whitespace, colour, source spans, generated identifiers, or order;
+- exact function, obligation, diagnostic, or exit counts; or
+- arbitrary predicates over internal representations.
+
+Use a UI golden only when the presentation itself is the contract.
+
+* Grouped Cases
+
+Keep related, independently named ~Suite.case~ values in one thematic OCaml
+host.  A case name matches ~[a-z0-9][a-z0-9._-]*~.  Its canonical identity is
+~<repository-relative-host-path>::<case-name>~.
+
+#+begin_src ocaml
+open Outcome_test_support
+
+let suite_path = "test/example/outcome_cases.ml"
+
+let run_fixture input ~environment ~workspace =
+  Fixture.run ~environment ~workspace input
+
+let identity =
+  let input =
+    Fixture.single_source ~module_name:"Identity"
+      ~source:"[@@@verocaml.verify]\nlet identity (value : int) = value\n"
+      ~libraries:[ "verocaml.ghost" ]
+  in
+  Suite.case ~name:"identity"
+    ~expectation:
+      (Expectation.empty
+      |> Expectation.status Outcome.Verified
+      |> Expectation.require_unit "Identity" Outcome.Unit_verified
+      |> Expectation.require_named_fact "function:identity"
+           (Outcome.Function_exists "identity"))
+    (run_fixture input)
+
+let () =
+  Suite.run_cli ~suite_path ~manifest:Integration_environment.manifest
+    ~expected_environment:Integration_environment.expected [ identity ]
+#+end_src
+
+The host's Dune rules produce a result report and failure archive, validate the
+report, expose a focused check alias, and attach that alias to the directory's
+~runtest~.
+
+* Fixtures
+
+** ~Dune_project~
+
+Use ~Fixture.dune_project~ for module composition, interfaces, libraries, or
+explicit build targets.  The virtual tree must contain ~dune-project~ and at
+least one ~dune~ file.  Every library in the fixture record must also occur in
+an ordinary ~(libraries ...)~ stanza.
+
+#+begin_src ocaml
+let input =
+  Fixture.dune_project
+    {
+      files =
+        [
+          { Fixture.path = "dune-project";
+            contents = "(lang dune 3.17)\n(name example_fixture)\n" };
+          { path = "dune";
+            contents =
+              {|
+(library
+ (name example_fixture)
+ (wrapped false)
+ (modules Helper Consumer)
+ (libraries verocaml.ghost)
+ (flags (:standard -ppx "verocaml-ppx --keep-ghost")))
+|} };
+          { path = "helper.mli"; contents = "val identity : int -> int\n" };
+          { path = "helper.ml";
+            contents = "[@@@verocaml.verify]\nlet identity x = x\n" };
+          { path = "consumer.ml";
+            contents = "[@@@verocaml.verify]\nlet use x = Helper.identity x\n" };
+        ];
+      libraries = [ "verocaml.ghost" ];
+      targets = [ "@all" ];
+      selected_units = [ "Helper"; "Consumer" ];
+    }
+#+end_src
+
+Declare all source files, Dune files, targets, libraries, and selected units
+needed by the case.  Do not discover an ambient package environment or reproduce
+the compiler invocation in the case.
+
+** ~Single_source~
+
+Use ~Fixture.single_source~ for a single implementation unit.  It is convenience
+syntax for an isolated ~Dune_project~ and follows the same compiler path.
+
+#+begin_src ocaml
+Fixture.single_source ~module_name:"Identity"
+  ~source:"[@@@verocaml.verify]\nlet identity x = x\n"
+  ~libraries:[ "verocaml.ghost" ]
+#+end_src
+
+Use ~Fixture.lower_single_source~ when a test needs to inspect or extend the
+resulting virtual project before running it.
+
+** ~Prepared_cmt~
+
+Use ~Fixture.prepared_cmt~ only for an already-built artifact declared to Dune as
+a dependency of the host.  The constructor rejects an artifact that is absent
+from ~declared_dependencies~.
+
+#+begin_src ocaml
+let input =
+  match
+    Fixture.prepared_cmt ~declared_dependencies:[ artifact ] artifact
+  with
+  | Ok input -> input
+  | Error message -> invalid_arg message
+#+end_src
+
+Prefer a source-shaped Dune project unless the prepared artifact is itself the
+subject of the case.
+
+* Closed Projections
+
+Build expectations from ~Expectation.empty~ and select only facts represented by
+~Outcome~.
+
+#+begin_src ocaml
+Expectation.empty
+|> Expectation.status Outcome.Counterexample
+|> Expectation.require_semantic ~function_name:"caller"
+     (Outcome.Call_precondition { callee = "callee" })
+|> Expectation.require_unit "Consumer" Outcome.Unit_counterexample
+|> Expectation.require_named_fact "function:caller"
+     (Outcome.Function_exists "caller")
+#+end_src
+
+Frontend rejection codes use ~Expectation.require_frontend_code~.  Named facts
+identify stable facts such as a function or obligation kind; they are not an
+escape hatch for rendered text, order, spans, or counts.
+
+Use ~Outcome.semantic_parity~ for source/prepared-CMT, serial/threaded, copied
+project, or similar equivalence.  It compares the closed projection and always
+excludes resource counts.  The ~except~ list removes only named-fact keys used
+to identify deliberate mode differences.
+
+#+begin_src ocaml
+match
+  Outcome.semantic_parity ~except:[ "input-mode"; "execution-mode" ]
+    source prepared
+with
+| Ok () -> Ok (Outcome.merge [ source; prepared ])
+| Error message ->
+    Error (Failure.make Failure.Expectation_mismatch message)
+#+end_src
+
+Status, frontend codes, semantic facts, units, and process facts cannot be
+excluded from parity.
+
+* Process Adapter
+
+Use ~Process_adapter.run~ for CLI and child-process protocols.  Register only
+the environment forwarding, cleanup, and output adjacency that the case owns.
+The adapter projects exit class, stable ~VERO_*~ codes, forwarded variable
+names, absent cleanup paths, and named adjacency facts.  It intentionally does
+not expose raw stdout or stderr equality.
+
+#+begin_src ocaml
+Process_adapter.run ~cwd:workspace
+  {
+    program;
+    arguments;
+    forwarded = [ ("OCAML_COLOR", "never") ];
+    cleanup_paths = [ "temporary-output" ];
+    adjacency = [ ("diagnostic-context", "before", "after") ];
+  }
+#+end_src
+
+Select the resulting facts with ~Expectation.require_process_fact~.
+
+* Justified Bounds
+
+Resource ceilings are exceptional, inclusive, and limited to functions or
+obligations.  Record the measured baseline and explain the semantic or resource
+risk represented by the maximum.
+
+#+begin_src ocaml
+let expectation =
+  match
+    Expectation.obligations_at_most ~maximum:16 ~baseline:12
+      ~rationale:
+        "this two-call fixture should stay within four obligations of its reviewed baseline"
+      (Expectation.empty |> Expectation.status Outcome.Verified)
+  with
+  | Ok expectation -> expectation
+  | Error message -> invalid_arg message
+#+end_src
+
+A value at or below the maximum passes.  A lower value must not fail.  Do not
+encode the current count as an unexplained maximum or add a bound to an ordinary
+correctness case.
+
+* Commands
+
+The runner accepts no arguments, ~--list~, a full canonical ~--case~ selector,
+or the Dune-only ~--produce~ form.  Short names and partial identities are
+rejected.
+
+#+begin_src sh
+dune exec test/outcome_framework/framework_cases.exe -- --list
+dune exec test/outcome_framework/framework_cases.exe -- \
+  --case test/outcome_framework/framework_cases.ml::verification-success
+dune exec test/outcome_framework/framework_cases.exe
+dune build @test/outcome_framework/outcome-framework-check
+#+end_src
+
+For another suite, substitute its executable, full host-path identity, or
+focused ~*-outcome-check~ alias.
+
+* Failure Artifacts
+
+A producer writes one ~*.result-report~ and one ~*.failure-archive~ under the
+Dune build tree.  The report records each canonical identity, selected
+expectation, projected outcome, failure category, archive location, and exact
+~--case~ rerun command.  The archive contains ~failure.txt~ and the bounded case
+workspace for each failure.
+
+Each case runs with Delator enabled at trace level.  Successful cases discard
+that trace and remain quiet.  A failing case writes ~delator-trace.log~ into its
+archive entry, and the report validator prints the trace with the failure.  The
+same trace is printed by a failing manual ~--case~ run.  Subprocess adapters
+enable Delator's flat, colourless trace renderer and fold its output into the
+case trace.
+
+The trace is diagnostic material, never an oracle.  Do not copy its rendering,
+span shape, timing, internal identifiers, or event count into an expectation.
+Select the resulting status, stable diagnostic code, semantic failure kind,
+unit disposition, named fact, or justified ceiling instead.
+
+For the framework suite these files are:
+
+#+begin_example
+_build/default/test/outcome_framework/framework-cases.result-report
+_build/default/test/outcome_framework/framework-cases.failure-archive
+#+end_example
+
+Inspect both files and use the recorded rerun command.  A successful focused
+manual rerun removes its workspace; a failing one prints and preserves the
+workspace path.
+
+* UI Goldens
+
+Presentation checks live under ~test/ui_goldens/~.  They may select a deliberate
+user-visible diagnostic excerpt, intentional colour behaviour, or an explicitly
+identified renderer contract.  Semantic status, codes, kinds, unit dispositions,
+process facts, and parity stay in outcome cases.
+
+Run all UI goldens with:
+
+#+begin_src sh
+dune build @test/ui_goldens/ui-goldens-check
+#+end_src
+
+A mismatch leaves the checked-in source unchanged and writes a ~.corrected~
+candidate under ~_build/default/~.  Review one target and promote only that
+source path.  See [[file:../ui_goldens/README.org][the UI golden guide]].
+
+* Extension
+
+Adding ordinary coverage requires a new ~Suite.case~, not a new runner or
+schema.  Reuse ~Dune_project~, ~Single_source~, ~Prepared_cmt~, or the process
+adapter, then expose the case through a focused Dune alias.
+
+Extend the closed projection only when a stable semantic distinction cannot be
+expressed by the existing status, code, semantic kind, unit, named fact, or
+process fact.  Add the narrow value to ~Outcome~, project it from the structured
+verifier or registered process protocol, add the matching ~Expectation~
+combinator, and cover projection, comparison, reporting, and failure persistence
+in the framework self-tests.  Do not add rendered output, generated identities,
+order, or exact counts to the projection.

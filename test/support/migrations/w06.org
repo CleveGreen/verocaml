@@ -1,0 +1,149 @@
+#+OPTIONS: author:nil toc:nil
+#+TITLE: Invariants and Mutation Outcome Coverage
+
+This document describes grouped outcome coverage for invariant contracts,
+shared and owned recursive state, scalar heaps, and unique mutation.  Ordinary
+cases select closed semantic facts.  Specialist checks cover private
+descriptors, heap epochs, compiler artifacts, runtime erasure, malformed
+internal input, and bounded resource behaviour.
+
+No assertion in this group is a presentation contract, so the group has no UI
+golden.
+
+* Canonical Hosts
+
+| Host | Focused alias |
+|------+---------------|
+| ~test/invariant_contract_formula/outcome_cases.ml~ | ~@test/invariant_contract_formula/invariant-contract-formula-outcome-check~ |
+| ~test/type_invariant/outcome_cases.ml~ | ~@test/type_invariant/type-invariant-outcome-check~ |
+| ~test/shared_invariant_cell/outcome_cases.ml~ | ~@test/shared_invariant_cell/shared-invariant-cell-outcome-check~ |
+| ~test/shared_recursive_frozen_spine/outcome_cases.ml~ | ~@test/shared_recursive_frozen_spine/shared-recursive-frozen-spine-outcome-check~ |
+| ~test/shared_scalar_heap/outcome_cases.ml~ | ~@test/shared_scalar_heap/shared-scalar-heap-outcome-check~ |
+| ~test/owned_recursive_contents/outcome_cases.ml~ | ~@test/owned_recursive_contents/owned-recursive-contents-outcome-check~ |
+| ~test/owned_recursive_scalar_model/outcome_cases.ml~ | ~@test/owned_recursive_scalar_model/owned-recursive-scalar-model-outcome-check~ |
+| ~test/unique_mutation/outcome_cases.ml~ | ~@test/unique_mutation/unique-mutation-outcome-check~ |
+
+* Invariant Contract Formula
+
+- ~path-product-project-prepared-cmt-parity~ selects the verified
+  ~Path_product~ unit, representative stack functions, a call-precondition
+  kind, and closed project/prepared-CMT parity.
+- ~deliberate-false-claims-are-counterexamples~ selects the counterexample
+  mutants and verified control unit.
+- ~exec-and-proof-branches-verify~ selects the verified unit plus
+  postcondition and local-assertion kinds.
+- ~partial-match-forms-are-rejected~ selects frontend rejection,
+  ~VERO_UNSUPPORTED_PARTIAL_MATCH~, and the rejected units.
+
+The specialist lane covers formula-capability authentication, path lowering,
+private admission profiles, exact architecture inventories, and global VIR
+boundary scans.  Generated keys, spans, route order, and complete renders stay
+outside the closed projection.
+
+* Type Invariants
+
+- ~authority-free-claims-are-counterexamples~ selects counterexample units and
+  assertion kinds for claims without an invariant use.
+- ~trusted-invariant-is-rejected~ selects frontend rejection,
+  ~VERO_UNSUPPORTED_STRUCTURE_ITEM~, and the rejected unit.
+
+The specialist lane covers opaque descriptors, affine tokens, malformed
+authenticated SST, pre-VIR use boundaries, compiler representation, retained
+CMT predecessor transfer, and installed private API visibility.
+
+* Shared Invariant Cells
+
+- ~exact-cell-project-prepared-cmt-parity~ selects verified cell functions and
+  closed project/prepared-CMT parity.
+- ~supported-invariant-cell-programs-verify~ selects verified sequential,
+  aliasing, post-call, constructor-result, and mixed fixtures.
+- ~invalid-invariant-cell-claims-are-counterexamples~ selects keyed
+  counterexample units and invariant-validity kinds.
+
+Specialist checks cover cell and heap epochs, lowering policy, malformed
+source or CMT input, private authority attacks, backend routing, and runtime
+erasure.
+
+* Shared Recursive Frozen Spines
+
+- ~exact-frozen-spine-project-prepared-cmt-parity~ selects the verified unit,
+  ~List.make_two~, ~List.set_head~, ~replace_head_and_read~, and closed parity.
+- ~invalid-frozen-spine-claims-are-counterexamples~ selects counterexample
+  units and arithmetic or postcondition kinds for invalid writes, tails, and
+  aliases.
+- ~sequential-frozen-spine-updates-verify~ selects the verified ~Two_calls~
+  unit and ~replace_twice~.
+
+Specialist checks cover frozen descriptors, compiler polymorphism, constructor
+origin, conditional permits, replay and provenance attacks, completion
+barriers, unsupported frozen shapes, deterministic internal rendering, and
+runtime erasure.  Resource-sensitive probes retain hard outer timeouts.
+
+* Shared Scalar Heaps
+
+- ~increment-project-prepared-cmt-parity~ selects verified units and closed
+  project/prepared-CMT parity.
+- ~supported-shared-scalar-updates-verify~ selects supported shared and mixed
+  unique/shared updates.
+- ~invalid-shared-scalar-claims-are-counterexamples~ selects keyed
+  counterexample units and the owned arithmetic obligation.
+- ~trusted-body-introduces-no-verification-work~ selects verified status and
+  the trusted-body function without exposing an exact resource count.
+
+Specialist checks cover heap epochs, conditionals, backend routing, malformed
+semantic SST, trusted-body resource isolation, retained provider barriers,
+private heap attacks, and runtime erasure.
+
+* Owned Recursive Contents
+
+- ~same-project-recursive-contents-verify~ selects verified construction,
+  observation, and mutation within one Dune project.
+- ~cross-cmt-hidden-observation-is-rejected~ selects frontend rejection and the
+  stable dependency boundary for hidden recursive contents.
+
+Specialist checks cover recursive cursor and path encoding, constructor and
+mutation authority, malformed sidecars, installed API boundaries, and
+ordinary runtime erasure.
+
+* Owned Recursive Scalar Models
+
+- ~supported-recursive-scalar-models-verify~ selects verified model clients and
+  representative functions.
+- ~recursive-scalar-mutants-are-counterexamples~ selects keyed counterexamples
+  and their semantic kinds.
+- ~retained-provider-model-is-not-transferable~ and
+  ~ordinary-provider-model-is-not-transferable~ select rejected consumers and
+  the available stable dependency or frontend codes.
+
+Specialist checks cover model descriptors, recursive lowering, solver routing,
+malformed model input, provider transfer boundaries, private authority, and
+runtime behaviour.
+
+* Unique Mutation
+
+- ~supported-unique-mutations-verify~ selects supported scalar, aggregate, and
+  recursive mutation cases.
+- ~invalid-mutation-claims-are-counterexamples~ selects counterexample units
+  and their postcondition or arithmetic kinds.
+- ~unsupported-mutation-shapes-are-rejected~ selects frontend rejection and
+  ~VERO_UNSUPPORTED_MUTATION~ where projected.
+- ~imported-mutation-is-rejected~ selects the stable dependency rejection for
+  an imported mutation boundary.
+- ~malformed-sidecars-are-rejected~ selects process rejection and
+  ~VERO_MALFORMED_INPUT~ for declared malformed inputs.
+
+The specialist lane covers unique-mode compiler behaviour, mutation lowering,
+sidecar authentication, forged or stale metadata, installed boundaries,
+cleanup, and bytecode or native runtime erasure.  Compiler-only failures may
+select ~VERO_SOURCE_COMPILE~ or ~VERO_MALFORMED_GHOST_CALL~ through the process
+adapter without preserving compiler prose.
+
+* Commands
+
+#+begin_src sh
+dune build @test/invariant_contract_formula/invariant-contract-formula-outcome-check
+dune build @test/shared_invariant_cell/shared-invariant-cell-outcome-check
+dune build @test/shared_recursive_frozen_spine/shared-recursive-frozen-spine-outcome-check
+dune build @test/shared_scalar_heap/shared-scalar-heap-outcome-check
+dune build @test/unique_mutation/unique-mutation-outcome-check
+#+end_src

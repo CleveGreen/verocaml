@@ -20,6 +20,48 @@
  (action
   (with-stdout-to %{target}
    (bash "printf '%s/install/default\\n' \"$(cd ../../.. && pwd)\""))))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support))
+
+(rule
+ (targets
+  recursive-specifications-outcome-cases.result-report
+  recursive-specifications-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  (glob_files fixtures/*.ml)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   recursive-specifications-outcome-cases.result-report
+   recursive-specifications-outcome-cases.failure-archive)))
+
+(rule
+ (alias recursive-specifications-outcome-check)
+ (deps
+  (:report recursive-specifications-outcome-cases.result-report)
+  (:archive recursive-specifications-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
 (cram
  (deps
   (glob_files fixtures/*.ml)
@@ -38,3 +80,8 @@
  (name structural-recursion-check)
  (deps
   (alias runtest)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias recursive-specifications-outcome-check)))

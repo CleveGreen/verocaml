@@ -6,8 +6,13 @@ retains exact scalar, abstract, and canonical generic-ADT structure.
   $ extract_case () { awk -v name="$2" '/\(\* COMMON BEGIN \*\)/ { common=1; next } /\(\* COMMON END \*\)/ { common=0; next } common { print } $0 == "(* CASE " name " BEGIN *)" { selected=1; next } $0 == "(* CASE " name " END *)" { selected=0; next } selected { print }' "$1" > "$3"; }
   $ retained quantifiers fixtures/quantifiers.ml
   $ retained negative_quantifier_semantic fixtures/negative_quantifier_semantic.ml
-  $ timeout 10 ../../src/verocaml.exe verify fixtures/quantifiers.ml --threads 1 --timeout-ms 5000 --rlimit 100000
-  verocaml: verified file=fixtures/quantifiers.ml functions=3 obligations=10
+
+The grouped semantic replacements run independently at
+@test/verified_callback_traversals/verified-callback-traversals-outcome-check.
+The remaining Cram rows are the W08-TRAVERSAL-* structure, fixed-resource,
+authentication, identity, zero-work, and architecture exceptions recorded in
+the migration ledger.
+
   $ timeout 10 ./verified_callback_traversals_tool.exe structural artifacts/quantifiers.cmt
   sst forall=13 exists=9 triggers=13 binders=int:11,bool:2,param:3,option:2,seq:2,tree:2 outer-free=1 qids=22 skids=22
   vir-logic forall=32 exists=24 triggers=32 outer-free=3 queries=7 portable=7 function-sort=0
@@ -27,8 +32,6 @@ record, recursive ADT, multiargument, direct Spec, nested, postcondition, proof,
 and function-sorted binders.
 
   $ retained positive_symbolic_quantifiers fixtures/positive_symbolic_quantifiers.ml
-  $ timeout 20 env OCAML_COLOR=never ../../src/verocaml.exe verify fixtures/positive_symbolic_quantifiers.ml --threads 1 --timeout-ms 5000 --rlimit 100000
-  verocaml: verified file=fixtures/positive_symbolic_quantifiers.ml functions=12 obligations=40
   $ timeout 20 ./verified_callback_traversals_tool.exe parity artifacts/positive_symbolic_quantifiers.cmt
   parity=repeat/threads status=verified functions=12 obligations=40 resources=100000 timeout-ms=5000
   $ timeout 20 ./verified_callback_traversals_tool.exe resource-evidence artifacts/positive_symbolic_quantifiers.cmt
@@ -64,8 +67,6 @@ each kind, spanning scalar, parametric, option, record, recursive ADT, and
 function binders.
 
   $ retained positive_quantifier_statements fixtures/positive_quantifier_statements.ml
-  $ timeout 30 env OCAML_COLOR=never ../../src/verocaml.exe verify fixtures/positive_quantifier_statements.ml --threads 1 --timeout-ms 5000 --rlimit 100000
-  verocaml: verified file=fixtures/positive_quantifier_statements.ml functions=32 obligations=48
   $ timeout 30 ./verified_callback_traversals_tool.exe parity artifacts/positive_quantifier_statements.cmt
   parity=repeat/threads status=verified functions=32 obligations=48 resources=100000 timeout-ms=5000
   $ timeout 30 ./verified_callback_traversals_tool.exe resource-evidence artifacts/positive_quantifier_statements.cmt

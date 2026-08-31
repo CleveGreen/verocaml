@@ -5,8 +5,6 @@ for the payload update; generic finite-formal issuance stays absent.
   $ mkdir artifacts
   $ retained () { n=$1; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$n.cmo" "fixtures/$n.ml"; }
   $ retained exact_pfc
-  $ ./shared_recursive_frozen_spine_tool.exe verify artifacts/exact_pfc.cmt
-  status=verified functions=4 obligations=20 shared=2/2/2/2 invariant=2/2/2/1/2 recursive-results=13/0 generic-finite=0/0/0 frozen-template=1/1 frozen-conditional=3/3 frozen-instance=0/0 frozen-discharge=0/0/0 frozen-witness=0/0/0 frozen-observation=0/0
   $ ./shared_recursive_frozen_spine_tool.exe route artifacts/exact_pfc.cmt
   ordinary=3 direct-z3=20 recursive=14
 
@@ -39,48 +37,15 @@ replay and invariant-only laundering reject before verification.
   $ ./shared_recursive_frozen_spine_tool.exe reject-boundary artifacts/invariant_launder.cmt
   rejected frozen=0/0/0/0/0 shared=0/0/0/0 invariant=0/0/0/0/0 vir=0 ordinary=0 direct-z3=0 recursive=0
 
-Wrong writes, deleted writes, and wrong recursive tails are concrete
-postcondition failures.  Suppressing the private child/root witness also
-prevents tail preservation.
+Deleting the write remains a compiler-boundary check, while suppressing the
+private child/root witness remains a private-authority test.
 
-  $ sed 's/node.value <- value$/node.value <- value + 1/' fixtures/exact_pfc.ml > artifacts/wrong_write.ml
-  $ ../../src/verocaml.exe verify artifacts/wrong_write.ml > artifacts/wrong_write.out 2>&1; test $? -eq 1
-  $ grep -o 'counterexample function=List.set_head#[0-9]* vc=arithmetic-safety-upper' artifacts/wrong_write.out
-  counterexample function=List.set_head#5 vc=arithmetic-safety-upper
-  $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/wrong_write.cmo artifacts/wrong_write.ml
-  $ ./shared_recursive_frozen_spine_tool.exe verify artifacts/wrong_write.cmt
-  status=counterexample functions=3 obligations=20 shared=1/1/1/1 invariant=1/1/0/0/0 recursive-results=9/0 generic-finite=0/0/0 frozen-template=1/1 frozen-conditional=2/2 frozen-instance=0/0 frozen-discharge=0/0/0 frozen-witness=0/0/0 frozen-observation=0/0
   $ sed 's/node.value <- value$/let _ = value in ()/' fixtures/exact_pfc.ml > artifacts/delete_write.ml
   $ ../../src/verocaml.exe verify artifacts/delete_write.ml > artifacts/delete_write.out 2>&1; test $? -eq 2
   $ grep -o 'this generic use is not supported in verified code' artifacts/delete_write.out
   this generic use is not supported in verified code
-  $ cp fixtures/exact_pfc.ml artifacts/wrong_tail.ml
-  $ sed -i '47c\\      contents node = More (value, End)];' artifacts/wrong_tail.ml
-  $ ../../src/verocaml.exe verify artifacts/wrong_tail.ml > artifacts/wrong_tail.out 2>&1; test $? -eq 1
-  $ grep -o 'counterexample function=List.set_head#[0-9]* vc=postcondition\[[0-9]*\]' artifacts/wrong_tail.out
-  counterexample function=List.set_head#5 vc=postcondition[0]
-  $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/wrong_tail.cmo artifacts/wrong_tail.ml
-  $ ./shared_recursive_frozen_spine_tool.exe verify artifacts/wrong_tail.cmt
-  status=counterexample functions=3 obligations=18 shared=1/1/1/1 invariant=1/1/0/0/0 recursive-results=8/0 generic-finite=0/0/0 frozen-template=1/1 frozen-conditional=2/2 frozen-instance=0/0 frozen-discharge=0/0/0 frozen-witness=0/0/0 frozen-observation=0/0
-  $ ./shared_recursive_frozen_spine_tool.exe dump-vir artifacts/wrong_tail.cmt > artifacts/wrong_tail.vir
-  $ ! grep '^function replace_head_and_read#' artifacts/wrong_tail.vir
   $ ./shared_recursive_frozen_spine_tool.exe suppress-witness artifacts/exact_pfc.cmt
   witness-suppressed=counterexample
-
-Independent finite aliased formals retain possible equality.  Mutating one and
-claiming the other's complete recursive model is unchanged is therefore a
-concrete counterexample from both source and retained CMT; no local alias is
-treated as a disequality.
-
-  $ cat fixtures/exact_pfc.ml > artifacts/invalid_alias.ml
-  $ printf '%s\n' '' 'let invalid_independent_alias' '    (x : (List.t [@finite]) @ aliased)' '    (y : (List.t [@finite]) @ aliased) value : unit =' '  [%verocaml.requires value <> List.head x];' '  [%verocaml.ensures fun _ ->' '    List.contents y = [%verocaml.old (List.contents y)]];' '  List.set_head x value' >> artifacts/invalid_alias.ml
-  $ printf '%s\n' '' 'let invoke_same_actual value : unit =' '  [%verocaml.requires value <> 1];' '  let xs = List.make_two 1 2 in' '  invalid_independent_alias xs xs value' >> artifacts/invalid_alias.ml
-  $ ../../src/verocaml.exe verify artifacts/invalid_alias.ml > artifacts/invalid_alias.source.out 2>&1; test $? -eq 1
-  $ grep -o 'counterexample function=invalid_independent_alias#[0-9]* vc=postcondition\[[0-9]*\]' artifacts/invalid_alias.source.out
-  counterexample function=invalid_independent_alias#8 vc=postcondition[0]
-  $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/invalid_alias.cmo artifacts/invalid_alias.ml
-  $ ./shared_recursive_frozen_spine_tool.exe verify artifacts/invalid_alias.cmt
-  status=counterexample functions=5 obligations=21 shared=3/3/3/3 invariant=3/3/3/2/3 recursive-results=17/0 generic-finite=0/0/0 frozen-template=1/1 frozen-conditional=5/5 frozen-instance=0/0 frozen-discharge=0/0/0 frozen-witness=0/0/0 frozen-observation=0/0
 
 The conditional proof scope seals the exact validated observation call chain
 and symbolic path without becoming actual value authority.  Changing either
@@ -313,15 +278,6 @@ lowering and validation, before frozen/shared/invariant/VIR/backend work.
   trusted-source: rejected
   trusted-cmt: rejected frozen=0/0/0/0/0 shared=0/0/0/0 invariant=0/0/0/0/0 vir=0 ordinary=0 direct-z3=0 recursive=0
 
-Two sequential calls start the second operation from the first successor epoch;
-the original local alias sees the final head while the caller-entry tail stays
-exact.
-
-  $ cat fixtures/exact_pfc.ml > artifacts/two_calls.ml
-  $ printf '%s\n' '' 'let replace_twice (xs : (List.t [@finite]) @ aliased) first second : int =' '  [%verocaml.requires first <> List.head xs && second <> first];' '  [%verocaml.ensures fun result ->' '    result = second && List.contents xs = More (second, tail ([%verocaml.old (List.contents xs)]))];' '  let peer = xs in' '  List.set_head peer first;' '  List.set_head xs second;' '  List.head peer' >> artifacts/two_calls.ml
-  $ TMPDIR="$PWD/artifacts" ../../src/verocaml.exe verify artifacts/two_calls.ml --timeout-ms 10000
-  verocaml: verified file=artifacts/two_calls.ml functions=5 obligations=24
-
 SST and VIR output are deterministic, source and retained-CMT verification
 agree, and runtime erasure contains no verifier authority.
 
@@ -330,8 +286,6 @@ agree, and runtime erasure contains no verifier authority.
   $ ./shared_recursive_frozen_spine_tool.exe dump-vir artifacts/exact_pfc.cmt > artifacts/exact.vir
   $ ./shared_recursive_frozen_spine_tool.exe dump-vir artifacts/exact_pfc.cmt > artifacts/exact-again.vir
   $ cmp artifacts/exact.vir artifacts/exact-again.vir
-  $ TMPDIR="$PWD/artifacts" ../../src/verocaml.exe verify fixtures/exact_pfc.ml
-  verocaml: verified file=fixtures/exact_pfc.ml functions=4 obligations=20
   $ ocamlc -w -A -alert -all -ppx ../../ppx/vero_ppx.exe -o artifacts/runtime.exe fixtures/runtime_erasure.ml
   $ artifacts/runtime.exe
   42

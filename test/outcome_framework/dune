@@ -1,0 +1,129 @@
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest
+  verocaml-ppx)
+ (deps
+  (:writer ../support/integration_manifest_writer.exe)
+  (:core %{lib:verocaml.core:verocaml_core.cma})
+  (:ghost %{lib:verocaml.ghost:vero_ghost.cma})
+  (:ppx %{bin:verocaml-ppx})
+  (alias_rec ../../install)
+  ../../verocaml.dune-package)
+ (action
+  (progn
+   (copy %{ppx} verocaml-ppx)
+   (run
+    %{writer}
+    --manifest integration-library-environment.manifest
+    --module integration_environment.ml
+    --source-commit 6835cb1fbbbf2b45146257a0bbed5da5cad3e886
+    --context %{context_name}
+    --dune-path dune
+    --compiler-path %{ocamlc}
+    --library verocaml.core
+    lib/verocaml/core/verocaml_core.cma
+    --library verocaml.ghost
+    lib/verocaml/ghost/vero_ghost.cma))))
+
+(executable
+ (name framework_cases)
+ (modules framework_cases integration_environment)
+ (libraries outcome_test_support))
+
+(executable
+ (name framework_self_tests)
+ (modules framework_self_tests integration_environment)
+ (libraries outcome_test_support unix))
+
+(executable
+ (name failure_probe_a)
+ (modules failure_probe_a integration_environment)
+ (libraries outcome_test_support))
+
+(executable
+ (name failure_probe_b)
+ (modules failure_probe_b integration_environment)
+ (libraries outcome_test_support))
+
+(executable
+ (name persistence_check)
+ (modules persistence_check)
+ (libraries outcome_test_support))
+
+(rule
+ (targets framework-cases.result-report framework-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite framework_cases.exe)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   framework-cases.result-report
+   framework-cases.failure-archive)))
+
+(rule
+ (targets failure-probe-a.result-report failure-probe-a.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite failure_probe_a.exe)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   failure-probe-a.result-report
+   failure-probe-a.failure-archive)))
+
+(rule
+ (targets failure-probe-b.result-report failure-probe-b.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite failure_probe_b.exe)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   failure-probe-b.result-report
+   failure-probe-b.failure-archive)))
+
+(rule
+ (alias outcome-framework-check)
+ (deps
+  (:report framework-cases.result-report)
+  (:archive framework-cases.failure-archive)
+  (:validator ../support/report_validator.exe)
+  (:self_tests framework_self_tests.exe)
+  (:persistence persistence_check.exe)
+  (:prepared ../support/.outcome_test_support.objs/byte/outcome_test_support__Failure.cmt))
+ (action
+  (progn
+   (run %{validator} %{report} %{archive})
+   (run %{self_tests} --prepared-cmt %{prepared}))))
+
+(rule
+ (alias outcome-framework-check)
+ (deps
+  (:success_report framework-cases.result-report)
+  (:success_archive framework-cases.failure-archive)
+  (:report_a failure-probe-a.result-report)
+  (:archive_a failure-probe-a.failure-archive)
+  (:report_b failure-probe-b.result-report)
+  (:archive_b failure-probe-b.failure-archive)
+  (:persistence persistence_check.exe))
+ (action
+  (run
+   %{persistence}
+   %{success_report}
+   %{success_archive}
+   %{report_a}
+   %{archive_a}
+   %{report_b}
+   %{archive_b})))
+
+(alias
+ (name runtest)
+ (deps (alias outcome-framework-check)))

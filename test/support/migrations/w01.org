@@ -1,0 +1,133 @@
+#+OPTIONS: author:nil toc:nil
+#+TITLE: Architecture, Prepared Input, and Service Outcome Coverage
+
+This document describes outcome coverage for prepared compiler input, private
+receipts, release behaviour, and the verifier service.  Ordinary cases use
+isolated Dune projects or declared prepared artifacts and select only the
+closed semantic or process projection.  Architecture, compiler-artifact, and
+controlled-backend checks remain explicit specialist exceptions.
+
+* Architecture Authority
+
+The checks under ~test/architecture_authority/~ inspect repository and install
+topology rather than verifier semantics.  They therefore have no synthetic
+outcome cases.  The ~architecture-authority-specialist-check~ alias covers:
+
+- Git index and worktree category handling;
+- live install-policy, package, runtime, and concentration constraints; and
+- recorded-object replay, bare-repository behaviour, and independence from
+  unrelated worktree state.
+
+These checks do not select verifier reports, diagnostic presentation, or
+semantic outcomes.
+
+* Prepared CMT Input
+
+Host: ~test/cmt_input/outcome_cases.ml~
+
+- ~prepared-implementation-classifies-mutation~ selects frontend rejection,
+  ~VERO_UNSUPPORTED_MUTATION~, and the rejected implementation unit from a
+  declared ~Prepared_cmt~.
+- ~prepared-interface-rejected~ selects frontend rejection,
+  ~VERO_UNSUPPORTED_INTERFACE~, and the rejected interface unit.
+
+The ~cmt-input-specialist-check~ alias covers integer-target precedence,
+malformed and incompatible CMT classification, Typedtree metadata, accepted
+mode and path shapes, and compiler-packed annotations.  The packed-input probe
+uses ~ocamlc -pack~ because a Dune library archive is not a compiler ~Packed~
+annotation.  Diagnostic spans are not part of either contract.
+
+* Private Receipts
+
+Host: ~test/private_receipt/outcome_cases.ml~
+
+Verified and counterexample cases:
+
+- ~local-receipt-dependent-verifies~
+- ~failed-callee-blocks-dependent~
+- ~independent-receipt-source-still-runs~
+- ~receipt-does-not-prove-call-precondition~
+- ~branch-results-do-not-launder-invariant~
+- ~rebound-results-do-not-launder-invariant~
+- ~unrelated-failure-preserves-receipt-path~
+
+The cases select status, keyed unit disposition, selected functions, and the
+owned assertion, postcondition, or call-precondition kind.  They do not select
+generated receipt identities, function indexes, rendered models, or source
+spans.
+
+The ~private-receipt-specialist-check~ alias covers issuance and completion,
+session snapshots, dependency scheduling, path and key separation, recursive
+or untrusted receipt-source rejection, issue and consumption counters, cold
+installed imports, private-path access controls, and absence of persistent
+cache or sidecar files.  These are private authority, filesystem, and resource
+contracts rather than closed semantic facts.
+
+* Release Verification
+
+Host: ~test/release_verification/outcome_cases.ml~
+
+Core verification cases:
+
+- ~erased-sidecars-remain-buildable~ selects frontend rejection,
+  ~VERO_UNSUPPORTED_TYPE~, and its keyed unit after Dune builds the erased CMT.
+- ~recursive-stack-verifies~ selects the verified unit, ~push~, ~drain~,
+  ~drain_and_read~, recursion and call obligation kinds, and an inclusive
+  obligation maximum of ~110~ with measured value ~92~ and a VC-expansion
+  rationale.
+- ~pure-recursion-verifies~ selects verified recursion and strict descent.
+- ~false-postcondition~, ~wrong-mutation-postcondition~,
+  ~push-requires-upper-bound~, ~drop-requires-nonempty~, and
+  ~drain-must-decrease~ select counterexample status, keyed units, owning
+  functions, and their postcondition, arithmetic, call-precondition, or
+  recursive-descent kinds.
+- ~aliased-write-rejected~ selects frontend status, code, and unit.
+- ~explicit-low-budget-is-inconclusive~ selects process exit class ~3~.
+
+CLI cases select exit class ~2~, the applicable stable ~VERO_*~ code, and
+cleanup facts where needed:
+
+- ~unsupported-solver~, ~nonpositive-timeout~, and ~duplicate-rlimit~
+- ~invalid-rlimit-01~ through ~invalid-rlimit-10~
+- ~missing-rlimit-value~, ~missing-input~, and ~unknown-option~
+- ~malformed-cmt~, ~missing-dump-sst-path~, and ~missing-dump-vir-path~
+- ~duplicate-dump-sst~, ~duplicate-dump-vir~, and ~usage-without-command~
+
+Complete SST or VIR output, generated identities, report order, diagnostic
+prose, and exact function totals are not selected.
+
+The ~release-verification-specialist-check~ alias exercises a controlled
+backend-unknown result and its exit-class mapping.  ANSI presentation is
+independently covered by
+~test/ui_goldens/release_verification/ansi.t~.
+
+* Verifier Service
+
+Host: ~test/verifier_service/outcome_cases.ml~
+
+- ~service-projects-verified-result~ selects verified status, unit, and
+  function.
+- ~service-projects-counterexample-kind~ selects counterexample status, unit,
+  and the ~false_postcondition~ postcondition kind.
+- ~trusted-body-consumer-verifies~ selects the verified consumer, ~caller~,
+  and its call-precondition kind.
+- ~service-projects-dependency-units~ selects both units in a multi-module Dune
+  project and the ~observe~ function.
+- ~configuration-semantic-parity~ compares serial, explicit-resource, and
+  threaded closed projections while excluding only the declared mode facts.
+
+The ~verifier-service-specialist-check~ alias covers invalid configuration
+opacity, provenance and trusted-view accessors, unused-dependency projection,
+prepared-CMT public API use, and source-level architecture checks that forbid
+filesystem, process, rendering, solver, private mutable, or ~Obj~ authority in
+the service boundary.
+
+* Commands
+
+#+begin_src sh
+dune build @test/cmt_input/cmt-input-outcome-check
+dune build @test/private_receipt/private-receipt-outcome-check
+dune build @test/release_verification/release-verification-outcome-check
+dune build @test/verifier_service/verifier-service-outcome-check
+dune build @test/ui_goldens/release_verification/ui-goldens-check
+#+end_src

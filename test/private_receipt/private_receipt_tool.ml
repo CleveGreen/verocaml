@@ -57,8 +57,19 @@ let schedule filename =
           ~validated:input.validated ~invariants:input.invariants input.program
       with
       | Error error ->
-          print_endline
-            ("rejected: " ^ Symbolic_executor_private.error_to_string error)
+          let kind =
+            match error.Symbolic_executor_private.unsupported with
+            | Symbolic_executor_private.Malformed_sst
+                "recursive verified-result receipt edge is unsupported" ->
+                "recursive-receipt-edge"
+            | Symbolic_executor_private.Malformed_sst
+                "imported, external, or trusted result cannot be a receipt dependency"
+              ->
+                "untrusted-receipt-source"
+            | _ -> "unsupported"
+          in
+          Printf.printf "schedule=rejected function=%s kind=%s\n"
+            error.function_name kind
       | Ok prepared ->
           Symbolic_executor_private.scheduled_functions prepared
           |> List.iter (fun scheduled ->

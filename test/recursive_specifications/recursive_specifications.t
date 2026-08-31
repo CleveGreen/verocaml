@@ -21,8 +21,6 @@ an integer self-actual preserve edge counts and the A1/A2/A3 contract.
   $ for n in recursive_with_nonrecursive_helper recursive_helper_scalar recursive_helper_hygienic recursive_helper_integer_actual recursive_helper_non_strict recursive_helper_in_decreases recursive_helper_aggregate_result recursive_helper_tuple recursive_helper_record recursive_helper_unit recursive_helper_only_aggregate recursive_helper_distinct_recursive recursive_helper_invariant recursive_helper_labelled recursive_helper_variant_construction recursive_helper_mutable recursive_helper_exec recursive_helper_external recursive_helper_trusted recursive_helper_unsupported_integer_if recursive_helper_higher_order recursive_helper_partial recursive_helper_model; do retained_compile "$n"; done
   $ ./recursive_specifications_tool.exe helper-unit artifacts/recursive_with_nonrecursive_helper.cmt artifacts/recursive_helper_scalar.cmt artifacts/recursive_helper_hygienic.cmt artifacts/recursive_helper_integer_actual.cmt artifacts/recursive_helper_non_strict.cmt
   recursive Spec helpers: authenticated closure, hygienic expansion, termination parity, and A2 semantics
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify fixtures/recursive_with_nonrecursive_helper.ml --timeout-ms 60000
-  verocaml: verified file=fixtures/recursive_with_nonrecursive_helper.ml functions=0 obligations=5
   $ ./recursive_specifications_tool.exe helper-forgery artifacts/recursive_with_nonrecursive_helper.cmt
   copied recursive-helper certificate rejected before expansion
   $ ./recursive_specifications_tool.exe helper-raw-forgery artifacts/recursive_helper_scalar.cmt
@@ -80,12 +78,8 @@ reaches CMT, semantic preparation, or either solver.
   $ retained_reject overflow
   adapter rejected before solver
 
-The historical recursive higher-order Spec now verifies with a logical
-function formal. External and mutual source shapes remain unsupported.
+External and mutual source shapes remain specialist admission boundaries.
 
-  $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/higher_order.cmo fixtures/higher_order.ml
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/higher_order.cmt --timeout-ms 5000 --rlimit 100000 | sed -E 's,file=[^ ]+,file=higher_order.cmt,'
-  verocaml: verified file=higher_order.cmt functions=0 obligations=3
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/external.cmo fixtures/external.ml
   $ ./recursive_specifications_tool.exe reject artifacts/external.cmt
   adapter rejected before solver
@@ -170,24 +164,12 @@ solver.
   $ ./recursive_specifications_tool.exe forge artifacts/forged.sst
   installed recursive SST forgery rejected before both solvers
 
-Production verification consumes the all-Verified termination receipt. The
-opaque public symbol is usable without unfolding, while a two-layer equation
-uses explicit depth two and no reveal remains opaque.
-
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify fixtures/proof_opaque_public.ml --timeout-ms 60000 | tail -1
-  verocaml: verified file=fixtures/proof_opaque_public.ml functions=1 obligations=4
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify fixtures/proof_reveal_depth.ml --timeout-ms 60000 | tail -1
-  verocaml: verified file=fixtures/proof_reveal_depth.ml functions=1 obligations=4
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify fixtures/proof_no_reveal.ml --timeout-ms 60000 >/dev/null 2>&1; echo $?
-  1
-
 Canonical generic list/tree schemas admit exact applications without cloned
 definitions, constructor matching, structural child descent, recursive
 Spec/Proof bodies, and typed mathematical equality. The VIR pins one exact
 rank domain and the labelled entry/current obligations.
 
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify fixtures/structural_positive.ml --timeout-ms 60000 --dump-vir artifacts/structural.vir | tail -1
-  verocaml: verified file=fixtures/structural_positive.ml functions=1 obligations=14
+  $ OCAML_COLOR=never ../../src/verocaml.exe verify fixtures/structural_positive.ml --timeout-ms 60000 --dump-vir artifacts/structural.vir >/dev/null
   $ grep -E 'component (chain<int>|chain<bool>|tree<int>)|positive-child-smaller' artifacts/structural.vir
     component chain<int>#0
     positive-child-smaller constructor=chain#0.Link#1 field=$arg1#1 child=chain<int>#0
@@ -196,12 +178,6 @@ rank domain and the labelled entry/current obligations.
     positive-child-smaller constructor=tree#1.Node#1 field=$arg1#1 child=tree<int>#1
     component chain<bool>#0
     positive-child-smaller constructor=chain#0.Link#1 field=$arg1#1 child=chain<bool>#0
-  $ grep -E 'entry-measure-nonnegative|recursive-call-measure-nonnegative|recursive-call-strict-descent' artifacts/structural.vir | head -3
-    vc 0 entry-measure-nonnegative declaration=structural_positive.ml:29:2-29:26 @ structural_positive.ml:29:2-29:26
-    vc 1 recursive-call-measure-nonnegative callee=chain_induction#3 declaration=structural_positive.ml:29:2-29:26 call=structural_positive.ml:30:48-30:68 @ structural_positive.ml:30:48-30:68
-    vc 2 recursive-call-strict-descent callee=chain_induction#3 declaration=structural_positive.ml:29:2-29:26 call=structural_positive.ml:30:48-30:68 @ structural_positive.ml:30:48-30:68
-  $ grep -F 'goal (< (rank[' artifacts/structural.vir | head -1 | sed -E 's@rank-domain/v1/[0-9a-f]+@rank-domain/v1/DIGEST@g'
-      goal (< (rank[rank-domain/v1/DIGEST] (t0_chain_c1_Link.$arg1#1 xs$0)) (rank[rank-domain/v1/DIGEST] xs$0))
   $ retained_compile structural_positive
   $ ./recursive_specifications_tool.exe render-rank artifacts/structural_positive.cmt > artifacts/rank.smt
   $ grep -c ':qid verocaml.rank' artifacts/rank.smt
@@ -223,18 +199,6 @@ rank domain and the labelled entry/current obligations.
   0
   $ grep -c ':qid verocaml.datatype.' artifacts/structural.logic || true
   0
-
-Scalar, exact monomorphic local-rank, and recursively admitted generic-rank
-actuals remain accepted.
-
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify fixtures/structural_actual_positive.ml --timeout-ms 60000 >/dev/null
-
-An ordinary local nonrecursive generic instance remains available to
-constructor, match, and function lowering without rank or equality admission.
-The positive is compiled to retained CMT before product verification.
-
-  $ retained_compile structural_actual_unranked
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/structural_actual_unranked.cmt --timeout-ms 60000 >/dev/null
 
 Multiple/lexicographic measures, references, mutable/function-bearing
 instances, a cross-domain selection, and a non-child/nondecreasing recursive

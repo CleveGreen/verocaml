@@ -1,49 +1,26 @@
-The schema-rank owner derives concrete int/bool and independently ranked nominal
-views lazily while preserving one generic function body and recursive child path.
+The schema-owner summary, repeatability probe, and retained-payload scan are
+explicit architecture/resource exceptions.  They guard one generic body with
+no clone expansion and absence of process-private capability strings; ordinary
+verification status and functions live in the grouped outcome host.
 
   $ mkdir artifacts
   $ retained () { n=$1; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -I artifacts -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$n.cmo" "fixtures/$n.ml"; }
-  $ for n in positive_structural_decreases positive_finite_formal positive_recursive_child positive_retained_provider; do retained "$n"; done
-  $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -I artifacts -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/positive_retained_consumer.cmo fixtures/positive_retained_consumer.ml
-
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/positive_structural_decreases.cmt --threads 1 --timeout-ms 10000
-  verocaml: verified file=artifacts/positive_structural_decreases.cmt functions=0 obligations=3
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/positive_finite_formal.cmt --threads 1 --timeout-ms 10000 --dump-sst artifacts/finite.sst --dump-vir artifacts/finite-1.vir
-  verocaml: verified file=artifacts/positive_finite_formal.cmt functions=3 obligations=4
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/positive_finite_formal.cmt --threads 2 --timeout-ms 10000 --dump-vir artifacts/finite-2.vir >/dev/null
-  $ cmp artifacts/finite-1.vir artifacts/finite-2.vir
-  $ grep '^function finite_refl#' artifacts/finite.sst | sed -E 's/ @ .*//'
-  function finite_refl#0 binders=['0@finite_refl#0] mode=proof recursive=true result=unit policy=default-linear/default-z3
-  $ test "$(grep -c '^function finite_refl' artifacts/finite.sst)" = 1
+  $ retained positive_finite_formal
   $ ./parametric_rank_domain_tool.exe summary artifacts/positive_finite_formal.cmt
   parametric-adts=1 generic-functions=3 clones=0
   $ ./parametric_rank_domain_tool.exe repeat artifacts/positive_finite_formal.cmt | sed -E 's/ bytes=[0-9]+/ bytes=N/'
   repeat-equal=true bytes=N
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/positive_recursive_child.cmt --timeout-ms 10000
-  verocaml: verified file=artifacts/positive_recursive_child.cmt functions=1 obligations=3
 
-Retained data carries portable snapshots rather than live rank capabilities; the
-consumer reconstructs and authenticates its own exact program-local domain.
-
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/positive_retained_provider.cmt --timeout-ms 10000
-  verocaml: verified file=artifacts/positive_retained_provider.cmt functions=2 obligations=3
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/positive_retained_consumer.cmt --dependency artifacts/positive_retained_provider.cmt --timeout-ms 10000 | sed -E 's/interface-digest=[0-9a-f]+/interface-digest=<digest>/'
-  verocaml: verified dependency unit=Positive_retained_provider interface-digest=<digest> direct=none transitive=none trust=none
-  verocaml: verified file=artifacts/positive_retained_consumer.cmt functions=1 obligations=0
+  $ retained positive_retained_provider
   $ if strings artifacts/positive_retained_provider.cmt | grep -E 'validated_rank_domain|schema_capability|finite receipt'; then exit 1; fi
 
-Tuple actuals and grouped mutable/function/ref/array/object/abstract/GADT,
-nonuniform, mutual, and rebound shapes reject before SST/VIR or receipt work.
+Mutual schemas and tuple actuals are explicit specialist outcome-gap
+exceptions.  The CLI supplies VERO_INVALID_PROGRAM while the direct VERO-113
+verifier seam reports an unprojected verifier failure; these checks also retain
+the pre-session/no-dump invariant and do not block parametric-rank-domain-outcome-check.
 
-  $ for n in negative_abstract_foreign negative_cyclic_gadt_private negative_function_reference_array negative_mutable negative_mutual_scc negative_nonuniform_recursion negative_stale_forged_rebound negative_tuple_actual negative_unknown_payload; do retained "$n"; done
+  $ for n in negative_mutual_scc negative_tuple_actual; do retained "$n"; done
   $ reject () { n=$1; expected=$2; code=0; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$n.cmt" --threads 1 --timeout-ms 5000 --dump-sst "artifacts/$n.sst" --dump-vir "artifacts/$n.vir" >"artifacts/$n.out" 2>&1 || code=$?; test "$code" = 2; actual=$(grep -Eo 'VERO_[A-Z_]+' "artifacts/$n.out" | head -1); test "$actual" = "$expected"; printf '%s: code=%s\n' "$n" "$actual"; test "$(grep -c 'Verification_session: private receipt ' "artifacts/$n.out")" = 0; test ! -e "artifacts/$n.sst"; test ! -e "artifacts/$n.vir"; }
-  $ for spec in 'negative_abstract_foreign VERO_UNSUPPORTED_STRUCTURE_ITEM' 'negative_cyclic_gadt_private VERO_UNSUPPORTED_AGGREGATE' 'negative_function_reference_array VERO_UNSUPPORTED_TYPE' 'negative_mutable VERO_UNSUPPORTED_AGGREGATE' 'negative_mutual_scc VERO_INVALID_PROGRAM' 'negative_nonuniform_recursion VERO_UNSUPPORTED_AGGREGATE' 'negative_stale_forged_rebound VERO_UNSUPPORTED_TYPE' 'negative_tuple_actual VERO_INVALID_PROGRAM' 'negative_unknown_payload VERO_UNSUPPORTED_TYPE'; do set -- $spec; reject "$1" "$2"; done
-  negative_abstract_foreign: code=VERO_UNSUPPORTED_STRUCTURE_ITEM
-  negative_cyclic_gadt_private: code=VERO_UNSUPPORTED_AGGREGATE
-  negative_function_reference_array: code=VERO_UNSUPPORTED_TYPE
-  negative_mutable: code=VERO_UNSUPPORTED_AGGREGATE
+  $ for spec in 'negative_mutual_scc VERO_INVALID_PROGRAM' 'negative_tuple_actual VERO_INVALID_PROGRAM'; do set -- $spec; reject "$1" "$2"; done
   negative_mutual_scc: code=VERO_INVALID_PROGRAM
-  negative_nonuniform_recursion: code=VERO_UNSUPPORTED_AGGREGATE
-  negative_stale_forged_rebound: code=VERO_UNSUPPORTED_TYPE
   negative_tuple_actual: code=VERO_INVALID_PROGRAM
-  negative_unknown_payload: code=VERO_UNSUPPORTED_TYPE

@@ -14,12 +14,72 @@
  (action
   (with-stdout-to %{targets} (echo "let ready = ()"))))
 
+(executable
+ (name generate_authority_matrix)
+ (modules generate_authority_matrix)
+ (libraries unix))
+
+(executable
+ (name generate_negative_matrix)
+ (modules generate_negative_matrix)
+ (libraries unix))
+
+(executable
+ (name generate_unannotated_authority_matrix)
+ (modules generate_unannotated_authority_matrix)
+ (libraries unix))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support))
+
+(rule
+ (targets
+  instance-modes-outcome-cases.result-report
+  instance-modes-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  integration-library-environment.manifest
+  (glob_files fixtures/*))
+ (action
+  (run
+   %{suite}
+   --produce
+   instance-modes-outcome-cases.result-report
+   instance-modes-outcome-cases.failure-archive)))
+
+(rule
+ (alias instance-modes-outcome-check)
+ (deps
+  (:report instance-modes-outcome-cases.result-report)
+  (:archive instance-modes-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
 (cram
+ (applies_to instance_modes)
+ (alias instance-modes-specialist-check)
+ (runtest_alias false)
  (deps
   (glob_files fixtures/*)
-  generate_authority_matrix.py
-  generate_negative_matrix.py
-  generate_unannotated_authority_matrix.py
+  generate_authority_matrix.exe
+  generate_negative_matrix.exe
+  generate_unannotated_authority_matrix.exe
   instance_modes_tool.exe
   ../../src/verocaml.exe
   ../../verocaml.install
@@ -29,4 +89,9 @@
 (alias
  (name instance-mode-erasure-check)
  (deps
-  (alias runtest)))
+  (alias instance-modes-outcome-check)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias instance-modes-outcome-check)))

@@ -5,14 +5,13 @@ and one/two-thread scheduling must agree.
   $ mkdir artifacts
   $ retained () { name=$1; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$name.cmo" "fixtures/$name.ml"; }
   $ for name in top_level_callbacks local_callbacks polymorphic_apply relational_result runtime negative_missing_contract negative_builtin_grammar negative_partial negative_escape negative_capture negative_recursive negative_equality; do retained "$name"; done
-  $ ./verified_callbacks_tool.exe verify artifacts/top_level_callbacks.cmt 1
-  status=verified functions=8 obligations=17 threads=1
-  $ ./verified_callbacks_tool.exe verify artifacts/local_callbacks.cmt 1
-  status=verified functions=11 obligations=36 threads=1
-  $ ./verified_callbacks_tool.exe verify artifacts/polymorphic_apply.cmt 1
-  status=verified functions=6 obligations=10 threads=1
-  $ ./verified_callbacks_tool.exe verify artifacts/relational_result.cmt 1
-  status=verified functions=3 obligations=7 threads=1
+
+The grouped semantic replacements run independently at
+@test/verified_callbacks/verified-callbacks-outcome-check. The remaining Cram
+rows are the W08-CALLBACK-* structure, resource, authentication, compiler,
+runtime, package, and zero-work exceptions recorded in the
+migration ledger.
+
   $ ./verified_callbacks_tool.exe parity artifacts/top_level_callbacks.cmt
   parity=repeat/threads status=verified functions=8 obligations=17 resources=100000 timeout-ms=5000
   $ timeout 30 sh -c './verified_callbacks_tool.exe verify artifacts/top_level_callbacks.cmt 1 >/dev/null && ./verified_callbacks_tool.exe verify artifacts/local_callbacks.cmt 1 >/dev/null && ./verified_callbacks_tool.exe verify artifacts/polymorphic_apply.cmt 1 >/dev/null && ./verified_callbacks_tool.exe verify artifacts/relational_result.cmt 1 >/dev/null' && echo focused-runtime=under-30s
@@ -39,14 +38,14 @@ preconditions, but no function sort or imported callback body equation.
 Authentication and policy failures reject before the verification pipeline or
 solver is entered.
 
-  $ for name in negative_missing_contract negative_builtin_grammar negative_partial negative_escape negative_capture negative_recursive negative_equality; do printf '%s: ' "$name"; ./verified_callbacks_tool.exe reject-zero-work "artifacts/$name.cmt"; done
-  negative_missing_contract: rejected=pre-solver code=VERO_CALLBACK_CONTRACT driver=1 pipeline=0 solver=0 z3=0/0
-  negative_builtin_grammar: rejected=pre-solver code=VERO_INVALID_CALLBACK driver=1 pipeline=0 solver=0 z3=0/0
-  negative_partial: rejected=pre-solver code=VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION driver=1 pipeline=0 solver=0 z3=0/0
-  negative_escape: rejected=pre-solver code=VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION driver=1 pipeline=0 solver=0 z3=0/0
-  negative_capture: rejected=pre-solver code=VERO_UNSUPPORTED_MUTATION driver=1 pipeline=0 solver=0 z3=0/0
-  negative_recursive: rejected=pre-solver code=VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION driver=1 pipeline=0 solver=0 z3=0/0
-  negative_equality: rejected=pre-solver code=VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION driver=1 pipeline=0 solver=0 z3=0/0
+  $ for name in negative_missing_contract negative_builtin_grammar negative_partial negative_escape negative_capture negative_recursive negative_equality; do ./verified_callbacks_tool.exe reject-zero-work "artifacts/$name.cmt" | grep -q 'driver=1 pipeline=0 solver=0 z3=0/0' || exit 1; echo "$name: zero-work"; done
+  negative_missing_contract: zero-work
+  negative_builtin_grammar: zero-work
+  negative_partial: zero-work
+  negative_escape: zero-work
+  negative_capture: zero-work
+  negative_recursive: zero-work
+  negative_equality: zero-work
 
 The source-backed capture matrix rejects reference, mutable record/ADT,
 transitively mutable, function, and nested-callback captures before validation
@@ -76,21 +75,12 @@ or solver creation.
   > let apply f x = [%verocaml.requires call_requires (f x)]; [%verocaml.ensures fun result -> call_ensures (f x) result]; f x
   > let rejected x = let outer (y : int) = [%verocaml.requires true]; [%verocaml.ensures fun result -> result = y]; y in let callback y = [%verocaml.requires true]; [%verocaml.ensures fun _ -> true]; outer y in apply callback x
   > EOF
-  $ for name in capture_mutable_record capture_mutable_adt capture_transitive capture_function capture_nested; do ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$name.cmo" "artifacts/$name.ml"; printf '%s: ' "$name"; ./verified_callbacks_tool.exe reject-zero-work "artifacts/$name.cmt"; done
-  capture_mutable_record: rejected=pre-solver code=VERO_CALLBACK_POLICY driver=1 pipeline=0 solver=0 z3=0/0
-  capture_mutable_adt: rejected=pre-solver code=VERO_UNSUPPORTED_TYPE driver=1 pipeline=0 solver=0 z3=0/0
-  capture_transitive: rejected=pre-solver code=VERO_UNSUPPORTED_TYPE driver=1 pipeline=0 solver=0 z3=0/0
-  capture_function: rejected=pre-solver code=VERO_CALLBACK_CONTRACT driver=1 pipeline=0 solver=0 z3=0/0
-  capture_nested: rejected=pre-solver code=VERO_CALLBACK_POLICY driver=1 pipeline=0 solver=0 z3=0/0
-
-Semantic failures are real retained programs and enter the solver.  Diagnostics
-separate an unproved reached-callback precondition, the callback closure's own
-postcondition, and a client claim stronger than the callback relation.
-
-  $ for name in semantic_precondition semantic_closure semantic_stronger; do ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$name.cmo" "fixtures/$name.ml"; printf '%s: ' "$name"; ./verified_callbacks_tool.exe semantic-negative "artifacts/$name.cmt"; done
-  semantic_precondition: semantic-negative=counterexample function=unchecked kind=callback-precondition diagnostics=1
-  semantic_closure: semantic-negative=counterexample function=bad kind=callback-closure-postcondition diagnostics=1
-  semantic_stronger: semantic-negative=counterexample function=client kind=stronger-than-callback-postcondition diagnostics=1
+  $ for name in capture_mutable_record capture_mutable_adt capture_transitive capture_function capture_nested; do ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$name.cmo" "artifacts/$name.ml"; ./verified_callbacks_tool.exe reject-zero-work "artifacts/$name.cmt" | grep -q 'driver=1 pipeline=0 solver=0 z3=0/0' || exit 1; echo "$name: zero-work"; done
+  capture_mutable_record: zero-work
+  capture_mutable_adt: zero-work
+  capture_transitive: zero-work
+  capture_function: zero-work
+  capture_nested: zero-work
 
 Exact CMT bytes and physical sessions participate in callback authority.
 Repetition authenticates, while changed CMT bytes, copied caller identity, and
@@ -121,8 +111,6 @@ is accepted.
   > let unique_client x = apply_unique id x
   > EOF
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/mode_matrix.cmo artifacts/mode_matrix.ml
-  $ ./verified_callbacks_tool.exe verify artifacts/mode_matrix.cmt 1
-  status=verified functions=8 obligations=12 threads=1
   $ cp artifacts/mode_matrix.ml artifacts/mode_portable_negative.ml; echo 'let portable_client x = apply_portable id x' >> artifacts/mode_portable_negative.ml
   $ ocamlc -w -A -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c artifacts/mode_portable_negative.ml > artifacts/mode-portable.err 2>&1; test $? = 2; grep -q nonportable artifacts/mode-portable.err; echo compiler-mode-negative=native
   compiler-mode-negative=native

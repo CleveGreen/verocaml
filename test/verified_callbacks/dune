@@ -1,7 +1,8 @@
 (executable
  (name verified_callbacks_tool)
  (modules verified_callbacks_tool verified_callbacks_prerequisites)
- (flags (:standard -I src/.verocaml_core.objs/byte))
+ (flags
+  (:standard -I src/.verocaml_core.objs/byte))
  (libraries verocaml_core compiler-libs.common))
 
 (rule
@@ -20,7 +21,51 @@
   ../../src/.verocaml_core.objs/byte/verification_session.cmi
   ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
  (action
-  (with-stdout-to %{targets} (echo "let ready = ()"))))
+  (with-stdout-to
+   %{targets}
+   (echo "let ready = ()"))))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support verocaml_core unix))
+
+(rule
+ (targets
+  verified-callbacks-outcome-cases.result-report
+  verified-callbacks-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  (glob_files fixtures/*.ml)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   verified-callbacks-outcome-cases.result-report
+   verified-callbacks-outcome-cases.failure-archive)))
+
+(rule
+ (alias verified-callbacks-outcome-check)
+ (deps
+  (:report verified-callbacks-outcome-cases.result-report)
+  (:archive verified-callbacks-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
 
 (cram
  (deps
@@ -34,4 +79,10 @@
 
 (alias
  (name verified-callbacks-check)
- (deps (alias runtest)))
+ (deps
+  (alias runtest)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias verified-callbacks-outcome-check)))

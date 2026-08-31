@@ -75,46 +75,6 @@ source basename does not flow into the bounded internal output name.
   $ test ! -e ./-impl.cmi && test ! -e ./-impl.cmo && test ! -e ./-impl.cmt
   $ test ! -e ./--source.cmi && test ! -e ./--source.cmo && test ! -e ./--source.cmt
 
-Compiler diagnostics and output are forwarded. Nonzero and signaled compiler
-outcomes remain source-input errors, while setup and invocation failures remain
-internal failures. A failed compiler's residual CMT is never consumed, and the
-temporary directory is private and cleaned.
-
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify fixtures/compile_error.ml > artifacts/compile-error.out 2>&1; echo $?
-  2
-  $ grep -F 'error[VERO_SOURCE_COMPILE] source=fixtures/compile_error.ml compiler=exit 2' artifacts/compile-error.out
-  verocaml: error[VERO_SOURCE_COMPILE] source=fixtures/compile_error.ml compiler=exit 2
-  $ grep -F 'File "fixtures/compile_error.ml", line 1, characters 27-32:' artifacts/compile-error.out
-  File "fixtures/compile_error.ml", line 1, characters 27-32:
-  $ grep -F 'This expression has type "bool"' artifacts/compile-error.out
-  Error: This expression has type "bool" but an expression was expected of type
-  $ env -u OCAML_COLOR TMPDIR="$PWD/artifacts/temp" VEROCAML_OCAMLC="$PWD/source_input_compiler_helper.exe" VEROCAML_TEST_COMPILER_OUTCOME=exit VEROCAML_PPX="$PWD/../../ppx/vero_ppx.exe" VEROCAML_GHOST_DIR="$PWD/../../runtime/.vero_ghost.objs/byte" ../../src/verocaml.exe verify fixtures/verified.ml > artifacts/compiler-exit.out 2>&1; echo $?
-  2
-  $ grep -F 'VERO_SOURCE_COMPILE' artifacts/compiler-exit.out | grep -F 'source=fixtures/verified.ml compiler=exit 7' >/dev/null
-  $ od -An -tx1 -v artifacts/compiler-exit.out | tr -d ' \n' | grep -q '1b5b313b33316d'; echo $?
-  0
-  $ grep -F 'controlled compiler stdout' artifacts/compiler-exit.out
-  controlled compiler stdout
-  $ grep -F 'controlled compiler stderr' artifacts/compiler-exit.out
-  controlled compiler stderr
-  $ grep -F 'temp-mode=700 output=source.cmo input=fixtures/verified.ml color=always' artifacts/compiler-exit.out
-  temp-mode=700 output=source.cmo input=fixtures/verified.ml color=always
-  $ test -z "$(find artifacts/temp -mindepth 1 -print -quit)"
-  $ OCAML_COLOR=never TMPDIR="$PWD/artifacts/temp" VEROCAML_OCAMLC="$PWD/source_input_compiler_helper.exe" VEROCAML_TEST_COMPILER_OUTCOME=signal VEROCAML_PPX="$PWD/../../ppx/vero_ppx.exe" VEROCAML_GHOST_DIR="$PWD/../../runtime/.vero_ghost.objs/byte" ../../src/verocaml.exe verify fixtures/verified.ml > artifacts/compiler-signal.out 2>&1; echo $?
-  2
-  $ grep -E 'VERO_SOURCE_COMPILE.*compiler=signal [-0-9]+' artifacts/compiler-signal.out >/dev/null
-  $ grep -F 'controlled compiler signal' artifacts/compiler-signal.out
-  controlled compiler signal
-  $ test -z "$(find artifacts/temp -mindepth 1 -print -quit)"
-  $ printf 'not executable\n' > artifacts/not-executable
-  $ OCAML_COLOR=never VEROCAML_OCAMLC="$PWD/artifacts/not-executable" VEROCAML_PPX="$PWD/../../ppx/vero_ppx.exe" VEROCAML_GHOST_DIR="$PWD/../../runtime/.vero_ghost.objs/byte" ../../src/verocaml.exe verify fixtures/verified.ml > artifacts/invocation.out 2>&1; echo $?
-  3
-  $ grep -F 'error[VERO_INTERNAL] could not invoke the pinned compiler:' artifacts/invocation.out >/dev/null
-  $ printf 'not a directory\n' > artifacts/not-a-directory
-  $ OCAML_COLOR=never TMPDIR="$PWD/artifacts/not-a-directory" ../../src/verocaml.exe verify fixtures/verified.ml > artifacts/setup.out 2>&1; echo $?
-  3
-  $ grep -F 'error[VERO_INTERNAL] could not create private source-compilation storage:' artifacts/setup.out >/dev/null
-
 Input and dump paths are pairwise distinct by normalized absolute spelling,
 existing canonical target, and existing device/inode identity. Every rejection
 happens before source/CMT consumption or dump creation and preserves content.

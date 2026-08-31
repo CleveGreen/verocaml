@@ -1,9 +1,58 @@
 (executable
  (name external_specifications_tool)
+ (modules external_specifications_tool)
  (libraries verocaml_core compiler-libs.common))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support verocaml_core compiler-libs.common))
+
+(rule
+ (targets
+  external-specifications-outcome-cases.result-report
+  external-specifications-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   external-specifications-outcome-cases.result-report
+   external-specifications-outcome-cases.failure-archive)))
+
+(rule
+ (alias external-specifications-outcome-check)
+ (deps
+  (:report external-specifications-outcome-cases.result-report)
+  (:archive external-specifications-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
 (cram
  (deps (glob_files fixtures/*.ml) external_specifications_tool.exe
   ../../ppx/vero_ppx.exe ../../src/verocaml.exe
   ../../runtime/vero_ghost.cma
   ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
 (alias (name external-specifications-check) (deps (alias runtest)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias external-specifications-outcome-check)))

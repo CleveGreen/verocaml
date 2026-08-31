@@ -1,0 +1,21 @@
+(cram
+ (applies_to external_specifications)
+ (alias ui-goldens-check)
+ (deps
+  (glob_files ../external_specifications/fixtures/*.ml)
+  ../external_specifications/external_specifications_tool.exe
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+
+(cram
+ (applies_to source_input)
+ (alias ui-goldens-check)
+ (deps
+  (glob_files ../source_input/fixtures/*.ml)
+  ../source_input/source_input_compiler_helper.exe
+  ../../src/verocaml.exe
+  ../../ppx/vero_ppx.exe
+  ../../runtime/vero_ghost.cma
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))

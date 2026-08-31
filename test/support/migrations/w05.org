@@ -1,0 +1,165 @@
+#+OPTIONS: author:nil toc:nil
+#+TITLE: Parametric Outcome Coverage
+
+This ledger records grouped outcome coverage for generic clone dependencies and
+parametric ADTs, core language features, interfaces, and programs.  Closed
+semantic cases cover status, codes, functions, obligation kinds, unit
+partitions, process protocols, and declared mode parity.  Specialist Cram/tool
+lanes cover private encodings, artifact authority, runtime erasure, or explicit
+architecture constraints.
+
+This group has no UI golden and no outcome resource maximum.
+
+* Generic Clone Dependencies
+
+Host: ~test/generic_clone_dependencies/outcome_cases.ml~
+
+Focused alias:
+~@test/generic_clone_dependencies/generic-clone-dependencies-outcome-check~
+
+- ~generic-source-cmt-thread-parity~ selects verified status, its unit,
+  representative generic functions, source/prepared-CMT modes, thread modes,
+  and closed parity excluding those mode keys.
+- ~reject-polymorphic-recursion~ selects frontend status,
+  ~VERO_UNSUPPORTED_POLYMORPHISM~, and the rejected unit.
+- ~reject-generic-higher-order~ selects frontend status,
+  ~VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION~, and the rejected unit.
+
+The specialist lane checks generic binder ownership, clone identity absence, and
+ordered type substitution at call sites.
+
+* Parametric ADTs
+
+Host: ~test/parametric_adts/outcome_cases.ml~
+
+Focused alias: ~@test/parametric_adts/parametric-adts-outcome-check~
+
+Verified and parity cases:
+
+- ~type-changing-option-map-parity~
+- ~generic-structures-parity~
+- ~closed-equality-parity~
+- ~proof-matrix-kinds-and-parity~
+- ~descriptor-laws-verify~
+- ~alpha-renamed-source-parity~
+- ~abstract-logical-equality-verifies~
+
+Counterexample cases:
+
+- ~wrong-constructor-postcondition~
+- ~swapped-record-postcondition~
+- ~abstract-logical-equality-counterexample~
+
+Frontend and process rejection cases:
+
+- ~reject-open-equality~
+- ~reject-recursive-equality~
+- ~reject-unit-payload-equality~
+- ~reject-function-payload-equality~
+- ~reject-ref-payload-equality~
+- ~reject-array-payload-equality~
+- ~reject-unauthenticated-descent~
+- ~reject-changed-recursive-arguments~
+- ~reject-generic-mutual-recursion~
+- ~reject-mutable-generic~
+
+Parity cases compare source with declared prepared CMTs and serial with threaded
+execution while excluding only named mode keys.  The proof matrix selects
+measure, descent, and local assertion kinds.  Process rejection selects exit,
+stable code, and registered environment forwarding.
+
+The specialist lane checks descriptor provenance, generic encoding, malformed
+descriptor boundaries, and runtime or erasure behaviour.
+
+* Parametric Core
+
+Host: ~test/parametric_core/outcome_cases.ml~
+
+Focused alias: ~@test/parametric_core/parametric-core-outcome-check~
+
+Verified and parity cases:
+
+- ~core-source-cmt-thread-parity~
+- ~logical-equality-parity~
+- ~abstract-adt-logical-equality~
+- ~alpha-renamed-source-parity~
+
+~logical-equality-counterexample~ selects an assertion counterexample and its
+unit.
+
+Frontend rejection cases select status, stable code, and keyed unit:
+
+- ~reject-open-parameter-equality~
+- ~reject-open-tuple-equality~
+- ~reject-open-option-equality~
+- ~reject-open-list-equality~
+- ~reject-partial-application~
+- ~reject-callback-contract~
+- ~reject-generic-mutation~
+- ~reject-explicit-polymorphic-recursion~
+- ~reject-missing-label~
+
+Process cases select exit class, stable code, and registered PPX/ghost
+forwarding:
+
+- ~reject-inferred-generic-recursion~
+- ~reject-open-aggregate~
+- ~source-compile-duplicate-label~
+- ~source-compile-unknown-label~
+- ~source-compile-wrong-optional-forward~
+
+The specialist lane checks generic and labelled-argument encoding, abstract
+sorts, malformed internal construction, solver boundaries, and architecture
+inventory constraints.
+
+* Parametric Interfaces
+
+Host: ~test/parametric_interfaces/outcome_cases.ml~
+
+Focused alias:
+~@test/parametric_interfaces/parametric-interfaces-outcome-check~
+
+- ~provider-consumers-project-parity~ uses one explicit multi-module
+  ~Dune_project~, selects provider and consumer units and representative
+  functions, and compares project with declared prepared CMTs across thread
+  modes.
+- ~reject-partial-provider-use~ selects frontend status,
+  ~VERO_UNSUPPORTED_TOP_LEVEL_BINDING~, provider success, and consumer
+  rejection.
+- ~reject-higher-order-provider-callback~ selects frontend status,
+  ~VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION~, provider success, and consumer
+  rejection.
+- ~reject-wrong-mode-provider-use~ selects process exit ~2~,
+  ~VERO_DEPENDENCY~, and registered colour forwarding.
+
+The specialist lane checks signature authority, parametric substitution,
+artifact authentication, copied artifact identity, installed boundaries, and
+runtime erasure.
+
+* Parametric Programs
+
+Host: ~test/parametric_programs/outcome_cases.ml~
+
+Focused alias:
+~@test/parametric_programs/parametric-programs-outcome-check~
+
+- ~persistent-collections-parity~
+- ~callback-workflows-parity~
+- ~workflow-provider-parity~
+- ~workflow-library-project-parity~
+
+The first three cases compare ~Single_source~ input with declared prepared CMTs
+across thread modes and select representative functions.  The library case uses
+an explicit provider/interface/consumer ~Dune_project~ and compares it with its
+prepared artifacts.  All parity exclusions are named input and execution mode
+facts.
+
+The specialist lane checks generic encoding and execution of the ordinary
+multi-module runtime after ghost erasure.
+
+* Commands
+
+#+begin_src sh
+dune exec test/parametric_adts/outcome_cases.exe -- --list
+dune build @test/parametric_adts/parametric-adts-outcome-check
+#+end_src

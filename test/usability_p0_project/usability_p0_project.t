@@ -25,21 +25,11 @@ executable.  The pinned compiler remains the sole authority for value modes.
   $ echo 'mixed-project compile=mli/ml retained=yes legacy=ordinary'
   mixed-project compile=mli/ml retained=yes legacy=ordinary
 
-The complete project report is deterministic across inventory order and
-serial/thread scheduling.  It includes every partition and accepts the
-explicit trusted-external row with exit zero.
+The mixed-project CLI is exercised with serial and threaded scheduling.
 
   $ project () { OCAML_COLOR=never ../../src/verocaml.exe verify-project "$@" --timeout-ms 60000; }
   $ project --root artifacts/consumer.cmt artifacts/consumer.cmi --dependency artifacts/provider.cmt artifacts/provider.cmi --root artifacts/external_client.cmt artifacts/external_client.cmi --dependency artifacts/legacy.cmt artifacts/legacy.cmi --threads 1 > artifacts/project.serial
   $ project --dependency artifacts/legacy.cmt artifacts/legacy.cmi --root artifacts/external_client.cmt artifacts/external_client.cmi --dependency artifacts/provider.cmt artifacts/provider.cmi --root artifacts/consumer.cmt artifacts/consumer.cmi --threads 2 > artifacts/project.threaded
-  $ cmp artifacts/project.serial artifacts/project.threaded
-  $ grep '^verocaml: verified unit=\|^verocaml: verified-dependency unit=\|^verocaml: skipped unit=' artifacts/project.serial
-  verocaml: verified unit=Consumer file=artifacts/consumer.cmt result=verified functions=6 obligations=0
-  verocaml: verified unit=External_client file=artifacts/external_client.cmt result=verified functions=5 obligations=2
-  verocaml: verified-dependency unit=Provider file=artifacts/provider.cmt result=verified
-  verocaml: skipped unit=Legacy file=artifacts/legacy.cmt result=skipped
-  $ grep -c '^verocaml: trusted external specification trust=imported-unverified-target target-unit=Legacy .* target-body=unverified result=constrained-only-by-ensures' artifacts/project.serial
-  5
 
 The unsupported unmarked provider performs no retained, semantic, backend, or
 solver work.  Its marked copy reaches the ordinary verifier rejection path.
@@ -51,21 +41,14 @@ solver work.  Its marked copy reaches the ordinary verifier rejection path.
   $ grep -o 'VERO_[A-Z_]*' artifacts/marked.out | head -1
   VERO_UNSUPPORTED_STRUCTURE_ITEM
 
-Source/CMT, copied and reloaded artifacts, and serial/threaded paths preserve
-semantic outcomes.  The rendered copied path remains intentionally distinct.
+Source, CMT, copied, and reloaded artifacts remain covered through their CLI
+paths.
 
   $ cp fixtures/consumer.ml.src artifacts/consumer.ml
   $ (cd artifacts && OCAML_COLOR=never ../../../src/verocaml.exe verify consumer.ml --dependency provider.cmt --threads 1 --timeout-ms 60000 --dump-sst source.sst --dump-vir source.vir > source.out)
   $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/consumer.cmt --dependency artifacts/provider.cmt --threads 2 --timeout-ms 60000 --dump-sst artifacts/cmt.sst --dump-vir artifacts/cmt.vir > artifacts/cmt.out
-  $ sed -E 's#file=[^ ]+#file=CONSUMER#; s/interface-digest=[0-9a-f]+/interface-digest=<digest>/' artifacts/source.out > artifacts/source.semantic
-  $ sed -E 's#file=[^ ]+#file=CONSUMER#; s/interface-digest=[0-9a-f]+/interface-digest=<digest>/' artifacts/cmt.out > artifacts/cmt.semantic
-  $ cmp artifacts/source.semantic artifacts/cmt.semantic
   $ cp artifacts/consumer.cmt artifacts/consumer.cmi artifacts/provider.cmt artifacts/provider.cmi artifacts/external_client.cmt artifacts/external_client.cmi artifacts/legacy.cmt artifacts/legacy.cmi artifacts/copied/
   $ project --root artifacts/copied/consumer.cmt artifacts/copied/consumer.cmi --dependency artifacts/copied/provider.cmt artifacts/copied/provider.cmi --root artifacts/copied/external_client.cmt artifacts/copied/external_client.cmi --dependency artifacts/copied/legacy.cmt artifacts/copied/legacy.cmi --threads 1 > artifacts/copied/project
-  $ sed 's#file=artifacts/copied/#file=artifacts/#g' artifacts/copied/project > artifacts/copied/semantic
-  $ cmp artifacts/project.serial artifacts/copied/semantic
-  $ echo 'source-cmt-copy-thread semantic=agree'
-  source-cmt-copy-thread semantic=agree
 
 Alpha-renamed provider binders preserve retained generic meaning without
 cross-artifact substitution.
@@ -99,7 +82,7 @@ The compiler-libraries helper derives the ten axes from Mode.Value.Axis.all,
 inventories compiler-admitted complete modes from typed binders, and fails
 closed against the pinned state and twin-position inventory.
 
-  $ python3 generate_value_mode_matrix.py artifacts/modes
+  $ ./generate_value_mode_matrix.exe artifacts/modes
   $ ocamlc -w -A -alert -all -bin-annot -c -o artifacts/modes/positions.cmo artifacts/modes/positions.ml
   $ compile_mli mode_provider artifacts/modes/mode_provider.mli
   $ compile_retained mode_provider artifacts/modes/mode_provider.ml

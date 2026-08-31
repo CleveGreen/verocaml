@@ -1,3 +1,7 @@
+The structural tool is the local
+`validated-descriptor-architecture-matrix` specialist exception. It is
+intentionally independent of `semantic-sst-outcome-check`.
+
   $ ./semantic_sst_tool.exe structural
   validated descriptors: opaque type/callable/contracts/edges/visibility/features preserve declaration and call order
   semantic admission: handles issue only after the existing ordered validator succeeds
@@ -12,6 +16,8 @@ validation wrapper.  Even when an installed client deliberately adds every
 installed =.private= directory, it cannot bind the issuer or inspect an opaque
 descriptor.  Successful validation exposes read-only queries and preserves
 the installed =Sst_callable= compatibility wrapper.
+This is the local `installed-capability-boundary-ratchet` specialist package
+and public-boundary exception.
 
   $ mkdir -p artifacts
   $ root="${PWD%%/_build/*}"
@@ -36,6 +42,10 @@ the installed =Sst_callable= compatibility wrapper.
   $ ocamlfind ocamlc -custom -package smtml,zarith,compiler-libs.common,delator -linkpkg -I "$core" $private_flags "$core/verocaml_core.cma" fixtures/installed_semantic_queries.ml -o artifacts/installed_semantic_queries.exe 2>/dev/null
   $ ./artifacts/installed_semantic_queries.exe
   installed validated queries, callable wrapper, and termination graph accepted
+
+The raw semantic dump is the local `raw-semantic-lowering-ratchet` specialist
+architecture exception. Stable identity behavior is separately covered by
+`semantic-sst-outcome-check`.
 
   $ ./semantic_sst_tool.exe dumps > first.dump
   $ ./semantic_sst_tool.exe dumps > second.dump
@@ -70,6 +80,8 @@ without solver creation.  The matrix independently changes labels, arity,
 zero arity, nesting, component types, value/pattern shape, whole-tuple
 wildcard/binding shape, tuple let/variable use, partial and post-exhaustive
 ordered fallbacks, and a guarded malformed shape.
+This is the local `recursive-tuple-pre-vir-zero-solver-ratchet` specialist
+resource/architecture exception.
 
   $ root="${PWD%%/_build/*}"
   $ mkdir -p artifacts/tuple
@@ -82,6 +94,8 @@ authentication. Unknown and forged descriptors, open payloads, wrong arity,
 and an otherwise excluded tuple actual all reject before VIR, backend
 creation, or direct Z3 work. The retained fixture has no constructible mutable
 application descriptor in this public test surface.
+This is the local `application-pre-vir-zero-solver-ratchet` specialist
+resource/architecture exception.
 
   $ ./semantic_sst_tool.exe application-matrix artifacts/tuple/recursive_tuple_match.cmt
   raw application matrix: unknown/forged/open/wrong-arity/tuple-excluded rejected pre-VIR solver-delta=0

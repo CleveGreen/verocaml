@@ -2,17 +2,59 @@
  (name release_verification_tool)
  (libraries verocaml_core))
 
-(cram
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
  (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support))
+
+(rule
+ (targets
+  release-verification-outcome-cases.result-report
+  release-verification-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
   (glob_files fixtures/*.ml)
-  (glob_files fixtures/*.mli)
-  release_verification_tool.exe
-  ../../src/verocaml.exe
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   release-verification-outcome-cases.result-report
+   release-verification-outcome-cases.failure-archive)))
+
+(rule
+ (alias release-verification-outcome-check)
+ (deps
+  (:report release-verification-outcome-cases.result-report)
+  (:archive release-verification-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
+(cram
+ (alias release-verification-specialist-check)
+ (runtest_alias false)
+ (deps release_verification_tool.exe))
 
 (alias
  (name release-verification-check)
  (deps
-  (alias runtest)))
+  (alias release-verification-outcome-check)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias release-verification-outcome-check)))

@@ -6,8 +6,6 @@ The client can only thread the unique successor and end with a snapshot.
   $ mkdir artifacts
   $ compile () { ocamlc -w -A -alert -all -bin-annot -c -o "artifacts/$1.cmo" "fixtures/$1.ml"; }
   $ compile encapsulated_stack
-  $ ./encapsulated_recursive_mutation_tool.exe classify artifacts/encapsulated_stack.cmt
-  accepted
   $ ./encapsulated_recursive_mutation_tool.exe dump-sst artifacts/encapsulated_stack.cmt > artifacts/first.sst
   $ ./encapsulated_recursive_mutation_tool.exe dump-sst artifacts/encapsulated_stack.cmt > artifacts/second.sst
   $ cmp artifacts/first.sst artifacts/second.sst
@@ -100,11 +98,6 @@ rejects the corresponding divergent raw-function graph through its production
 structural-first validation path.
 
   $ for fixture in branch_join_match branch_join_if branch_join_equal; do compile "$fixture"; done
-  $ for fixture in branch_join_match branch_join_if; do OCAML_COLOR=never ./encapsulated_recursive_mutation_tool.exe classify "artifacts/$fixture.cmt"; done
-  VERO_UNSUPPORTED_MUTATION @ branch_join_match.ml:17:4-17:21
-  VERO_UNSUPPORTED_MUTATION @ branch_join_if.ml:15:4-15:21
-  $ ./encapsulated_recursive_mutation_tool.exe classify artifacts/branch_join_equal.cmt
-  accepted
   $ ./encapsulated_recursive_mutation_tool.exe verify artifacts/branch_join_equal.cmt
   verified VIR (3 functions, 3 owned-tree transitions)
   $ ./encapsulated_recursive_mutation_tool.exe dump-sst artifacts/branch_join_equal.cmt | grep 'field-write type-Stack.t#1.length#1' | sed -E 's/ @ .*//'
@@ -119,16 +112,8 @@ do not reach SMT.  The compiler itself rejects escape of an inline-record
 binding; VeroCaml rejects the remaining compiled forms at their first illegal
 use.
 
-  $ for fixture in cursor_reuse cursor_copy retained_descendant cyclic_rhs ancestor_reinsertion unknown_nested_path; do compile "$fixture"; done
   $ OCAML_COLOR=never ocamlc -w -A -alert -all -c fixtures/cursor_escape.ml 2>&1 | grep -F 'inlined record could escape'
   Error: This form is not allowed as the type of the inlined record could escape.
-  $ for fixture in cursor_reuse cursor_copy retained_descendant cyclic_rhs ancestor_reinsertion unknown_nested_path; do OCAML_COLOR=never ./encapsulated_recursive_mutation_tool.exe classify "artifacts/$fixture.cmt"; done
-  VERO_UNSUPPORTED_MUTATION @ cursor_reuse.ml:17:8-17:28
-  VERO_UNSUPPORTED_MUTATION @ cursor_copy.ml:16:21-16:25
-  VERO_UNSUPPORTED_MUTATION @ retained_descendant.ml:17:8-17:25
-  VERO_UNSUPPORTED_MUTATION @ cyclic_rhs.ml:16:23-16:59
-  VERO_UNSUPPORTED_MUTATION @ ancestor_reinsertion.ml:16:23-16:32
-  VERO_UNSUPPORTED_MUTATION @ unknown_nested_path.ml:16:14-16:20
 
 The validator exposes abstraction facts only from the opaque validated-program
 registry.  Issuer identity is not enough by itself: replaying a real token with
@@ -158,29 +143,6 @@ before final exact-snapshot authentication; no invalid program reaches VIR.
   valid token with altered callable: rejected forged certificate (unissued same-CMT abstraction certificate)
   valid token retargeted to another type: rejected forged certificate (unissued same-CMT abstraction certificate)
   valid token with incomplete abstract set: rejected forged certificate (unissued same-CMT abstraction certificate)
-
-Source spelling does not grant authority.  Unconstrained, manifest, OCaml
-private, alias/recovery, sharing, closure, hidden-global, imported-call,
-non-ground/branching recursive, functor, and first-class module surfaces all
-remain outside the authenticated subset with source locations.
-
-  $ for fixture in unconstrained manifest_signature private_signature alias_escape sharing_api closure_escape hidden_global imported_dependency ungrounded branching functor first_class; do compile "$fixture"; done
-  $ OCAML_COLOR=never ./encapsulated_recursive_mutation_tool.exe classify artifacts/unconstrained.cmt
-  VERO_UNSUPPORTED_STRUCTURE_ITEM @ unconstrained.ml:2:0-2:77
-  $ OCAML_COLOR=never ./encapsulated_recursive_mutation_tool.exe classify artifacts/manifest_signature.cmt
-  VERO_UNSUPPORTED_STRUCTURE_ITEM @ manifest_signature.ml:2:2-2:31
-  $ OCAML_COLOR=never ./encapsulated_recursive_mutation_tool.exe classify artifacts/private_signature.cmt
-  VERO_UNSUPPORTED_STRUCTURE_ITEM @ private_signature.ml:2:2-2:39
-  $ for fixture in alias_escape sharing_api closure_escape hidden_global imported_dependency ungrounded branching functor first_class; do OCAML_COLOR=never ./encapsulated_recursive_mutation_tool.exe classify "artifacts/$fixture.cmt"; done
-  VERO_UNSUPPORTED_STRUCTURE_ITEM @ alias_escape.ml:4:2-4:32
-  VERO_UNSUPPORTED_STRUCTURE_ITEM @ sharing_api.ml:4:2-4:32
-  VERO_UNSUPPORTED_STRUCTURE_ITEM @ closure_escape.ml:4:2-4:32
-  VERO_UNSUPPORTED_STRUCTURE_ITEM @ hidden_global.ml:7:15-7:20
-  VERO_UNSUPPORTED_EXTERNAL_CALL @ imported_dependency.ml:10:43-10:78
-  VERO_UNSUPPORTED_STRUCTURE_ITEM @ ungrounded.ml:4:2-4:32
-  VERO_UNSUPPORTED_STRUCTURE_ITEM @ branching.ml:4:2-4:32
-  VERO_UNSUPPORTED_STRUCTURE_ITEM @ functor.ml:2:0-2:48
-  VERO_UNSUPPORTED_TYPE @ first_class.ml:2:30-2:42
 
 The exact compiler pin rejects retaining an alias or a read observation and
 then consuming the same state uniquely.  This compiler fact complements, but

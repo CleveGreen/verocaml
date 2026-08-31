@@ -5,6 +5,10 @@
   (:standard -I src/.verocaml_core.objs/byte))
  (libraries verocaml_core compiler-libs.common))
 
+(executable
+ (name mutate_carrier)
+ (modules mutate_carrier))
+
 (rule
  (targets proof_region_modes_prerequisites.ml)
  (deps
@@ -19,7 +23,7 @@
 (cram
  (deps
   (glob_files fixtures/*.ml)
-  mutate_carrier.py
+  mutate_carrier.exe
   proof_region_modes_tool.exe
   ../../src/verocaml.exe
   ../../verocaml.install
@@ -31,3 +35,50 @@
  (name proof-region-modes-check)
  (deps
   (alias runtest)))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support))
+
+(rule
+ (targets
+  proof-region-modes-outcome-cases.result-report
+  proof-region-modes-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  integration-library-environment.manifest
+  (glob_files fixtures/*.ml))
+ (action
+  (run
+   %{suite}
+   --produce
+   proof-region-modes-outcome-cases.result-report
+   proof-region-modes-outcome-cases.failure-archive)))
+
+(rule
+ (alias proof-region-modes-outcome-check)
+ (deps
+  (:report proof-region-modes-outcome-cases.result-report)
+  (:archive proof-region-modes-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
+(alias
+ (name runtest)
+ (deps
+  (alias proof-region-modes-outcome-check)))

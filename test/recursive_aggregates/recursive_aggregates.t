@@ -70,32 +70,11 @@ applications. Every exposed symbolic integer selector carries both hardcoded
   $ grep -F '(or (= (tag.node#0 (t0_node_c1_Node_inline.next#1 (t0_node_c1_Node.$arg0#0 param$0))) 0) (= (tag.node#0 (t0_node_c1_Node_inline.next#1 (t0_node_c1_Node.$arg0#0 param$0))) 1))' artifacts/first.vir | head -1
         (or (= (tag.node#0 (t0_node_c1_Node_inline.next#1 (t0_node_c1_Node.$arg0#0 param$0))) 0) (= (tag.node#0 (t0_node_c1_Node_inline.next#1 (t0_node_c1_Node.$arg0#0 param$0))) 1))
 
-Z3 verifies construction/projection, ordered tag paths, tuple/record results,
-and a same-unit summary returning an opaque aggregate.
-
-  $ ./recursive_aggregates_tool.exe solve artifacts/recursive_node_stack.cmt
-  make_stack: verified (1 obligations, 1 exits)
-  call_make_stack: verified (2 obligations, 1 exits)
-  construct_and_match: verified (2 obligations, 2 exits)
-  classify_node: verified (0 obligations, 2 exits)
-  classify_nested_node: verified (0 obligations, 3 exits)
-  record_pattern: verified (0 obligations, 1 exits)
-  tuple_with_record: verified (0 obligations, 1 exits)
-
-Known aggregate boundaries are rejected with source locations. Disable color
-only for each diagnostic assertion; interactive product styling is unchanged.
+Verification and stable frontend rejection outcomes live in outcome_cases.ml.
+The narrower polymorphic Typedtree admission remains here because full verifier
+lowering rejects its refutable parameter before producing an outcome.
 
   $ compile () { ocamlc -w -A -alert -all -bin-annot -c -o "artifacts/$1.cmo" "fixtures/$1.ml"; }
-  $ for fixture in polymorphic_type imported_abstract cyclic_alias structural_equality partial_match unboxed_variant; do compile "$fixture"; done
+  $ compile polymorphic_type
   $ OCAML_COLOR=never ./recursive_aggregates_tool.exe classify artifacts/polymorphic_type.cmt
   accepted
-  $ OCAML_COLOR=never ./recursive_aggregates_tool.exe classify artifacts/imported_abstract.cmt
-  VERO_UNSUPPORTED_TYPE @ imported_abstract.ml:1:20-1:28
-  $ OCAML_COLOR=never ./recursive_aggregates_tool.exe classify artifacts/cyclic_alias.cmt
-  VERO_UNSUPPORTED_TYPE @ cyclic_alias.ml:2:0-2:16
-  $ OCAML_COLOR=never ./recursive_aggregates_tool.exe classify artifacts/structural_equality.cmt
-  VERO_UNSUPPORTED_AGGREGATE_EQUALITY @ structural_equality.ml:2:45-2:57
-  $ OCAML_COLOR=never ./recursive_aggregates_tool.exe classify artifacts/partial_match.cmt
-  VERO_UNSUPPORTED_PARTIAL_MATCH @ partial_match.ml:3:2-3:39
-  $ OCAML_COLOR=never ./recursive_aggregates_tool.exe classify artifacts/unboxed_variant.cmt
-  VERO_UNSUPPORTED_AGGREGATE @ unboxed_variant.ml:1:0-1:35

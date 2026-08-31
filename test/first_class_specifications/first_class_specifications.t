@@ -4,14 +4,13 @@ stable across retained source, CMT, repetition, and worker count.
   $ mkdir artifacts
   $ retained () { name=$1; source=$2; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$name.cmo" "$source"; }
   $ for name in core recursive_collections quantified broadcast_symbolic; do retained "$name" "fixtures/$name.ml"; done
-  $ for name in core recursive_collections quantified; do OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$name.cmt" --threads 1 --timeout-ms 5000 --rlimit 100000 | sed -E 's/file=[^ ]+/file=<fixture>/'; done
-  verocaml: verified file=<fixture> functions=6 obligations=38
-  verocaml: verified file=<fixture> functions=1 obligations=19
-  verocaml: verified file=<fixture> functions=1 obligations=1
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/broadcast_symbolic.cmt --threads 1 --timeout-ms 5000 --rlimit 100000 2>&1 | grep -E '^(verocaml: trusted|verocaml: verified)' | sed -E 's/file=[^ ]+/file=<fixture>/; s/(declaration|witness)-span=[^ ]+/\1-span=<span>/g'
-  verocaml: trusted external body trust=axiomatic mode=proof call-form=broadcast function=image_axiom#5 declaration-span=<span> witness-span=<span> call=fixtures/broadcast_symbolic.ml:17:0-24:6 requires=0 ensures=1 body=unchecked result=constrained-only-by-ensures
-  verocaml: trusted external body declaration trust=axiomatic mode=proof function=image_axiom#5 declaration-span=<span> witness-span=<span> requires=0 ensures=1 body=unchecked
-  verocaml: verified-with-trusted-axioms file=<fixture> functions=2 obligations=5 trusted-external-bodies=1 trusted-external-body-uses=1 trusted-external-spec-uses=0
+
+The grouped semantic replacements run independently at
+@test/first_class_specifications/first-class-specifications-outcome-check. The
+remaining Cram rows are the W08-FIRST-CLASS-* encoding, resource, stage,
+runtime, zero-work, and deliberate-failure exceptions recorded
+in the migration ledger.
+
   $ for route in fixtures/core.ml artifacts/core.cmt; do tag=$(basename "$route"); for threads in 1 2; do OCAML_COLOR=never ../../src/verocaml.exe verify "$route" --threads "$threads" --timeout-ms 5000 --rlimit 100000 --dump-sst "artifacts/$tag.$threads.sst" --dump-vir "artifacts/$tag.$threads.vir" >"artifacts/$tag.$threads.out"; done; cmp "artifacts/$tag.1.out" "artifacts/$tag.2.out"; cmp "artifacts/$tag.1.sst" "artifacts/$tag.2.sst"; cmp "artifacts/$tag.1.vir" "artifacts/$tag.2.vir"; done
   $ sed '/^instance-modes$/,$d' artifacts/core.ml.1.sst > artifacts/source.semantic.sst
   $ sed '/^instance-modes$/,$d' artifacts/core.cmt.1.sst > artifacts/cmt.semantic.sst
@@ -46,10 +45,6 @@ terms. Both routes produce identical VIR across source, retained CMT, and worker
   $ grep -q 'project\[int\](value\$0):int' artifacts/parametric_branching.ml.1.vir
   $ grep -Eq '\(ite \(= \$spec_lambda_arg\$[0-9]+ 4\) 42 \$spec_lambda_arg\$[0-9]+\)' artifacts/parametric_branching.ml.1.vir
   $ ! grep -Eq 'Param_.*generic_project' artifacts/parametric_branching.ml.1.vir
-  $ grep '^verocaml: verified' artifacts/parametric_branching.ml.1.out | sed -E 's/file=[^ ]+/file=<fixture>/'
-  verocaml: verified-with-trusted-axioms file=<fixture> functions=1 obligations=4 trusted-external-bodies=1 trusted-external-body-uses=1 trusted-external-spec-uses=0
-  $ echo "generic-body=int formula-ite=authenticated source-cmt=true threads=1/2"
-  generic-body=int formula-ite=authenticated source-cmt=true threads=1/2
 
 The portable SST is visibly staged: returned lambdas and named values are
 carriers, while every logical application is the typed f-x Spec_apply head.
@@ -86,38 +81,7 @@ against literal f-x occurrences and share deterministic insertion order.
 The broadcast matrix covers inactive, mismatched, duplicate, exact, and the
 shared sixteen-instance cap without a second retry or solver policy.
 
-  $ cat > artifacts/generate_broadcast_matrix.py <<'PY'
-  > from pathlib import Path
-  > p = Path("artifacts")
-  > theorem = """let lemma (f : int -> int) (x : int) : unit =
-  >   [%verocaml.ensures fun _ -> ((f x) [@trigger]) = f x]; ()
-  > [@@verocaml.proof] [@@verocaml.broadcast]
-  > """
-  > increment = "let increment (x:int):int = x + 1 [@@verocaml.spec]\n"
-  > target = """let target (x:int):int =
-  >   [%verocaml.assert (let f = increment in f x = f x)];
-  >   [%verocaml.ensures fun result -> result = x]; x
-  > """
-  > (p/"broadcast_exact.ml").write_text(increment + theorem + "[@@@verocaml.activate [lemma]]\n" + target)
-  > (p/"broadcast_duplicate.ml").write_text(increment + theorem + "[@@@verocaml.activate [lemma; lemma]]\n" + target)
-  > (p/"broadcast_inactive.ml").write_text(increment + theorem + target)
-  > mismatch = theorem.replace("int -> int", "bool -> bool").replace("(x : int)", "(x : bool)")
-  > (p/"broadcast_mismatch.ml").write_text(increment + mismatch + "[@@@verocaml.activate [lemma]]\n" + target)
-  > def capped(count):
-  >   rows = ["let increment (x:int):int = x + 1 [@@verocaml.spec]", ""]
-  >   for i in range(count):
-  >     rows += [f"let lemma_{i} (f:int->int) (x:int):unit =",
-  >              "  [%verocaml.ensures fun _ -> ((f x) [@trigger]) = f x]; ()",
-  >              "[@@verocaml.proof] [@@verocaml.broadcast]", ""]
-  >   rows += ["[@@@verocaml.activate [" + "; ".join(f"lemma_{i}" for i in range(count)) + "]]",
-  >            "let target (x:int):int =",
-  >            "  [%verocaml.assert (let f = increment in f x = f x)];",
-  >            "  [%verocaml.ensures fun result -> result = x]; x"]
-  >   return "\n".join(rows) + "\n"
-  > (p/"broadcast_16.ml").write_text(capped(16))
-  > (p/"broadcast_17.ml").write_text(capped(17))
-  > PY
-  $ python3 artifacts/generate_broadcast_matrix.py
+  $ ./generate_broadcast_matrix.exe artifacts
   $ for name in broadcast_exact broadcast_duplicate broadcast_inactive broadcast_mismatch broadcast_16 broadcast_17; do retained "$name" "artifacts/$name.ml"; done
   $ for name in broadcast_exact broadcast_duplicate broadcast_inactive broadcast_mismatch broadcast_16; do ./first_class_specifications_tool.exe structural "artifacts/$name.cmt" >"artifacts/$name.out"; done
   $ for name in broadcast_exact broadcast_duplicate broadcast_inactive broadcast_mismatch broadcast_16; do printf "%s active/inserted=" "$name"; awk '/^vc function=target/{a=$0; sub(/^.*active=/,"",a); sub(/ inserted=/,"/",a); print a}' "artifacts/$name.out" | sort -u; done
@@ -129,25 +93,6 @@ shared sixteen-instance cap without a second retry or solver policy.
   $ set +e; OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/broadcast_17.cmt --threads 1 --timeout-ms 5000 --rlimit 100000 >artifacts/broadcast_17.out 2>&1; cap_status=$?; set -e; test "$cap_status" -eq 2
   $ grep -o 'broadcast instance cap exceeded: 17 > 16' artifacts/broadcast_17.out
   broadcast instance cap exceeded: 17 > 16
-
-Function equality is identity equality only. Independent pointwise-equal
-closures and same-site closures with unconstrained captures reach the solver
-and fail ordinarily; neither is rejected as policy nor proved by injectivity.
-
-  $ cat > artifacts/false_controls.ml <<'EOF'
-  > let factory (x:int) : int -> int = fun _ -> x [@@verocaml.spec]
-  > let pointwise (x:int) : int =
-  >   [%verocaml.assert (fun y -> y + 1) = (fun y -> 1 + y)];
-  >   [%verocaml.ensures fun result -> result = x]; x
-  > let captures (x:int) (y:int) : int =
-  >   [%verocaml.assert factory x <> factory y];
-  >   [%verocaml.ensures fun result -> result = x]; x
-  > EOF
-  $ retained false_controls artifacts/false_controls.ml
-  $ set +e; OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/false_controls.cmt --threads 1 --timeout-ms 5000 --rlimit 100000 >artifacts/false.out 2>&1; false_status=$?; set -e; test "$false_status" -eq 1
-  $ grep '^verocaml: counterexample' artifacts/false.out | sed -E 's/#[0-9]+/#ID/; s/ span=.*$/ result=counterexample/'
-  verocaml: counterexample function=pointwise#ID vc=assertion[0] result=counterexample
-  verocaml: counterexample function=captures#ID vc=assertion[0] result=counterexample
 
 Structurally excluded cases reject before backend or solver creation. The
 matrix includes mutable capture, optional stages, closure triggers, local

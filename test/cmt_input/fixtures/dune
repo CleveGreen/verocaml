@@ -1,0 +1,10 @@
+(library
+ (name prepared_implementation)
+ (wrapped false)
+ (modules implementation))
+
+(library
+ (name prepared_interface)
+ (wrapped false)
+ (modules interface)
+ (modules_without_implementation interface))

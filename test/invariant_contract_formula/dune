@@ -2,6 +2,48 @@
  (name invariant_contract_formula_tool)
  (libraries str))
 
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support))
+
+(rule
+ (targets
+  invariant-contract-formula-outcome-cases.result-report
+  invariant-contract-formula-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  (glob_files fixtures/*.ml)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   invariant-contract-formula-outcome-cases.result-report
+   invariant-contract-formula-outcome-cases.failure-archive)))
+
+(rule
+ (alias invariant-contract-formula-outcome-check)
+ (deps
+  (:report invariant-contract-formula-outcome-cases.result-report)
+  (:archive invariant-contract-formula-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
 (cram
  (deps
   (glob_files fixtures/*.ml)
@@ -15,3 +57,8 @@
  (name invariant-contract-formula-check)
  (deps
   (alias runtest)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias invariant-contract-formula-outcome-check)))

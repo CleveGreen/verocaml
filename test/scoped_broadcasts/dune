@@ -1,8 +1,25 @@
 (executable
  (name scoped_broadcasts_tool)
  (modules scoped_broadcasts_tool scoped_broadcasts_prerequisites)
- (flags (:standard -I src/.verocaml_core.objs/byte))
+ (flags
+  (:standard -I src/.verocaml_core.objs/byte))
  (libraries verocaml_core compiler-libs.common))
+
+(executable
+ (name mutate_broadcast_carrier)
+ (modules mutate_broadcast_carrier))
+
+(executable
+ (name trust_oracle)
+ (modules trust_oracle))
+
+(executable
+ (name generate_negatives)
+ (modules generate_negatives))
+
+(executable
+ (name instance_cap)
+ (modules instance_cap))
 
 (rule
  (targets scoped_broadcasts_prerequisites.ml)
@@ -18,14 +35,61 @@
   ../../src/.verocaml_core.objs/byte/vir_logic_ir_translation_private.cmi
   ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
  (action
-  (with-stdout-to %{targets} (echo "let ready = ()"))))
+  (with-stdout-to
+   %{targets}
+   (echo "let ready = ()"))))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support verocaml_core unix))
+
+(rule
+ (targets
+  scoped-broadcasts-outcome-cases.result-report
+  scoped-broadcasts-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  (glob_files fixtures/*.ml)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   scoped-broadcasts-outcome-cases.result-report
+   scoped-broadcasts-outcome-cases.failure-archive)))
+
+(rule
+ (alias scoped-broadcasts-outcome-check)
+ (deps
+  (:report scoped-broadcasts-outcome-cases.result-report)
+  (:archive scoped-broadcasts-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
 
 (cram
  (deps
-  mutate_broadcast_carrier.py
+  mutate_broadcast_carrier.exe
   (glob_files fixtures/*.ml)
   (glob_files fixtures/*.mli)
+  generate_negatives.exe
+  instance_cap.exe
   scoped_broadcasts_tool.exe
+  trust_oracle.exe
   ../../verocaml.install
   ../../src/verocaml.exe
   ../../ppx/vero_ppx.exe
@@ -34,4 +98,10 @@
 
 (alias
  (name scoped-broadcasts-check)
- (deps (alias runtest)))
+ (deps
+  (alias runtest)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias scoped-broadcasts-outcome-check)))

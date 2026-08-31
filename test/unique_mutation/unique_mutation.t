@@ -1,3 +1,12 @@
+Ordinary verification, counterexample, and stable frontend-code behavior is
+covered by outcome_cases.ml.  The retained blocks are explicit specialist
+exceptions: baseline lines 18-28 and 74-90 inspect SST/VIR and Typedtree
+architecture, 67-68 and 152-153 pin compiler-owned rejection boundaries,
+100-119 compare executable evidence across retained/erased CMTs, 126-133 is an
+adapter-only accepted shape that the full verifier deliberately rejects, and
+141-146 probes pinned Typedtree/path internals.  These do not participate in
+unique-mutation-outcome-check.
+
 The verification PPX retains typed proof sidecars only under its explicit flag.
 Ordinary compilation erases every annotation and needs no ghost runtime.
 
@@ -6,10 +15,6 @@ Ordinary compilation erases every annotation and needs no ghost runtime.
   $ compile_erased () { ocamlc -w -A -alert -all -bin-annot -ppx ../../ppx/vero_ppx.exe -c -o "artifacts/$1.cmo" "fixtures/$2.ml"; }
   $ compile_plain () { ocamlc -w -A -alert -all -bin-annot -c -o "artifacts/$1.cmo" "fixtures/$1.ml"; }
   $ compile_keep unique_records
-  $ ./unique_mutation_tool.exe solve artifacts/unique_records.cmt
-  increment: verified (4 obligations)
-  increment_then_read: verified (3 obligations)
-  local_mutable: verified (3 obligations)
 
 The SST records a unique mutable-record root, copies its unchanged Boolean
 field into the new state, and threads the consumed-and-returned root through a
@@ -27,39 +32,7 @@ same-unit call.
   $ ./unique_mutation_tool.exe dump-vir artifacts/unique_records.cmt | grep -F '(= (t0_box_record.flag#1 box.state$1) (t0_box_record.flag#1 box$0))' | head -1
         (= (t0_box_record.flag#1 box.state$1) (t0_box_record.flag#1 box$0))
 
-A wrong mutation summary and an unguarded field increment fail for their
-functional and checked-63-bit reasons.
-
-  $ compile_keep wrong_postcondition
-  $ ./unique_mutation_tool.exe solve artifacts/wrong_postcondition.cmt
-  wrong: counterexample postcondition @ wrong_postcondition.ml:4:2-5:49
-  $ compile_keep overflow_update
-  $ ./unique_mutation_tool.exe solve artifacts/overflow_update.cmt
-  overflow: counterexample arithmetic-upper @ overflow_update.ml:3:15-3:28
-
-Only a direct local mutable field rooted at a definitely unique binding is
-admitted. Aliased, nested projected, imported, ref-shaped, and manually forged
-proof data are rejected before VIR.
-
-  $ compile_plain aliased_write
-  $ ./unique_mutation_tool.exe classify artifacts/aliased_write.cmt
-  VERO_UNSUPPORTED_MUTATION @ aliased_write.ml:3:2-3:16
-  $ compile_plain nested_write
-  $ ./unique_mutation_tool.exe classify artifacts/nested_write.cmt
-  VERO_UNSUPPORTED_MUTATION @ nested_write.ml:4:2-4:24
-  $ compile_plain imported_box
-  $ ocamlc -w -A -alert -all -bin-annot -I artifacts -c -o artifacts/imported_write.cmo fixtures/imported_write.ml
-  $ ./unique_mutation_tool.exe classify artifacts/imported_write.cmt
-  VERO_UNSUPPORTED_MUTATION @ imported_write.ml:2:2-2:16
   $ compile_plain ref_ops
-  $ ./unique_mutation_tool.exe classify artifacts/ref_ops.cmt
-  VERO_UNSUPPORTED_MUTATION @ ref_ops.ml:2:13-2:18
-  $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -c -o artifacts/captured_sidecar.cmo fixtures/captured_sidecar.ml
-  $ ./unique_mutation_tool.exe classify artifacts/captured_sidecar.cmt
-  VERO_MALFORMED_GHOST_CALL @ captured_sidecar.ml:3:2-3:30
-  $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -c -o artifacts/mismatched_sidecar.cmo fixtures/mismatched_sidecar.ml
-  $ ./unique_mutation_tool.exe classify artifacts/mismatched_sidecar.cmt
-  VERO_MALFORMED_GHOST_CALL @ mismatched_sidecar.ml:5:13-5:14
 
 The pinned compiler itself rejects a write to a non-mutable field. Color is
 disabled only at this diagnostic assertion boundary.
@@ -98,8 +71,6 @@ terminal unique return. Default erasure remains a separate no-runtime
 comparison.
 
   $ compile_keep destructured_unique
-  $ ./unique_mutation_tool.exe solve artifacts/destructured_unique.cmt
-  increment_destructured: verified (8 obligations)
   $ compile_plain destructured_unique_stripped
   $ ./unique_mutation_tool.exe executable-evidence artifacts/destructured_unique.cmt > artifacts/destructured.retained
   $ ./unique_mutation_tool.exe executable-evidence artifacts/destructured_unique_stripped.cmt > artifacts/destructured.stripped
@@ -131,9 +102,6 @@ executable binding.
         field-write type-box#0.value#0 root=box#0:box#0 uniqueness=unique pattern=unique use=aliased local=true public=true mutable=true : unit
   function constructor_destructured#1 mode=exec recursive=false result=box#0 policy=default-linear/default-z3
         field-write type-box#0.value#0 root=box#0:box#0 uniqueness=unique pattern=unique use=aliased local=true public=true mutable=true : unit
-  $ compile_keep ambiguous_destructured_sidecar
-  $ ./unique_mutation_tool.exe classify artifacts/ambiguous_destructured_sidecar.cmt
-  VERO_MALFORMED_GHOST_CALL @ ambiguous_destructured_sidecar.ml:3:37-3:40
 
 Pinned local-cell and standard-ref probes record the Typedtree forms and
 resolved paths that define the admitted and rejected boundaries.

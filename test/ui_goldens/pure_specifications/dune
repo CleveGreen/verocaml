@@ -1,0 +1,5 @@
+(cram
+ (alias ui-goldens-check)
+ (deps
+  (glob_files ../../pure_specifications/fixtures/*.ml)
+  ../../../ppx/vero_ppx.exe))

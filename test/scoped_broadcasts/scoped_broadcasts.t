@@ -3,15 +3,13 @@ query-local multi-binder quantifier under the fixed resource policy.
 
   $ mkdir artifacts
   $ retained () { name=$1; source=$2; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$name.cmo" "$source"; }
-  $ for name in parametric_positive group_positive scopes_positive trusted_axiom inactive_control reorder_a reorder_b negative_declaration negative_trigger negative_group_cycle negative_wrong_actual negative_e_matching; do retained "$name" "fixtures/$name.ml"; done
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/negative_wrong_actual.cmt --threads 1 --timeout-ms 5000 --rlimit 100000 | sed -E 's,file=[^ ]+,file=function-valued-trigger.cmt,'
-  verocaml: verified file=function-valued-trigger.cmt functions=1 obligations=1
-  $ for input in fixtures/parametric_positive.ml artifacts/parametric_positive.cmt; do timeout 10 env OCAML_COLOR=never ../../src/verocaml.exe verify "$input" --threads 1 --timeout-ms 5000 --rlimit 100000 | sed -E 's/file=[^ ]+/file=<source-or-cmt>/'; done
-  verocaml: verified file=<source-or-cmt> functions=8 obligations=12
-  verocaml: verified file=<source-or-cmt> functions=8 obligations=12
-  $ for threads in 1 2; do timeout 10 env OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/parametric_positive.cmt --threads "$threads" --timeout-ms 5000 --rlimit 100000 --dump-sst "artifacts/thread-$threads.sst" --dump-vir "artifacts/thread-$threads.vir" >/dev/null; done
-  $ cmp artifacts/thread-1.sst artifacts/thread-2.sst && cmp artifacts/thread-1.vir artifacts/thread-2.vir && echo "thread-parity=1/2 stable=true"
-  thread-parity=1/2 stable=true
+  $ for name in parametric_positive group_positive scopes_positive trusted_axiom reorder_a reorder_b negative_declaration negative_trigger negative_group_cycle; do retained "$name" "fixtures/$name.ml"; done
+
+The grouped semantic replacements run independently at
+@test/scoped_broadcasts/scoped-broadcasts-outcome-check. The remaining Cram
+rows are the W08-SCOPED-* architecture, resource, authentication, PPX,
+runtime, and deliberate-failure exceptions recorded in the migration ledger.
+
   $ timeout 10 ./scoped_broadcasts_tool.exe structural artifacts/parametric_positive.cmt > artifacts/parametric.first
   $ timeout 10 ./scoped_broadcasts_tool.exe structural artifacts/parametric_positive.cmt > artifacts/parametric.second
   $ cmp artifacts/parametric.first artifacts/parametric.second
@@ -72,41 +70,8 @@ retains its trusted proof body without creating broadcast state.
   vc function=ordinary_control index=0 active=0 trusted-declarations=0 trusted-uses=0 inserted=0
   resources backend=3 contexts=3 solvers=3 resets=3 cleaned=3 live=0
   $ ../../src/verocaml.exe verify artifacts/trusted_axiom.cmt --dump-sst artifacts/trusted.sst >/dev/null
-  $ cat > artifacts/trust_oracle.py <<'PY'
-  > import re
-  > import sys
-  > from pathlib import Path
-  > structural, sst_path, function, declaration = sys.argv[1:]
-  > rows = Path(structural).read_text().splitlines()
-  > vc = next(row for row in rows if row.startswith(f"vc function={function} "))
-  > insertion = next(row for row in rows if row.startswith(f"insert id=broadcast:{declaration} "))
-  > fields = dict(field.split("=", 1) for field in insertion.split()[1:])
-  > vc_fields = dict(field.split("=", 1) for field in vc.split()[1:])
-  > block = re.search(
-  >     rf"^function {declaration}#[^\n]*\n.*?(?=^function |\Z)",
-  >     Path(sst_path).read_text(),
-  >     re.MULTILINE | re.DOTALL,
-  > )
-  > body = re.search(
-  >     r"body trusted-external-body trust=axiomatic provenance=typedtree:"
-  >     r"[^\n]* witness-span=([^\s]+)",
-  >     block.group(0) if block else "",
-  > )
-  > assert body and body.group(1)
-  > assert fields["trusted"] == "true" and fields["witness"] != "none"
-  > normalized_paths = fields["paths"].replace(
-  >     f"broadcast:{declaration}", "broadcast:<declaration>"
-  > )
-  > print(
-  >     "trust declaration=<declaration> declaration-span=<source-span> role=trusted "
-  >     f"trusted={fields['trusted']} trusted-declarations={vc_fields['trusted-declarations']} "
-  >     f"trusted-uses={vc_fields['trusted-uses']} inserted={vc_fields['inserted']} "
-  >     f"ordinal={fields['ordinal']} vector={fields['vector']} paths={normalized_paths} "
-  >     "witness=<source-span> provenance=authenticated-external-proof"
-  > )
-  > PY
-  $ python3 artifacts/trust_oracle.py artifacts/trusted.out artifacts/trusted.sst sugar_use axiom_sugar > artifacts/sugar.oracle
-  $ python3 artifacts/trust_oracle.py artifacts/trusted.out artifacts/trusted.sst long_use axiom_long > artifacts/long.oracle
+  $ ./trust_oracle.exe artifacts/trusted.out artifacts/trusted.sst sugar_use axiom_sugar > artifacts/sugar.oracle
+  $ ./trust_oracle.exe artifacts/trusted.out artifacts/trusted.sst long_use axiom_long > artifacts/long.oracle
   $ cmp artifacts/sugar.oracle artifacts/long.oracle && cat artifacts/sugar.oracle
   trust declaration=<declaration> declaration-span=<source-span> role=trusted trusted=true trusted-declarations=1 trusted-uses=1 inserted=1 ordinal=0 vector=[] paths=activate/broadcast:<declaration> witness=<source-span> provenance=authenticated-external-proof
   $ awk '/^function ordinary_axiom#/{seen=1; next} seen && /^function /{exit} seen{print}' artifacts/trusted.sst | grep -q 'body trusted-external-body trust=axiomatic provenance=typedtree:.* witness-span='
@@ -235,75 +200,7 @@ Malformed PPX surface forms reject before a CMT or any verification work.
 The adapter independently rejects declaration, trigger, group, and binder
 matrices before SST/VIR/VC/backend/solver/query work.
 
-  $ cat > artifacts/generate_negatives.py <<'PY'
-  > from pathlib import Path
-  > p = Path("artifacts")
-  > common = "let observed (_value : int) : bool = true [@@verocaml.spec]\n"
-  > cases = {
-  > "missing": common + """let bad (value:int) : unit =
-  >   [%verocaml.ensures fun _ -> observed value || value = value]; ()
-  > [@@verocaml.proof] [@@verocaml.broadcast]
-  > """,
-  > "duplicate": common + """let bad (value:int) : unit =
-  >   [%verocaml.ensures fun _ -> ((observed value) [@trigger])];
-  >   [%verocaml.ensures fun _ -> ((observed value) [@trigger])]; ()
-  > [@@verocaml.proof] [@@verocaml.broadcast]
-  > """,
-  > "nonapplication": """let bad (value:bool) : unit =
-  >   [%verocaml.ensures fun _ -> (value [@trigger])]; ()
-  > [@@verocaml.proof] [@@verocaml.broadcast]
-  > """,
-  > "equality": """let bad (value:int) : unit =
-  >   [%verocaml.ensures fun _ -> ((value = value) [@trigger])]; ()
-  > [@@verocaml.proof] [@@verocaml.broadcast]
-  > """,
-  > "incomplete": """let observed_pair (_left:int) (_right:bool) = true [@@verocaml.spec]
-  > let bad (left:int) (right:bool) : unit =
-  >   [%verocaml.ensures fun _ -> ((observed_pair left true) [@trigger]) || right]; ()
-  > [@@verocaml.proof] [@@verocaml.broadcast]
-  > """,
-  > "nonproof-external": common + """let bad (value:int) : unit =
-  >   [%verocaml.ensures fun _ -> ((observed value) [@trigger])]; ()
-  > [@@verocaml.external_body] [@@verocaml.broadcast]
-  > """,
-  > "ordinary": common + """let bad (value:int) : unit =
-  >   [%verocaml.ensures fun _ -> ((observed value) [@trigger])]; ()
-  > [@@verocaml.broadcast]
-  > """,
-  > "axiom-nonunit": common + """let bad (value:int) : int =
-  >   [%verocaml.ensures fun _ -> ((observed value) [@trigger])]; value
-  > [@@verocaml.axiom] [@@verocaml.broadcast]
-  > """,
-  > "self-cycle": common + """let lemma (value:int) : unit =
-  >   [%verocaml.ensures fun _ -> ((observed value) [@trigger])]; ()
-  > [@@verocaml.proof] [@@verocaml.broadcast]
-  > [@@@verocaml.broadcast_group (self, [self; lemma])]
-  > let untouched value = value
-  > """,
-  > "ordinary-group": """let ordinary value = value
-  > [@@@verocaml.broadcast_group (bad, [ordinary])]
-  > let untouched value = value
-  > """,
-  > "reference": """let observed (_value : int ref) = true [@@verocaml.spec]
-  > let bad (value:int ref) : unit =
-  >   [%verocaml.ensures fun _ -> ((observed value) [@trigger])]; ()
-  > [@@verocaml.proof] [@@verocaml.broadcast]
-  > """,
-  > "array": """let observed (_value : int array) = true [@@verocaml.spec]
-  > let bad (value:int array) : unit =
-  >   [%verocaml.ensures fun _ -> ((observed value) [@trigger])]; ()
-  > [@@verocaml.proof] [@@verocaml.broadcast]
-  > """,
-  > "object": """let observed (_value : < get : int >) = true [@@verocaml.spec]
-  > let bad (value:< get : int >) : unit =
-  >   [%verocaml.ensures fun _ -> ((observed value) [@trigger])]; ()
-  > [@@verocaml.proof] [@@verocaml.broadcast]
-  > """,
-  > }
-  > for name, source in cases.items():
-  >     (p / f"{name}.ml").write_text(source)
-  > PY
-  $ python3 artifacts/generate_negatives.py
+  $ ./generate_negatives.exe artifacts
   $ for case in missing duplicate nonapplication equality incomplete nonproof-external ordinary axiom-nonunit self-cycle ordinary-group reference array object; do retained "negative-$case" "artifacts/$case.ml"; timeout 5 ./scoped_broadcasts_tool.exe diagnostic "artifacts/negative-$case.cmt" | grep -q 'solver=0 z3=0/0' || exit 1; echo "adapter:$case zero-work"; done
   adapter:missing zero-work
   adapter:duplicate zero-work
@@ -376,7 +273,7 @@ source/PPX trust boundary.
   $ for case in source-copied-target source-rebound-marker; do retained "$case" "artifacts/$case.ml"; ./scoped_broadcasts_tool.exe diagnostic "artifacts/$case.cmt" | grep -q 'solver=0 z3=0/0' || exit 1; echo "source-auth:$case zero-work"; done
   source-auth:source-copied-target zero-work
   source-auth:source-rebound-marker zero-work
-  $ for attack in declaration-id carrier-id group-id marker declaration-span carrier-span group-span legacy-lemma legacy-axiom; do python3 mutate_broadcast_carrier.py artifacts/group_positive.cmt "artifacts/$attack.cmt" "$attack"; ./scoped_broadcasts_tool.exe diagnostic "artifacts/$attack.cmt" | grep -q 'solver=0 z3=0/0' || exit 1; echo "carrier:$attack zero-work"; done
+  $ for attack in declaration-id carrier-id group-id marker declaration-span carrier-span group-span legacy-lemma legacy-axiom; do ./mutate_broadcast_carrier.exe artifacts/group_positive.cmt "artifacts/$attack.cmt" "$attack"; ./scoped_broadcasts_tool.exe diagnostic "artifacts/$attack.cmt" | grep -q 'solver=0 z3=0/0' || exit 1; echo "carrier:$attack zero-work"; done
   carrier:declaration-id zero-work
   carrier:carrier-id zero-work
   carrier:group-id zero-work
@@ -386,44 +283,17 @@ source/PPX trust boundary.
   carrier:group-span zero-work
   carrier:legacy-lemma zero-work
   carrier:legacy-axiom zero-work
-  $ python3 mutate_broadcast_carrier.py artifacts/scopes_positive.cmt artifacts/scope-span.cmt scope-span
+  $ ./mutate_broadcast_carrier.exe artifacts/scopes_positive.cmt artifacts/scope-span.cmt scope-span
   $ ./scoped_broadcasts_tool.exe diagnostic artifacts/scope-span.cmt | grep -q 'solver=0 z3=0/0' && echo "carrier:scope-span zero-work"
   carrier:scope-span zero-work
   $ ./scoped_broadcasts_tool.exe wrong-artifact artifacts/group_positive.cmt artifacts/reorder_a.cmt
   wrong-artifact code=VERO_INVALID_BROADCAST solver=0 z3=0/0
 
-False but authenticated claims enter bounded solver work rather than becoming
-unsupported, while inactive declarations remain inert.
-
-  $ ./scoped_broadcasts_tool.exe semantic artifacts/inactive_control.cmt
-  status=counterexample functions=1 obligations=1
-  $ ./scoped_broadcasts_tool.exe engine-negative artifacts/negative_e_matching.cmt
-  result=status:counterexample solver=1 z3=1/1 live=0
-
 The fixed 16-instance ceiling fires before solver creation for the affected
 VC.  Vector construction rejects empty, duplicate, reordered, wrong-owner,
 wrong-kind, wrong-type, and incomplete-trigger forms.
 
-  $ cat > artifacts/instance_cap.py <<'PY'
-  > from pathlib import Path
-  > types = [("int" if i % 2 == 0 else "bool") + " option" * (i // 2) for i in range(17)]
-  > lines = [
-  > "type 'a option_specification = 'a option", "[@@verocaml.external_type_specification]", "",
-  > "let observed (_value : 'a) : bool = true [@@verocaml.spec]", "",
-  > "let lemma (value : 'a) : unit =",
-  > "  [%verocaml.ensures fun _ -> ((observed value) [@trigger]) || value = value];",
-  > "  ()", "[@@verocaml.proof]", "[@@verocaml.external_body]",
-  > "[@@verocaml.broadcast]", "", "[@@@verocaml.activate [lemma]]", "",
-  > "let cap",
-  > ]
-  > lines += [f"    (v{i:02d} : {typ})" for i, typ in enumerate(types)]
-  > lines += ["    : unit ="]
-  > for typ in types:
-  >     lines += ["  [%verocaml.requires", f"    forall (fun (candidate : {typ}) ->", "      ((observed candidate) [@trigger]) || candidate = candidate)];"]
-  > lines += ["  [%verocaml.assert true];", "  ()", "[@@verocaml.proof]"]
-  > Path("artifacts/instance_cap.ml").write_text("\n".join(lines) + "\n")
-  > PY
-  $ python3 artifacts/instance_cap.py
+  $ ./instance_cap.exe artifacts/instance_cap.ml
   $ retained instance_cap artifacts/instance_cap.ml
   $ ./scoped_broadcasts_tool.exe engine-negative artifacts/instance_cap.cmt | sed -E 's/ at [^ ]+ solver=/ solver=/'
   result=engine:cap: malformed SST: broadcast instance cap exceeded: 17 > 16 solver=0 z3=0/0 live=0

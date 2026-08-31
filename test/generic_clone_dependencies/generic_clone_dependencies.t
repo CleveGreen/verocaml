@@ -1,20 +1,10 @@
-The focused gate compiles retained CMTs with the production PPX.
+The ordinary stable outcomes live in outcome_cases.ml.  This legacy Cram target
+retains only the specialist generic-schema and type-substitution architecture
+contract (W05-GENERIC-SCHEMA in test/support/migrations/w05.org).
 
   $ mkdir artifacts
-  $ retained () { name=$1; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -I artifacts -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$name.cmo" "fixtures/$name.ml"; }
-  $ retained generic_positive
-  $ retained polymorphic_recursion
-  $ retained generic_higher_order
-
-One canonical definition is retained for each generic source function. Calls
-carry ordered type arguments; no closed source function identity is emitted.
-
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/generic_positive.cmt --threads 1 --timeout-ms 5000 --dump-sst artifacts/first.sst --dump-vir artifacts/first.vir
-  verocaml: verified file=artifacts/generic_positive.cmt functions=9 obligations=2
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/generic_positive.cmt --threads 2 --timeout-ms 5000 --dump-sst artifacts/second.sst --dump-vir artifacts/second.vir
-  verocaml: verified file=artifacts/generic_positive.cmt functions=9 obligations=2
-  $ cmp artifacts/first.sst artifacts/second.sst
-  $ cmp artifacts/first.vir artifacts/second.vir
+  $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -I artifacts -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/generic_positive.cmo fixtures/generic_positive.ml
+  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/generic_positive.cmt --threads 1 --timeout-ms 5000 --dump-sst artifacts/first.sst >/dev/null
   $ ./generic_clone_dependencies_tool.exe schema artifacts/generic_positive.cmt
   schema function=id#0 binders=1
   schema function=choose#1 binders=1
@@ -36,12 +26,3 @@ carry ordered type arguments; no closed source function identity is emitted.
   specification-call spec_identity#3 recursive=false type-arguments=['0@prove_identity#5] : bool
   specification-call spec_identity#3 recursive=false type-arguments=[bool] : bool
   specification-call spec_identity#3 recursive=false type-arguments=[int] : bool
-
-Nonuniform polymorphic recursion and higher-order generic values reject before
-portable SST/VIR artifacts or solver work.
-
-  $ reject () { name=$1; expected=$2; code=0; VEROCAML_TEST_PRIVATE_RECEIPT_TRACE=1 DELATOR_LOG=Verification_session=debug,warn DELATOR_FORMAT=flat DELATOR_COLOR=never OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$name.cmt" --timeout-ms 5000 --dump-sst "artifacts/$name.sst" --dump-vir "artifacts/$name.vir" >"artifacts/$name.out" 2>&1 || code=$?; test "$code" = 2; actual=$(grep -Eo 'VERO_[A-Z_]+' "artifacts/$name.out" | head -1); test "$actual" = "$expected"; printf 'code=%s\n' "$actual"; test ! -e "artifacts/$name.sst"; test ! -e "artifacts/$name.vir"; test "$(grep -c 'Verification_session: private receipt ' "artifacts/$name.out")" = 0; }
-  $ reject polymorphic_recursion VERO_UNSUPPORTED_GENERIC_USE
-  code=VERO_UNSUPPORTED_GENERIC_USE
-  $ reject generic_higher_order VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION
-  code=VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION

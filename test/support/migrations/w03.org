@@ -1,0 +1,105 @@
+#+OPTIONS: author:nil toc:nil
+#+TITLE: Recursive and Aggregate Outcome Coverage
+
+This ledger records grouped semantic coverage for aggregate specifications,
+recursive aggregates, recursive ranks and specifications, invariant
+transitions, and encapsulated mutation.  Ordinary cases use the closed outcome
+projection.  Specialist Cram/tool lanes inspect private certificates, complete
+lowering shapes, runtime behaviour, solver boundaries, or compiler diagnostics.
+
+This group has no UI golden and no outcome resource maximum.
+
+* Canonical Hosts
+
+| Host | Cases | Focused alias |
+|------+-------+---------------|
+| ~test/aggregate_recursive_specifications/outcome_cases.ml~ | ~positive-recursive-result-matrix~, ~tuple-source-project-parity~ | ~@test/aggregate_recursive_specifications/aggregate-recursive-specifications-outcome-check~ |
+| ~test/aggregate_specifications/outcome_cases.ml~ | ~positive-aggregate-matrix~, ~frontend-rejection-matrix~ | ~@test/aggregate_specifications/aggregate-specifications-outcome-check~ |
+| ~test/recursive_aggregates/outcome_cases.ml~ | ~construction-and-projection~, ~frontend-rejection-matrix~ | ~@test/recursive_aggregates/recursive-aggregates-outcome-check~ |
+| ~test/recursive_invariant_transition/outcome_cases.ml~ | ~verified-transition-matrix~, ~invalid_one_write-preservation-counterexample~, ~temporarily_invalid_multi_write-preservation-counterexample~ | ~@test/recursive_invariant_transition/recursive-invariant-transition-outcome-check~ |
+| ~test/recursive_rank/outcome_cases.ml~ | ~accepted-rank-matrix~, ~invalid-rank-matrix~, ~unsupported-type-matrix~ | ~@test/recursive_rank/recursive-rank-outcome-check~ |
+| ~test/recursive_specifications/outcome_cases.ml~ | ~verified-recursive-specification-matrix~, ~opaque-equation-needs-reveal~ | ~@test/recursive_specifications/recursive-specifications-outcome-check~ |
+| ~test/encapsulated_recursive_mutation/outcome_cases.ml~ | ~verified-transition-matrix~, ~unsupported-mutation-matrix~, ~unsupported-surface-matrix~ | ~@test/encapsulated_recursive_mutation/encapsulated-recursive-mutation-outcome-check~ |
+
+* Aggregate Recursive Specifications
+
+~positive-recursive-result-matrix~ selects verified unit dispositions, selected
+functions, and postcondition obligation kinds across recursive aggregate result
+fixtures.  ~tuple-source-project-parity~ compares a ~Single_source~ fixture with
+an explicit ~Dune_project~, excluding only named input-mode facts.
+
+The specialist lane checks bounded resource failures, internal VIR routing,
+reconstruction and admission boundaries, runtime tuple truth tables, and
+zero-solver paths.  Generated identities, complete renders, and private counters
+stay in that lane.
+
+* Aggregate Specifications
+
+~positive-aggregate-matrix~ selects verified units and representative functions
+for aggregate, variant, model, cyclic, and function specifications.
+~frontend-rejection-matrix~ selects stable frontend codes and keyed rejected
+units for unsupported specification forms.
+
+The specialist lane checks model authority, malformed raw identities, private
+validator boundaries, and lowering structures not represented by ~Outcome~.
+
+* Recursive Aggregates
+
+~construction-and-projection~ selects verified status, its unit, construction
+and projection functions, and a postcondition obligation kind.
+~frontend-rejection-matrix~ selects stable unsupported-form codes and keyed
+units.
+
+The specialist lane checks SMT sort mapping and complete recursive SST/VIR
+layout, selector, tag, and bound construction.
+
+* Recursive Invariant Transitions
+
+~verified-transition-matrix~ selects six verified units, their outer functions,
+and a transition-preservation invariant kind.  The two counterexample cases
+select their unit, owning function, invariant identity, and
+~transition-preservation~ boundary.
+
+The specialist lane checks source-protocol failures, lifecycle and teardown,
+ordered reconstruction, authority attacks, call affinity, consumed reuse, and
+negative vocabulary.
+
+* Recursive Rank
+
+~accepted-rank-matrix~ selects accepted mutable and generic rank units.
+~invalid-rank-matrix~ and ~unsupported-type-matrix~ select stable frontend codes
+and rejected units.
+
+The specialist lane checks rank certificates, VIR and Logic IR metadata,
+profile classification, private authority attacks, generated identities, and
+zero-solver rejection paths.
+
+* Recursive Specifications
+
+~verified-recursive-specification-matrix~ selects verified units and functions
+for helper, opaque/reveal, higher-order, and structural recursion fixtures.  It
+also selects entry-measure and strict-descent obligation kinds where relevant.
+~opaque-equation-needs-reveal~ selects counterexample status, its function,
+postcondition kind, and unit.
+
+The specialist lane checks ordinary erasure, private helper authority, reveal
+admission, complete solver-neutral logic declarations, installed-surface
+forgery, structural recursion rendering, and pre-solver measure validation.
+
+* Encapsulated Recursive Mutation
+
+~verified-transition-matrix~ selects verified transition clients and equal-branch
+behaviour.  ~unsupported-mutation-matrix~ and ~unsupported-surface-matrix~ select
+stable rejection codes and keyed units for unsupported mutation and surface
+forms.
+
+The specialist lane checks same-CMT certificates, transition reconstruction,
+branch joins, metadata authority, uniqueness compiler behaviour, installed
+surface boundaries, and private forgery rejection.
+
+* Commands
+
+#+begin_src sh
+dune exec test/recursive_rank/outcome_cases.exe -- --list
+dune build @test/recursive_rank/recursive-rank-outcome-check
+#+end_src

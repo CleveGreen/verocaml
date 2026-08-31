@@ -1,5 +1,7 @@
 The pure-spec semantic boundary admits definitional expansion and rejects every
 raw mode, graph, shape, and type violation before VIR construction.
+This is the local `raw-validation-matrix` specialist architecture exception;
+it is independent of `pure-specifications-outcome-check`.
 
   $ ./pure_specifications_tool.exe structural
   accepted: logical expansion emits caller-only VIR and no spec overflow VC
@@ -17,6 +19,7 @@ raw mode, graph, shape, and type violation before VIR construction.
 Ordinary PPX output erases pure declarations completely. It neither mentions
 the erased names nor imports the ghost runtime, and its CMT has no carrier or
 raw verifier attribute.
+This is the local `erased-carrier-ratchet` PPX/CMT authentication exception.
 
   $ mkdir artifacts
   $ ocamlc -stop-after parsing -dsource -ppx ../../ppx/vero_ppx.exe fixtures/positive.ml > artifacts/ordinary.stdout 2> artifacts/ordinary.source
@@ -33,6 +36,7 @@ Retained verification output has one canonical ghost-location carrier per
 spec declaration and no raw authority attribute. The adapter authenticates
 those carriers, prints the semantic role and classified calls, and lowering is
 deterministic.
+This is the local `retained-carrier-and-lowering-ratchet` specialist exception.
 
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/positive.cmo fixtures/positive.ml
   $ ./pure_specifications_tool.exe inspect retained artifacts/positive.cmt
@@ -68,12 +72,12 @@ deterministic.
   $ test $(grep -c 'trusted\|axiom\|math_succ.result\|twice.result\|shifted.result\|growing.result' artifacts/first.vir) -eq 0
   $ test $(grep -c 'y\\$' artifacts/first.vir) -eq 0
   $ grep -F '4611686018427387903' artifacts/first.vir >/dev/null
-  $ ./pure_specifications_tool.exe solve artifacts/positive.cmt
-  verified: verified (6 obligations)
 
 Nested eligible Specs compose their internal `if` and total `match` as one
 logical value on each actual caller path. The real Exec `if` remains two
 paths, and the reversed-result control never verifies.
+This is the local `matched-path-vc-explosion-ratchet` specialist resource
+exception; exact VC counts remain outside the ordinary focused alias.
 
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/matched_path_control.cmo fixtures/matched_path_control.ml
   $ source_root=${PWD%%/_build/*}
@@ -95,6 +99,8 @@ paths, and the reversed-result control never verifies.
 Exact positional aggregate constructors retain their tag and payload semantics
 without recreating internal Spec paths. The frozen direct reproducer verifies
 with five compact VCs, and independent SST/VIR construction is deterministic.
+This is the local `aggregate-constructor-compactness-ratchet` specialist
+resource exception.
 
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/option_map_minimal.cmo fixtures/option_map_minimal.ml
   $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/option_map_minimal.cmt --timeout-ms 5000 --dump-sst artifacts/option_map.first.sst --dump-vir artifacts/option_map.first.vir > artifacts/option_map.first.out 2>&1
@@ -112,6 +118,8 @@ Independent constructor matching proves exact tags, payloads, disjointness,
 observational injectivity, and nested aggregate conditionals through helpers.
 Only the deliberate wrong executable result is a concrete counterexample; it
 is neither verified nor hidden as an inconclusive result.
+This is the local `nested-aggregate-vc-explosion-ratchet` specialist resource
+exception.
 
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/logical_aggregate_constructor_semantics.cmo fixtures/logical_aggregate_constructor_semantics.ml
   $ set +e; OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/logical_aggregate_constructor_semantics.cmt --timeout-ms 5000 --dump-sst artifacts/aggregate_semantics.first.sst --dump-vir artifacts/aggregate_semantics.first.vir > artifacts/aggregate_semantics.first.out 2>&1; first_status=$?; set -e; test "$first_status" -eq 1
@@ -128,32 +136,17 @@ is neither verified nor hidden as an inconclusive result.
   $ cmp artifacts/aggregate_semantics.first.sst artifacts/aggregate_semantics.second.sst
   $ cmp artifacts/aggregate_semantics.first.vir artifacts/aggregate_semantics.second.vir
 
-The integer-valued conditional is intentionally outside the logical-term
-permit. Its four VCs prove that authentication abstains after validation and
-the existing evaluator handles both internal branches; this is not an adapter
-rejection. Other forbidden source bodies still reject at their established
-adapter/semantic boundary.
+The tuple-valued logical declaration retains its semantic role and result
+shape. This is the local `logical-tuple-shape-ratchet` specialist exception.
 
-  $ retained () { name=$1; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$name.cmo" "fixtures/$name.ml"; ./pure_specifications_tool.exe reject "artifacts/$name.cmt"; }
-  $ retained runtime_use
-  semantic validation rejected before VIR
-  $ retained spec_calls_exec
-  semantic validation rejected before VIR
-  $ retained spec_external
-  adapter rejected: VERO_UNSUPPORTED_EXTERNAL_CALL
-  $ retained spec_contract
-  adapter rejected: VERO_MALFORMED_GHOST_CALL
-  $ retained spec_assert
-  adapter rejected: VERO_MALFORMED_GHOST_CALL
-  $ retained spec_decreases
-  adapter rejected: VERO_MALFORMED_GHOST_CALL
-  $ retained spec_mutation
-  adapter rejected: VERO_UNSUPPORTED_MUTATION
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/spec_tuple.cmo fixtures/spec_tuple.ml
   $ ./pure_specifications_tool.exe sst artifacts/spec_tuple.cmt | grep '^function bad'
   function bad#0 mode=spec recursive=false result=(int * int) policy=default-linear/default-z3 @ spec_tuple.ml:1:0-1:44
 Required-labelled Specs and direct higher-order Specs are now first-class
 logical declarations rather than policy negatives.
+Their exact logical-only rows are the local
+`labelled-and-higher-order-logical-role-ratchet` specialist exception; stable
+admission is also covered by `pure-specifications-outcome-check`.
 
   $ for name in labelled higher_order; do ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$name.cmo" "fixtures/$name.ml"; OCAML_COLOR=never ../../src/verocaml.exe verify "artifacts/$name.cmt" --timeout-ms 5000 --rlimit 100000 | sed -E "s,file=[^ ]+,file=$name.cmt,"; done
   verocaml: verified file=labelled.cmt functions=0 obligations=0
@@ -163,29 +156,8 @@ logical declarations rather than policy negatives.
 
 The generic identity specification is admitted once over its canonical source
 binder without materializing call-site members.
+This is the local `polymorphic-source-binder-ratchet` specialist exception.
 
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/polymorphic.cmo fixtures/polymorphic.ml
   $ ./pure_specifications_tool.exe sst artifacts/polymorphic.cmt | grep '^function bad'
   function bad#0 binders=['0@bad#0] mode=spec recursive=false result='0@bad#0 policy=default-linear/default-z3 @ polymorphic.ml:1:0-1:31
-
-Raw attributes and hand-written calls never assign a spec role, even when they
-resolve to the authentic runtime module.
-
-  $ ocamlc -w -A -alert -all -bin-annot -c -o artifacts/raw_attribute.cmo fixtures/raw_attribute.ml
-  $ ./pure_specifications_tool.exe reject artifacts/raw_attribute.cmt
-  adapter rejected: VERO_MALFORMED_GHOST_CALL
-  $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -c -o artifacts/counterfeit.cmo fixtures/counterfeit.ml
-  $ ./pure_specifications_tool.exe reject artifacts/counterfeit.cmt
-  adapter rejected: VERO_MALFORMED_GHOST_CALL
-
-The PPX owns the payload-free, single, top-level, nonrecursive function shape
-and reports malformed or misplaced forms at source spans.
-
-  $ ppx_failure () { name=$1; fragment=$2; if OCAML_COLOR=never ocamlc -c -ppx ../../ppx/vero_ppx.exe -o "artifacts/$name.cmo" "fixtures/$name.ml" > "artifacts/$name.error" 2>&1; then echo "unexpected PPX success: $name"; return 1; fi; grep -F 'File "' "artifacts/$name.error" >/dev/null && grep -F ', line ' "artifacts/$name.error" >/dev/null && grep -F ', characters ' "artifacts/$name.error" >/dev/null && grep -F "$fragment" "artifacts/$name.error" >/dev/null; }
-  $ ppx_failure payload "does not accept a payload"
-  $ ppx_failure duplicate "duplicate [@verocaml.spec]"
-  $ ppx_failure recursive "does not support recursive bindings"
-  $ ppx_failure non_function "requires a function with an expression body"
-  $ ppx_failure multiple "requires a single top-level binding"
-  $ ppx_failure nested_attribute "only valid on one nonrecursive top-level"
-  $ ppx_failure old_body "%verocaml.old is only valid inside"

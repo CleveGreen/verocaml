@@ -1,0 +1,139 @@
+#+OPTIONS: author:nil toc:nil
+#+TITLE: External Contracts and Verified Interface Outcome Coverage
+
+This document describes grouped outcome coverage for external targets, trusted
+external bodies, retained executable results, verified interfaces, and the
+verified library.  Ordinary cases use Dune projects, declared prepared CMTs,
+and the closed semantic or process projection.  Specialist checks cover
+artifact authentication, private authority, compiler and runtime behaviour,
+installed APIs, and resource-sensitive providers.
+
+* External Target Specifications
+
+Host: ~test/external_target_specifications/outcome_cases.ml~
+
+Focused alias:
+~@test/external_target_specifications/external-target-specifications-outcome-check~
+
+- ~imported-target-project-parity~ selects verified consumer units, skipped
+  unmarked provider units, representative target functions, explicit execution
+  modes, and closed parity.
+- ~summary-shape-rejection-matrix~ selects frontend-rejected units for missing,
+  premature, duplicate, aliased, open, functor, ordered, specialized, partial,
+  and callback summary shapes.
+- ~mode-rejection-matrix~ selects process exit ~2~,
+  ~VERO_MALFORMED_GHOST_CALL~, registered colour forwarding, and a named input
+  marker for each mode mismatch.
+- ~raw-carrier-rejected~ selects process exit ~2~ and
+  ~VERO_MALFORMED_GHOST_CALL~ for a Dune-built raw target project.
+
+The specialist alias covers target metadata authentication, CMI substitution,
+copied or stale artifacts, compiler marker presence, ordinary artifact erasure,
+compiler-only shape failures, and deliberately corrupted CRC pairs.  Stable
+~VERO_DEPENDENCY~ remains selected where the corrupted-artifact boundary
+provides it.
+
+* Trusted External Bodies
+
+Host: ~test/trusted_external_bodies/outcome_cases.ml~
+
+Focused alias:
+~@test/trusted_external_bodies/trusted-external-bodies-outcome-check~
+
+- ~verified-trusted-contract-matrix~ selects verified trusted and proof-role
+  units plus representative ~caller~ and ~assume~ functions.
+- ~trusted-summary-counterexample-matrix~ selects keyed counterexamples and the
+  owned call-precondition kinds.
+- ~raw-carrier-rejection-matrix~ selects
+  ~VERO_MALFORMED_GHOST_CALL~ and the rejected raw or counterfeit units.
+- ~ppx-source-rejection-matrix~ selects process exit ~2~,
+  ~VERO_SOURCE_COMPILE~, and a named input marker for PPX or type errors.
+- ~reject-unmarked-nested-mutation~, ~reject-generic-proof-body~,
+  ~reject-nonunit-proof-body~, and ~reject-proof-call-from-exec~ select their
+  structural rejection class and stable code.
+- ~imported-proof-body-rejected~ uses a provider/consumer project and selects
+  exit ~2~ with ~VERO_DEPENDENCY~.
+
+Private provenance, marker authentication, unchecked-body elision, receipt and
+solver isolation, combined-role replay, summary suppression, and ordinary
+artifact erasure remain specialist checks.
+
+The only presentation contract in this group is
+~test/ui_goldens/trusted_external_bodies/diagnostics.t~.  It selects four PPX
+or compiler excerpts; every underlying rejection is independently covered by
+the outcome host.
+
+* Retained Executable Results
+
+Host: ~test/retained_exec_results/outcome_cases.ml~
+
+Focused alias:
+~@test/retained_exec_results/retained-exec-results-outcome-check~
+
+- ~aggregate-result-project-parity~ selects verified provider and consumer
+  units, representative result functions, declared input and execution modes,
+  and closed parity.
+- ~uncontracted-result-counterexamples~ selects keyed counterexamples and the
+  ~body_fact~ or ~two_calls~ postcondition kind.
+- The ~reject-*~ cases select frontend-rejected consumers for proof,
+  specification, finite, partial, callback, mutable, shared, hidden, and
+  foreign result routes.  ~VERO_UNSUPPORTED_EXTERNAL_CALL~ is selected where
+  the closed projection supplies it.
+
+Specialist checks cover exact fixture inventory, callable-family slicing,
+pre-consumer authority, zero backend or solver work, direct closure
+classification, and bytecode or native execution after ghost erasure.
+
+* Verified Interfaces
+
+Host: ~test/verified_interfaces/outcome_cases.ml~
+
+Focused alias: ~@test/verified_interfaces/verified-interfaces-outcome-check~
+
+- ~dependency-graph-thread-parity~ selects verified root and dependency units,
+  the ~one~ function, and closed execution-mode parity.
+- ~reject-structural-consumer~ selects process exit ~2~ and
+  ~VERO_DEPENDENCY~.
+- ~retained-model-verifies~ selects the verified root and dependency units.
+- ~retained-model-postcondition-counterexample~ selects the keyed
+  counterexample and ~observe~ postcondition.
+- The recursive rejection cases and ~reject-generic-model-open~ select the
+  available structural process facts for model-use failures.
+
+Specialist checks cover private handle opacity and serialization, retained
+model lifecycle, malformed or stale artifacts, graph authentication, private
+closure and backend boundaries, compatibility probes, cold installed API
+visibility, and deliberate compiler failures.  Source-diff replay checks remain
+separate architecture checks and do not enter the focused alias.
+
+* Verified Library
+
+Host: ~test/verified_library/outcome_cases.ml~
+
+Focused alias: ~@test/verified_library/verified-library-outcome-check~
+
+- ~source-equality-rejection-matrix~ checks comparator, physical equality,
+  reference, decrease, and reveal misuse through Dune-built CMTs and the
+  process adapter, selecting each available stable ~VERO_*~ code.
+- ~authority-rejection-matrix~ selects the valid static authority codes through
+  the process adapter.
+- ~invariant-preservation-counterexample~ selects counterexample status and the
+  ~Stack.invalidate~ semantic fact.
+
+The verified List provider, imported-model attack matrix, corrupted-artifact
+rejection, compiler-only abstract-representation checks, and ordinary runtime
+erasure remain under explicit resource, authority, and runtime specialist
+aliases.  Real compiler and process timeouts bound the provider checks.  Replay
+and aggregate specialist aliases remain independent of the focused outcome
+lane.
+
+* Commands
+
+#+begin_src sh
+dune build @test/external_target_specifications/external-target-specifications-outcome-check
+dune build @test/trusted_external_bodies/trusted-external-bodies-outcome-check
+dune build @test/retained_exec_results/retained-exec-results-outcome-check
+dune build @test/verified_interfaces/verified-interfaces-outcome-check
+dune build @test/verified_library/verified-library-outcome-check
+dune build @test/ui_goldens/trusted_external_bodies/ui-goldens-check
+#+end_src

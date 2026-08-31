@@ -1,0 +1,100 @@
+#+OPTIONS: author:nil toc:nil
+#+TITLE: Tutorial, Sequence, and Instance-Mode Outcome Coverage
+
+This document describes grouped outcome coverage for public tutorials,
+sequence specifications, and instance modes.  Ordinary cases use isolated Dune
+projects and select status, stable frontend codes, keyed units, named
+functions, semantic obligation kinds, and declared parity.  Specialist checks
+cover package, compiler, private mode, erasure, and generated-input boundaries.
+
+This group has no UI golden.  Complete SST or VIR output, report order,
+generated identities, source locations, and exact cardinalities are not
+ordinary expectations.
+
+* Tutorial Examples
+
+Host: ~test/tutorial_examples/outcome_cases.ml~
+
+Focused alias:
+~@test/tutorial_examples/tutorial-examples-outcome-check~
+
+- ~public-tutorial-project~ compiles every manifest source in one Dune project,
+  selects verified units, and requires one public entry function from each
+  unit.  The list proof also selects recursive strict descent.
+- ~list-call-summary-required~ selects an inconclusive postcondition in
+  ~equal_sum~ when the recursive summary call is absent.
+- ~documented-failed-proof~ selects a postcondition counterexample in
+  ~wrong_successor~.
+
+The ~tutorial-examples-specialist-check~ alias covers manifest membership,
+documentation links, packaged application use, and absence of verifier-only
+carriers from ordinary bytecode.  Commands are bounded and nonblocking.
+
+* Sequence Specifications
+
+Host: ~test/sequence_specifications/outcome_cases.ml~
+
+Focused alias:
+~@test/sequence_specifications/sequence-specifications-outcome-check~
+
+- ~sequence-laws~ selects the verified unit, every named public proof
+  function, and repeated-run semantic parity.
+- ~invalid-domains-are-counterexamples~ selects a local-assertion
+  counterexample for each invalid-domain proof and repeated-run parity.
+
+The ~sequence-specifications-specialist-check~ alias covers consumption of the
+abstract sequence type, rejection of private carrier construction, and the
+direct source route under both supported execution settings.
+
+* Instance Modes
+
+Host: ~test/instance_modes/outcome_cases.ml~
+
+Focused alias: ~@test/instance_modes/instance-modes-outcome-check~
+
+Verified cases:
+
+- ~mode-defaults-and-forgetting~
+- ~standalone-proof-tracked-boundaries~
+- ~default-ghost-forgetting~
+- ~aggregates-and-local-invariants~
+
+These cases select verified units and representative proof, recursive proof,
+tracked result, executable, assertion, postcondition, recursive-measure,
+aggregate, and local-invariant facts.
+
+Frontend rejection cases:
+
+- ~instance-mode-rejects-ordinary-absence~
+- ~signature-mode-mismatch~ and ~type-mode-mismatch~
+- ~missing-actual-mode~ and ~cross-mode-escalation~
+- ~tracked-formal-bare~ and ~open-aggregate-pattern~
+- ~erased-effect~ and ~ghost-invariant-authority~
+- ~mode-bearing-external-specification~ and ~mode-bearing-trusted-body~
+- ~exec-call-tracked-bare~, ~forgetting-effect~,
+  ~explicit-ghost-spec-bare~, and ~explicit-ghost-proof-bare~
+- ~recursive-tracked-formal~ and ~inherited-mode-update~
+
+The cases select frontend status, the available stable code, and keyed unit.
+
+The ~instance-modes-specialist-check~ alias covers private provenance and flow,
+ABI and artifact mutation, compiler-prepared rejection, generated syntax
+matrices, ordinary-object erasure, establishment boundaries, and zero-work
+resource checks.  It is nonblocking and does not contribute private rows,
+ordering, or exact inventories to the closed projection.
+
+* Commands
+
+#+begin_src sh
+dune build @test/tutorial_examples/tutorial-examples-outcome-check
+dune build @test/sequence_specifications/sequence-specifications-outcome-check
+dune build @test/instance_modes/instance-modes-outcome-check
+#+end_src
+
+The specialist aliases are available explicitly:
+
+#+begin_src sh
+dune build @test/tutorial_examples/tutorial-examples-specialist-check
+dune build @test/sequence_specifications/sequence-specifications-specialist-check
+dune build @test/instance_modes/instance-modes-specialist-check
+#+end_src

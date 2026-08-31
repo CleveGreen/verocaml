@@ -1,0 +1,139 @@
+#+OPTIONS: author:nil toc:nil
+#+TITLE: Outcome Coverage Ledger
+
+This ledger records the current test route for these grouped outcome suites.
+It distinguishes closed semantic projections, presentation goldens, and
+specialist checks that intentionally inspect internal or complete output.
+
+A canonical case identity is
+~<repository-relative-host-path>::<case-name>~.  The focused aliases below run
+producer, report, archive, and validator rules without depending on incidental
+rendering.
+
+* Projection Notation
+
+The coverage summaries use these public combinators:
+
+- ~status(S)~ is ~Expectation.status Outcome.S~.
+- ~code(C)~ is ~Expectation.require_frontend_code C~.
+- ~semantic(F, K)~ is
+  ~Expectation.require_semantic ~function_name:F K~.
+- ~unit(U, D)~ is ~Expectation.require_unit U Outcome.D~.
+- ~fact(N, V)~ is ~Expectation.require_named_fact N V~.
+- ~process(P)~ is ~Expectation.require_process_fact P~.
+- ~parity(E)~ is closed ~Outcome.semantic_parity~ with the named-fact keys in
+  ~E~ excluded.
+
+None of these projections selects prose, spans, generated identifiers, order,
+complete reports, or exact counts.
+
+* Contracts and Calls
+
+Host: ~test/contracts_and_calls/outcome_cases.ml~
+
+Focused alias:
+~@test/contracts_and_calls/contracts-and-calls-outcome-check~
+
+| Case | Selected contract |
+|------+-------------------|
+| ~increment-arithmetic-and-postcondition~ | Verified ~increment~ with add/lower, add/upper, and postcondition obligation kinds. |
+| ~call-assertion-precondition-and-postcondition~ | Verified ~call_increment~ with assertion, call-precondition for ~increment~, and postcondition obligation kinds. |
+| ~classify-postcondition~ | Verified ~classify~ with a postcondition obligation kind. |
+
+The grouped cases select existence of semantic kinds, not their ordinal,
+multiplicity, source span, or rendered row.
+
+* External Specifications
+
+Host: ~test/external_specifications/outcome_cases.ml~
+
+Focused alias:
+~@test/external_specifications/external-specifications-outcome-check~
+
+The malformed-call cases select ~Frontend_rejected~,
+~VERO_MALFORMED_GHOST_CALL~, and the rejected unit:
+
+- ~malformed-ghost-call-altered-argument~
+- ~malformed-ghost-call-arity~
+- ~malformed-ghost-call-label~
+- ~malformed-ghost-call-mode~
+- ~malformed-ghost-call-aggregate~
+- ~malformed-ghost-call-assertion~
+- ~malformed-ghost-call-decreases~
+- ~malformed-ghost-call-recursive-target~
+- ~malformed-ghost-call-imported-target~
+- ~malformed-ghost-call-duplicate-target~
+- ~malformed-ghost-call-wrapper-as-target~
+
+The following cases require a verifier-outcome failure before projecting
+~Frontend_rejected~.  They do not infer a stage from diagnostic prose:
+
+- ~pre-vir-rejects-wrapper-invocation~
+- ~pre-vir-rejects-direct-before-spec~
+- ~pre-vir-rejects-proof-call-to-target~
+
+Presentation coverage is in
+~test/ui_goldens/external_specifications.t~.  It selects payload, recursive
+binding, duplicate attribute, function-shape, single-binding, and OCaml type
+error excerpts.  The underlying rejection behaviour stays in the grouped host.
+
+* Source Input
+
+Host: ~test/source_input/outcome_process_cases.ml~
+
+Focused alias: ~@test/source_input/source-input-outcome-check~
+
+| Case | Selected process contract |
+|------+---------------------------|
+| ~source-compile-type-error~ | Outer exit ~2~, ~VERO_SOURCE_COMPILE~, colour forwarding, and ordering of the stable code before the compiler exit detail. |
+| ~controlled-compiler-exit~ | Outer exit ~2~, registered compiler environment, ~VERO_SOURCE_COMPILE~, selected stdout/stderr protocol order, private compiler protocol, and cleanup. |
+| ~controlled-compiler-signal~ | Outer exit ~2~, registered compiler environment, ~VERO_SOURCE_COMPILE~, signal-context order, and cleanup. |
+| ~compiler-invocation-failure~ | Outer exit ~3~, ~VERO_INTERNAL~, and registered compiler/PPX/ghost paths. |
+| ~private-storage-setup-failure~ | Outer exit ~3~, ~VERO_INTERNAL~, and registered temporary-directory forwarding. |
+
+~test/ui_goldens/source_input.t~ owns four presentation keys:
+
+- ~compile-error-location-and-type-excerpt~
+- ~controlled-compiler-ansi-red~
+- ~compiler-invocation-internal-excerpt~
+- ~private-storage-internal-excerpt~
+
+~test/source_input/source_input.t~ separately checks complete direct-source and
+prepared-CMT output, repeatability, authority rendering, space-containing paths,
+and successful-route temporary-file behaviour.  Those complete-output contracts
+are not closed outcome projections.
+
+* Project Usability
+
+Host: ~test/usability_p0_project/outcome_cases.ml~
+
+Focused alias:
+~@test/usability_p0_project/usability-p0-project-outcome-check~
+
+| Case | Selected contract |
+|------+-------------------|
+| ~mixed-project-serial-threaded-parity~ | Verified unit dispositions and trusted external uses, with closed parity excluding ~execution-mode~ and ~inventory-order~. |
+| ~marked-legacy-frontend-rejection~ | Frontend rejection, ~VERO_UNSUPPORTED_STRUCTURE_ITEM~, and the rejected unit. |
+| ~consumer-source-cmt-parity~ | Verified consumer/provider projection, with closed parity excluding ~input-mode~ and ~execution-mode~. |
+| ~mixed-project-copied-artifact-parity~ | Verified project projection, with closed parity excluding ~artifact-location~. |
+
+The project cases use explicit ~Dune_project~ fixtures.  Prepared-artifact
+comparisons declare their CMT dependencies before constructing ~Prepared_cmt~.
+The specialist Cram lane checks zero-work internals and runtime or packaging
+properties that are outside the closed projection.
+
+* Commands
+
+List or run one case with its full identity:
+
+#+begin_src sh
+dune exec test/contracts_and_calls/outcome_cases.exe -- --list
+dune exec test/contracts_and_calls/outcome_cases.exe -- \
+  --case test/contracts_and_calls/outcome_cases.ml::classify-postcondition
+#+end_src
+
+Run a complete focused lane with its alias.  Run all presentation targets with:
+
+#+begin_src sh
+dune build @test/ui_goldens/ui-goldens-check
+#+end_src

@@ -1,13 +1,8 @@
-The retained proof carrier is a dead sidecar.  The exact external-body
-reproduction compiles without consuming its uniquely returned local; its
-source-identical checked twin exercises semantic remapping.
+The remaining Cram lane exercises retained-carrier, copied-artifact, and
+private remapping architecture that is intentionally outside ordinary outcomes.
 
   $ mkdir artifacts
   $ retained () { name=$1; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$name.cmo" "fixtures/$name.ml"; }
-  $ retained unique_empty_return
-  $ ../../src/verocaml.exe verify artifacts/unique_empty_return.cmt 2>&1 | sed -E 's,file=[^ ]+,file=unique_empty_return.cmt,'
-  verocaml: trusted external body declaration trust=axiomatic function=empty_stack#2 declaration-span=fixtures/unique_empty_return.ml:16:0-21:26 witness-span=fixtures/unique_empty_return.ml:21:0-21:26 requires=0 ensures=1 body=unchecked
-  verocaml: verified-with-trusted-axioms file=unique_empty_return.cmt functions=1 obligations=0 trusted-external-bodies=1 trusted-external-body-uses=0 trusted-external-spec-uses=0
   $ retained checked_unique_empty_return
   $ ./proof_region_modes_tool.exe solve artifacts/checked_unique_empty_return.cmt
   lemma_empty_stack=verified:0
@@ -106,7 +101,7 @@ Every attack rejects before capture issuance, remapping, proof SST, mode
 forgetting, backend, or direct Z3 work.
 
   $ retained adversary_base
-  $ for attack in wrong-callable wrong-binding-span wrong-region-id missing-slot reordered-slots duplicate-slot; do python3 mutate_carrier.py artifacts/adversary_base.cmt "artifacts/$attack.cmt" "$attack"; cp artifacts/adversary_base.cmi "artifacts/$attack.cmi"; printf '%s: ' "$attack"; ./proof_region_modes_tool.exe reject "artifacts/$attack.cmt" | paste -sd ' ' -; done
+  $ for attack in wrong-callable wrong-binding-span wrong-region-id missing-slot reordered-slots duplicate-slot; do ./mutate_carrier.exe artifacts/adversary_base.cmt "artifacts/$attack.cmt" "$attack"; cp artifacts/adversary_base.cmi "artifacts/$attack.cmi"; printf '%s: ' "$attack"; ./proof_region_modes_tool.exe reject "artifacts/$attack.cmt" | paste -sd ' ' -; done
   wrong-callable: rejected=VERO_MALFORMED_GHOST_CALL capture-issued=0 remapped=0 proof-sst=0 forgetting=0 recursive=0 backend=0 z3=0/0
   wrong-binding-span: rejected=VERO_MALFORMED_GHOST_CALL capture-issued=0 remapped=0 proof-sst=0 forgetting=0 recursive=0 backend=0 z3=0/0
   wrong-region-id: rejected=VERO_MALFORMED_GHOST_CALL capture-issued=0 remapped=0 proof-sst=0 forgetting=0 recursive=0 backend=0 z3=0/0
@@ -157,7 +152,6 @@ semantic boundary only after authenticated remapping.
   $ ./proof_region_modes_tool.exe semantic-reject artifacts/effectful_payload.cmt
   rejected=VERO_UNSUPPORTED_EXTERNAL_CALL
   capture-issued=1 remapped=1 proof-sst=0 forgetting=0 recursive=0 backend=0 z3=0/0
-
 
 Authenticated captures do not weaken explicit Ghost actual matching, permit
 Ghost-to-Tracked recovery, or create a missing finite receipt.  Each rejection

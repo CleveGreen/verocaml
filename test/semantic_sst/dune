@@ -1,6 +1,48 @@
 (executable
  (name semantic_sst_tool)
+ (modules semantic_sst_tool)
  (libraries verocaml_core))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support))
+
+(rule
+ (targets
+  semantic-sst-outcome-cases.result-report
+  semantic-sst-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   semantic-sst-outcome-cases.result-report
+   semantic-sst-outcome-cases.failure-archive)))
+
+(rule
+ (alias semantic-sst-outcome-check)
+ (deps
+  (:report semantic-sst-outcome-cases.result-report)
+  (:archive semantic-sst-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
 
 (cram
  (deps
@@ -12,3 +54,8 @@
  (name semantic-sst-check)
  (deps
   (alias runtest)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias semantic-sst-outcome-check)))

@@ -1,9 +1,15 @@
+The in-memory raw-term matrix is the local `raw-term-unit-ratchet` specialist
+exception and is intentionally independent of
+`checked-integer-vir-outcome-check`.
+
   $ ./checked_integer_vir_tool.exe unit
   checked integer VIR unit checks: bounds, raw terms, ordering, handoff, provenance, ranges
 
 The public VIR term boundary has no general symbolic multiplication or
 division constructor. Wrapping, remainder, shifts, and bitwise expressions
 are likewise absent after the SST firewall.
+This deliberately failing client compilation is the local
+`public-constructor-absence-ratchet` architecture exception.
 
   $ if OCAML_COLOR=never ocamlfind ocamlc -package zarith -I ../../src/.verocaml_core.objs/byte -c fixtures/general_symbolic_multiply_term.ml > multiply.error 2>&1; then exit 1; fi
   $ tr -d '"' < multiply.error | grep -F 'Error: Unbound constructor Vir.Integer_multiply' > /dev/null && echo 'general symbolic multiply constructor absent'
@@ -18,9 +24,15 @@ are likewise absent after the SST firewall.
   $ ./checked_integer_vir_tool.exe dump artifacts/arithmetic_paths.cmt > artifacts/second.vir
   $ cmp artifacts/first.vir artifacts/second.vir
 
+The repeat-build comparison is the local `deterministic-lowering-ratchet`
+specialist exception.
+
 The real-CMT dump contains source-spanned lower/upper obligations, range
 assumptions, and model projections. Guard facts remain path conditions rather
 than being promoted to unconditional assumptions.
+This is the local `path-and-projection-shape-ratchet` specialist exception.
+Only status, operation kinds, functions, and unit outcomes are duplicated in
+`checked-integer-vir-outcome-check`; this retained block owns path structure.
 
   $ grep -E '^function |^  vc |^    path$|^      \(< x\$0 4611686018427387903\)|^      \(< -4611686018427387904 x\$0\)|^      \(>= x\$0 0\)|^      \(not \(>= x\$0 0\)\)|^    mathematical-result ' artifacts/first.vir
   function guarded_add#0 mode=exec body=checked-typedtree:arithmetic_paths.ml policy=default-linear/default-z3

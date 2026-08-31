@@ -7,8 +7,6 @@ branch/match paths, and the authenticated Revealed entry seed all verify.
   $ retained_compile () { n=$1; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$n.cmo" "fixtures/$n.ml"; }
   $ retained_compile fanout_positive
   $ retained_compile ordinary_contract_match
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/fanout_positive.cmt --timeout-ms 5000 | tail -1
-  verocaml: verified file=artifacts/fanout_positive.cmt functions=7 obligations=22
 
 Checked nonfinite contracts called by direct and recursive finite callers,
 checked same-function finite contract/body matching, and external-body
@@ -18,30 +16,6 @@ matches issue zero witnesses and consume zero retries.
 
   $ ./proof_activation_routing_tool.exe ordinary-matches artifacts/ordinary_contract_match.cmt
   ordinary-matches status=verified functions=8 obligations=19 ground-attempts=0 retry-attempts=0 trusted-body-parity=1
-
-External finite formals remain rejected at the established boundary, with
-byte-identical repeated diagnostics.
-
-  $ cat > artifacts/external_finite_rejected.ml <<'EOF'
-  > type 'a node =
-  >   | Empty
-  >   | Node of 'a * 'a node
-  > let lemma_peel_push (nodes : int node [@finite]) =
-  >   [%verocaml.ensures fun _ ->
-  >     match nodes with
-  >     | Empty -> true
-  >     | Node (value, rest) -> Node (value, rest) = nodes];
-  >   ()
-  > [@@verocaml.proof]
-  > [@@verocaml.external_body]
-  > let finite_caller (nodes : int node [@finite]) =
-  >   lemma_peel_push nodes
-  > [@@verocaml.proof]
-  > EOF
-  $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/external_finite_rejected.cmo artifacts/external_finite_rejected.ml
-  $ for n in 1 2; do OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/external_finite_rejected.cmt --timeout-ms 5000 >"artifacts/external-finite-$n.out" 2>&1; test $? = 2; done
-  $ cmp artifacts/external-finite-1.out artifacts/external-finite-2.out && tail -1 artifacts/external-finite-1.out | sed -E 's/ at .*$/ at SPAN/'
-  Error: [VERO_INVALID_PROGRAM] VeroCaml could not validate function "lemma_peel_push": unchecked, external, trusted, or raw callables cannot require finite formals
 
 The private in-process observer pins distinct final indices, copied
 provisional counters, exact path digests and activation vectors for all three
@@ -65,17 +39,6 @@ complete one-to-one batch with no unused manifest or fallback.
   issued callable=seeded_fanout#9 final=0 provisional=0 kind=post:0:fixtures/fanout_positive.ml:70:2-71:45 path=DIGEST activations=[seeded_node_len#1:1]
   issued callable=seeded_fanout#9 final=1 provisional=0 kind=post:0:fixtures/fanout_positive.ml:70:2-71:45 path=DIGEST activations=[seeded_node_len#1:1]
   bijection callable=seeded_fanout#9 issued=2 consumed=2 unused=0 fallback=0
-
-Removing, delaying, placing on only one sibling, moving to another callable,
-or replacing the authenticated Revealed seed with an opaque declaration does
-not activate the reached obligation.
-
-  $ for n in no_reveal_negative nonleak_negative later_nonleak_negative cross_callable_negative opaque_seed_negative; do retained_compile "$n"; ./proof_activation_routing_tool.exe negative "artifacts/$n.cmt"; done
-  status=counterexample function=lemma_empty_stack index=1
-  status=counterexample function=sibling_nonleak index=1
-  status=counterexample function=later_nonleak index=0
-  status=counterexample function=cross_callable_nonleak index=0
-  status=counterexample function=opaque_seed_control index=0
 
 Malformed/counterfeit, absent, duplicate, unused, stale, foreign, replayed,
 wrong-artifact-family, reordered, swapped, substituted, wrong-callable,

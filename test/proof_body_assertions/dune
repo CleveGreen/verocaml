@@ -1,8 +1,13 @@
 (executable
  (name proof_body_assertions_tool)
  (modules proof_body_assertions_tool proof_body_assertions_prerequisites)
- (flags (:standard -I src/.verocaml_core.objs/byte))
+ (flags
+  (:standard -I src/.verocaml_core.objs/byte))
  (libraries verocaml_core compiler-libs.common))
+
+(executable
+ (name mutate_local_carrier)
+ (modules mutate_local_carrier))
 
 (rule
  (targets proof_body_assertions_prerequisites.ml)
@@ -15,7 +20,9 @@
   ../../src/.verocaml_core.objs/byte/z3_bridge.cmi
   ../../src/.verocaml_core.objs/byte/typedtree_adapter_private.cmi)
  (action
-  (with-stdout-to %{targets} (echo "let ready = ()"))))
+  (with-stdout-to
+   %{targets}
+   (echo "let ready = ()"))))
 
 (cram
  (deps
@@ -26,9 +33,56 @@
   ../../runtime/vero_ghost.cma
   ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi
   proof_body_assertions_tool.exe
-  mutate_local_carrier.py))
+  mutate_local_carrier.exe))
 
 (alias
  (name proof-body-assertions-check)
  (deps
   (alias runtest)))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support))
+
+(rule
+ (targets
+  proof-body-assertions-outcome-cases.result-report
+  proof-body-assertions-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  integration-library-environment.manifest
+  (glob_files fixtures/*.ml))
+ (action
+  (run
+   %{suite}
+   --produce
+   proof-body-assertions-outcome-cases.result-report
+   proof-body-assertions-outcome-cases.failure-archive)))
+
+(rule
+ (alias proof-body-assertions-outcome-check)
+ (deps
+  (:report proof-body-assertions-outcome-cases.result-report)
+  (:archive proof-body-assertions-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
+(alias
+ (name runtest)
+ (deps
+  (alias proof-body-assertions-outcome-check)))

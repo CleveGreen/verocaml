@@ -1,7 +1,8 @@
 (executable
  (name solver_resource_policy_tool)
  (modules solver_resource_policy_tool solver_resource_policy_prerequisites)
- (flags (:standard -I src/.verocaml_core.objs/byte))
+ (flags
+  (:standard -I src/.verocaml_core.objs/byte))
  (libraries verocaml_core compiler-libs.common))
 
 (rule
@@ -12,13 +13,76 @@
   ../../src/.verocaml_core.objs/byte/verification_driver_private.cmi
   ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
  (action
-  (with-stdout-to %{targets} (echo "let ready = ()"))))
+  (with-stdout-to
+   %{targets}
+   (echo "let ready = ()"))))
+
+(rule
+ (targets solver_resource_policy_outcome_prerequisites.ml)
+ (deps ../../src/.verocaml_core.objs/byte/solver_policy_private.cmi)
+ (action
+  (with-stdout-to
+   %{targets}
+   (echo "let ready = ()"))))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules
+  outcome_cases
+  integration_environment
+  solver_resource_policy_outcome_prerequisites)
+ (flags
+  (:standard -I src/.verocaml_core.objs/byte))
+ (libraries outcome_test_support verocaml_core))
+
+(rule
+ (targets
+  solver-resource-policy-outcome-cases.result-report
+  solver-resource-policy-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   solver-resource-policy-outcome-cases.result-report
+   solver-resource-policy-outcome-cases.failure-archive)))
+
+(rule
+ (alias solver-resource-policy-outcome-check)
+ (deps
+  (:report solver-resource-policy-outcome-cases.result-report)
+  (:archive solver-resource-policy-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
 
 (cram
+ (alias solver-resource-policy-specialist-check)
+ (runtest_alias false)
  (deps
   solver_resource_policy_tool.exe))
 
 (alias
  (name solver-resource-policy-check)
  (deps
-  (alias runtest)))
+  (alias solver-resource-policy-outcome-check)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias solver-resource-policy-outcome-check)))

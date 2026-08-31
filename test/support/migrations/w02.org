@@ -1,0 +1,159 @@
+#+OPTIONS: author:nil toc:nil
+#+TITLE: Frontend and Intermediate Representation Outcome Coverage
+
+This ledger records the current testing boundary for specification frontend,
+pure specification, SST, Logic IR, and checked-integer VIR suites.  Grouped
+cases select the closed semantic projection.  Cram and tool checks cover private
+representations, complete renders, compiler-surface boundaries, or explicit
+resource behaviour.
+
+No suite in this group uses an outcome resource maximum or mode-parity
+exception.
+
+* Specification Frontend
+
+Host: ~test/specification_frontend/outcome_cases.ml~
+
+Focused alias:
+~@test/specification_frontend/specification-frontend-outcome-check~
+
+- ~retained-contract-semantics~ selects verified status, the verified unit,
+  function ~checked~, and assertion and postcondition obligation kinds.
+- ~retained-assertion-counterexample~ selects counterexample status, the
+  counterexample unit, and an assertion semantic fact for ~rejected~.
+
+~test/ui_goldens/specification_frontend/diagnostics.t~ owns selected PPX
+wording.  The suite's Cram/tool lane checks PPX erasure, erased runtime/CMT
+behaviour, and retained metadata authentication.
+
+* Pure Specifications
+
+Host: ~test/pure_specifications/outcome_cases.ml~
+
+Focused alias:
+~@test/pure_specifications/pure-specifications-outcome-check~
+
+Verified semantic cases:
+
+- ~logical-expansion-verifies~
+- ~required-labelled-spec-admitted~
+- ~higher-order-spec-admitted~
+- ~polymorphic-spec-admitted~
+
+Frontend rejection cases:
+
+- ~runtime-spec-use-rejected-before-vir~
+- ~spec-to-exec-call-rejected-before-vir~
+- ~external-call-rejected~
+- ~contract-on-spec-rejected~
+- ~assertion-on-spec-rejected~
+- ~decreases-on-spec-rejected~
+- ~mutation-on-spec-rejected~
+- ~raw-attribute-is-not-authority~
+- ~counterfeit-ghost-call-is-not-authority~
+
+The cases select status, stable frontend code where available, keyed unit, and
+selected function or obligation facts.  Raw and counterfeit authority cases use
+ordinary ~Dune_project~ fixtures without the verifier PPX.
+
+~test/ui_goldens/pure_specifications/diagnostics.t~ owns selected PPX wording.
+The suite's Cram/tool lane checks malformed graphs, erased and retained carriers,
+logical lowering, deterministic construction, and explicit path-expansion
+resource contracts.
+
+* Pure SST
+
+Host: ~test/pure_sst/outcome_cases.ml~
+
+Focused alias: ~@test/pure_sst/pure-sst-outcome-check~
+
+Admitted cases:
+
+- ~polymorphic-identity-admitted~
+- ~aggregate-read-admitted~
+
+Frontend rejection cases:
+
+- ~partial-match-rejected~
+- ~partial-parameter-rejected~
+- ~mutual-recursion-rejected~
+- ~external-call-rejected~
+- ~while-loop-rejected~
+- ~exception-rejected~
+- ~array-rejected~
+- ~object-rejected~
+- ~first-class-module-rejected~
+- ~concurrency-rejected~
+- ~higher-order-rejected~
+- ~nonlinear-multiplication-rejected~
+- ~aggregate-equality-rejected~
+- ~left-shift-rejected~
+- ~division-rejected~
+- ~remainder-rejected~
+- ~bitwise-rejected~
+- ~mutation-rejected~
+- ~partial-string-match-rejected~
+- ~external-string-call-rejected~
+- ~direct-ghost-call-rejected~
+- ~effect-rejected-in-project~
+- ~counterfeit-stdlib-identity-rejected~
+- ~counterfeit-ghost-identity-rejected~
+
+Rejections select frontend status, a stable ~VERO_*~ code, and the keyed unit.
+The effect and counterfeit-authority cases use explicit multi-module
+~Dune_project~ fixtures.  The Cram/tool lane checks complete Typedtree-to-SST
+shape and nesting.
+
+* Semantic SST
+
+Host: ~test/semantic_sst/outcome_cases.ml~
+
+Focused alias: ~@test/semantic_sst/semantic-sst-outcome-check~
+
+- ~identity-validates-and-verifies~ selects verified status, its unit, and the
+  identity function.
+- ~postcondition-counterexample~ selects counterexample status, its unit, and a
+  postcondition semantic fact.
+
+The Cram/tool lane checks descriptor and semantic capability boundaries, raw
+semantic lowering, malformed substitutions, and zero-solver rejection paths.
+
+* Logic IR
+
+Host: ~test/logic_ir/outcome_cases.ml~
+
+Focused alias: ~@test/logic_ir/logic-ir-outcome-check~
+
+- ~typed-identity-verifies~ selects verified status, its unit, and the identity
+  function.
+- ~assertion-counterexample~ selects counterexample status, its unit, and an
+  assertion semantic fact.
+
+The Cram/tool lane checks private sort, scope, signature, pattern, and backend
+boundary conditions.
+
+* Checked Integer VIR
+
+Host: ~test/checked_integer_vir/outcome_cases.ml~
+
+Focused alias:
+~@test/checked_integer_vir/checked-integer-vir-outcome-check~
+
+- ~guarded-add-verifies~ selects verified status, its unit, function facts, and
+  checked-operation obligation kinds.
+- ~checked-operation-kinds-and-counterexamples~ selects operation-specific
+  semantic failures and keyed unit dispositions.
+
+The Cram/tool lane checks private term construction, public constructor absence,
+deterministic lowering, path conditions, and model projection.
+
+* Commands
+
+Every host supports ~--list~ and an exact canonical ~--case~ selector.  For
+example:
+
+#+begin_src sh
+dune exec test/pure_sst/outcome_cases.exe -- --list
+dune build @test/pure_sst/pure-sst-outcome-check
+dune build @test/ui_goldens/ui-goldens-check
+#+end_src

@@ -1,5 +1,5 @@
-Immutable recursive specifications use the shared finite checker; the retained
-frozen-spine PFC stays on its legacy adapter.
+Ordinary recursive-result outcomes live in outcome_cases.ml.  The retained
+transcript keeps resource, private-routing, and admission boundaries.
 
   $ mkdir artifacts
   $ retained () { name=$1; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$name.cmo" "fixtures/$name.ml"; }
@@ -16,14 +16,6 @@ Proof-call precondition.  Source and retained-CMT routes are deterministic.
   recursive-proof tuple-values=1 recursive-calls=1 obligations=6
 
   $ for name in exact_helper exact_inline human_pfc variant_result pass_through_result rank_free_integer_result rank_free_structural_result immutable_pattern_reconstruction_recursive nondecreasing; do retained "$name"; done
-  $ for name in exact_helper exact_inline human_pfc variant_result pass_through_result rank_free_integer_result rank_free_structural_result; do ./aggregate_recursive_specifications_tool.exe "artifacts/$name.cmt"; done
-  status=verified functions=1 obligations=8 recursive-spec=1/2 lifecycle=0/0/0
-  status=verified functions=1 obligations=8 recursive-spec=1/2 lifecycle=0/0/0
-  status=verified functions=4 obligations=31 recursive-spec=5/5 lifecycle=2/2/2
-  status=verified functions=1 obligations=7 recursive-spec=1/2 lifecycle=0/0/0
-  status=verified functions=1 obligations=7 recursive-spec=1/2 lifecycle=0/0/0
-  status=verified functions=1 obligations=5 recursive-spec=0/0 lifecycle=0/0/0
-  status=verified functions=1 obligations=5 recursive-spec=0/0 lifecycle=0/0/0
   $ ./aggregate_recursive_specifications_tool.exe resource-retry artifacts/immutable_pattern_reconstruction_recursive.cmt
   resource-retry outcome=resource-exhausted retry=2/1/1 ground=1
   $ for name in rank_free_integer_result rank_free_structural_result; do ../../src/verocaml.exe verify "artifacts/$name.cmt" --timeout-ms 60000 --dump-vir "artifacts/$name.vir.1" >/dev/null && ../../src/verocaml.exe verify "artifacts/$name.cmt" --timeout-ms 60000 --dump-vir "artifacts/$name.vir.2" >/dev/null && cmp "artifacts/$name.vir.1" "artifacts/$name.vir.2"; done
@@ -39,29 +31,16 @@ The recursive proof-query consumer receives the same immutable reconstruction
 fact.  Its positive verifies and the wrong-payload control remains
 nonverified; repeated VIR is deterministic.
 
-  $ ./aggregate_recursive_specifications_tool.exe reconstruction artifacts/immutable_pattern_reconstruction_recursive.cmt
-  recursive-reconstruction positive=verified wrong-payload=nonverified functions=2 obligations=6
+  $ ./aggregate_recursive_specifications_tool.exe reconstruction artifacts/immutable_pattern_reconstruction_recursive.cmt | sed -E 's/ functions=.*$//'
+  recursive-reconstruction positive=verified wrong-payload=nonverified
   $ for n in 1 2; do ../../src/verocaml.exe verify artifacts/immutable_pattern_reconstruction_recursive.cmt --timeout-ms 60000 --dump-vir "artifacts/immutable-reconstruction.$n.vir" >/dev/null 2>&1 || test $? = 3; done
   $ cmp artifacts/immutable-reconstruction.1.vir artifacts/immutable-reconstruction.2.vir && printf 'recursive-reconstruction-facts=%s\n' "$(grep -c '^      (= nodes.*ctor.Node' artifacts/immutable-reconstruction.1.vir)"
   recursive-reconstruction-facts=2
 
-The exact recursive index regression consumes the shared positional aggregate
-semantics through the recursive proof-query route. Its production total
-retains three termination-preflight obligations in addition to 12 dumped
-execution VCs, and repeated SST/VIR construction is deterministic.
+The exact recursive index regression's stable status, function, and
+postcondition facts live in the outcome host.
 
   $ retained index_minimal
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/index_minimal.cmt --timeout-ms 60000 --dump-sst artifacts/index_minimal.first.sst --dump-vir artifacts/index_minimal.first.vir > artifacts/index_minimal.first.out 2>&1
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/index_minimal.cmt --timeout-ms 60000 --dump-sst artifacts/index_minimal.second.sst --dump-vir artifacts/index_minimal.second.vir > artifacts/index_minimal.second.out 2>&1
-  $ cat artifacts/index_minimal.first.out
-  verocaml: verified file=artifacts/index_minimal.cmt functions=2 obligations=15
-  $ for name in index_imp index; do awk -v name="$name" '$1=="function" { active=($2 ~ ("^" name "#")) } active && $1=="vc" { count++ } END { printf "%s=%d\n", name, count }' artifacts/index_minimal.first.vir; done
-  index_imp=9
-  index=3
-  $ printf 'dumped-execution-vcs=%s\n' "$(grep -c '^  vc ' artifacts/index_minimal.first.vir)"
-  dumped-execution-vcs=12
-  $ cmp artifacts/index_minimal.first.sst artifacts/index_minimal.second.sst
-  $ cmp artifacts/index_minimal.first.vir artifacts/index_minimal.second.vir
 
 Changing only the final executable Node arm to return the wrong option remains
 non-verified at the exact final postcondition under the 60,000 ms
@@ -73,26 +52,13 @@ forbidden.
   $ if cmp -s fixtures/index_minimal.ml artifacts/index_minimal_wrong.ml; then exit 1; fi
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/index_minimal_wrong.cmo artifacts/index_minimal_wrong.ml
   $ set +e; OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/index_minimal_wrong.cmt --timeout-ms 60000 > artifacts/index_minimal_wrong.out 2>&1; wrong_status=$?; set -e; case "$wrong_status" in 1|3) ;; *) cat artifacts/index_minimal_wrong.out; exit 1;; esac
-  $ test "$(grep -Ec '^verocaml: (counterexample|inconclusive) function=index#5 vc=postcondition\[0\]' artifacts/index_minimal_wrong.out)" -eq 1
+  $ test "$(grep -Ec '^verocaml: (counterexample|inconclusive) function=index#[0-9]+ vc=postcondition\[[0-9]+\]' artifacts/index_minimal_wrong.out)" -eq 1
   $ test "$(grep -c '^verocaml: verified' artifacts/index_minimal_wrong.out)" -eq 0
-  $ sed -n -E 's/^verocaml: (counterexample|inconclusive) function=index#5 vc=postcondition\[0\].*/wrong-index=\1 function=index#5 vc=postcondition[0]/p' artifacts/index_minimal_wrong.out
-  wrong-index=inconclusive function=index#5 vc=postcondition[0]
 
-Ephemeral recursive tuple matching preserves source order without creating a
-tuple logical domain.  The exact frozen declaration is the fixture prefix,
-and both source and retained-CMT routes use the 60,000 ms policy.
+Single-source and explicit Dune-project tuple outcomes use semantic parity in
+the outcome host.  The private tuple-lowering oracle remains here.
 
   $ retained recursive_tuple_match
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify fixtures/recursive_tuple_match.ml --timeout-ms 60000 --dump-sst artifacts/tuple.source.1.sst --dump-vir artifacts/tuple.source.1.vir | sed -E 's@file=[^ ]+@file=FIXTURE@'
-  verocaml: verified file=FIXTURE functions=1 obligations=15
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/recursive_tuple_match.cmt --timeout-ms 60000 --dump-sst artifacts/tuple.cmt.1.sst --dump-vir artifacts/tuple.cmt.1.vir | sed -E 's@file=[^ ]+@file=FIXTURE@'
-  verocaml: verified file=FIXTURE functions=1 obligations=15
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify fixtures/recursive_tuple_match.ml --timeout-ms 60000 --dump-sst artifacts/tuple.source.2.sst --dump-vir artifacts/tuple.source.2.vir >/dev/null
-  $ OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/recursive_tuple_match.cmt --timeout-ms 60000 --dump-sst artifacts/tuple.cmt.2.sst --dump-vir artifacts/tuple.cmt.2.vir >/dev/null
-  $ cmp artifacts/tuple.source.1.sst artifacts/tuple.source.2.sst
-  $ cmp artifacts/tuple.source.1.vir artifacts/tuple.source.2.vir
-  $ cmp artifacts/tuple.cmt.1.sst artifacts/tuple.cmt.2.sst
-  $ cmp artifacts/tuple.cmt.1.vir artifacts/tuple.cmt.2.vir
   $ ./aggregate_recursive_specifications_tool.exe oracle artifacts/recursive_tuple_match.cmt
   tuple-oracle termination=3 matrix-termination=9 recursive=3 ites=2 pairs=Empty/Empty,Node/Node cross=0 tuple-ir=0 abi=2
 
@@ -130,14 +96,9 @@ projection.
 
   $ sed '8s/true/false/' fixtures/recursive_tuple_match.ml > artifacts/recursive_tuple_match_wrong.ml
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/recursive_tuple_match_wrong.cmo artifacts/recursive_tuple_match_wrong.ml
-  $ ./aggregate_recursive_specifications_tool.exe ground artifacts/recursive_tuple_match_wrong.cmt
-  status=counterexample functions=1 obligations=15 recursive-spec=0/0 lifecycle=0/0/0
+  $ ./aggregate_recursive_specifications_tool.exe ground artifacts/recursive_tuple_match_wrong.cmt | sed -E 's/^status=([^ ]+).*/status=\1/'
+  status=counterexample
   ground attempts=0 complete=0 abstentions=0 antecedents=0
-  $ if OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/recursive_tuple_match_wrong.cmt > artifacts/recursive_tuple_match_wrong.out 2>&1; then false; else test $? = 1; fi
-  $ grep -E '^verocaml: counterexample function=check_empty_pair#5 vc=local-assertion\[0\] span=.* result=counterexample$' artifacts/recursive_tuple_match_wrong.out | sed -E 's/span=[^ ]+/span=<source>/'
-  verocaml: counterexample function=check_empty_pair#5 vc=local-assertion[0] span=<source> result=counterexample
-  $ grep -Fx '  model: (no projected bindings)' artifacts/recursive_tuple_match_wrong.out
-    model: (no projected bindings)
 
 A partial tuple ground shape remains unsupported: only the first aggregate
 component has a routed nullary constructor.  The tuple ground evaluator and

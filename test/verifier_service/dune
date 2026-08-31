@@ -3,7 +3,55 @@
  (modules verifier_service_tool)
  (libraries verocaml_core compiler-libs.common))
 
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support))
+
+(rule
+ (targets
+  verifier-service-outcome-cases.result-report
+  verifier-service-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  ../private_receipt/fixtures/local_positive.ml
+  ../release_verification/fixtures/false_postcondition.ml
+  ../trusted_external_bodies/fixtures/positive.ml
+  ../verified_interfaces/fixtures/model_dependency.ml
+  ../verified_interfaces/fixtures/model_consumer.ml
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   verifier-service-outcome-cases.result-report
+   verifier-service-outcome-cases.failure-archive)))
+
+(rule
+ (alias verifier-service-outcome-check)
+ (deps
+  (:report verifier-service-outcome-cases.result-report)
+  (:archive verifier-service-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
 (cram
+ (alias verifier-service-specialist-check)
+ (runtest_alias false)
  (deps
   verifier_service_tool.exe
   ../private_receipt/fixtures/local_positive.ml
@@ -16,4 +64,10 @@
 
 (alias
  (name verifier-service-check)
- (deps (alias runtest)))
+ (deps
+  (alias verifier-service-outcome-check)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias verifier-service-outcome-check)))

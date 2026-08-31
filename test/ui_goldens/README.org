@@ -1,0 +1,67 @@
+#+OPTIONS: author:nil toc:nil
+#+TITLE: UI Goldens
+
+This directory contains presentation-only tests.  Structured semantic behaviour
+belongs in grouped outcome cases; a UI golden owns only text or terminal
+presentation deliberately shown to a user.
+
+* Allowed Assertions
+
+A golden may select:
+
+- a deliberate excerpt of a user-visible diagnostic;
+- intentional ANSI or colour behaviour; or
+- an explicitly identified user-visible renderer contract.
+
+Do not snapshot complete semantic reports, SST or VIR output, incidental prose,
+whitespace, internal ordering, generated identifiers, or exact verification
+counts.  Status, rejection codes, semantic kinds, unit dispositions, process
+outcomes, forwarding, cleanup, and parity belong in outcome cases.  A UI excerpt
+must not be their only assertion.
+
+* Check Corrections
+
+Run all UI targets with:
+
+#+begin_src sh
+dune build @test/ui_goldens/ui-goldens-check
+#+end_src
+
+A mismatch fails the alias and leaves the checked-in source unchanged.  Dune
+writes a separate candidate beside each target in the build tree, for example:
+
+#+begin_example
+_build/default/test/ui_goldens/external_specifications.t.corrected
+_build/default/test/ui_goldens/source_input.t.corrected
+#+end_example
+
+Review one candidate against its source:
+
+#+begin_src sh
+diff -u test/ui_goldens/external_specifications.t \
+  _build/default/test/ui_goldens/external_specifications.t.corrected
+#+end_src
+
+Each Cram file is a distinct Dune target.  New goldens must likewise use a
+unique source path and must not write shared source or correction files.
+
+* Promote One Golden
+
+Promotion mutates the checked-in expectation.  After reviewing one candidate in
+disposable scratch, promote exactly its source path:
+
+#+begin_src sh
+dune promote test/ui_goldens/external_specifications.t
+#+end_src
+
+Inspect the source diff and rerun ~ui-goldens-check~.  Do not run an unscoped
+~dune promote~, enable automatic promotion, or add promotion to a Dune action,
+semantic runner, ordinary test API, or CI command.
+
+* Add a Target
+
+Place the Cram source under ~test/ui_goldens/~ and give it a dedicated ~cram~
+stanza with ~(alias ui-goldens-check)~.  Declare the fixtures and executables it
+reads as Dune dependencies.  Keep the assertion narrowly keyed to the intended
+presentation contract, and cover the underlying semantic fact in an outcome
+case.

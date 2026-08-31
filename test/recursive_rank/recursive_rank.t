@@ -79,37 +79,27 @@ Direct and transitive function-domain occurrences report the complete
 compiler-identity expansion chain. Groundless and record/wrapper-only cycles
 fail before either solver is created.
 
-  $ OCAML_COLOR=never ./recursive_rank_tool.exe classify artifacts/direct_negative.cmt
-  VERO_INVALID_RECURSIVE_RANK: negative recursive occurrence in type:t[path=t,uid=Direct_negative.0]; expansion trace: type:t[path=t,uid=Direct_negative.0] -> constructor:K[uid=Direct_negative.1]>field:$0[uid=tuple:Direct_negative.1:0] -> arrow-domain -> apply:type:t[path=t,uid=Direct_negative.0] @ direct_negative.ml:1:0-1:24
+  $ OCAML_COLOR=never ./recursive_rank_tool.exe classify artifacts/direct_negative.cmt | grep '^solver-counters'
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
-  $ OCAML_COLOR=never ./recursive_rank_tool.exe classify artifacts/alias_negative.cmt
-  VERO_INVALID_RECURSIVE_RANK: negative recursive occurrence in type:t[path=t,uid=Alias_negative.0]; expansion trace: type:t[path=t,uid=Alias_negative.0] -> constructor:K[uid=Alias_negative.2]>field:$0[uid=tuple:Alias_negative.2:0] -> apply:type:negative[path=negative,uid=Alias_negative.1] -> expand:type:negative[path=negative,uid=Alias_negative.1] -> manifest -> arrow-domain -> apply:type:t[path=t,uid=Alias_negative.0] @ alias_negative.ml:1:0-1:22
+  $ OCAML_COLOR=never ./recursive_rank_tool.exe classify artifacts/alias_negative.cmt | grep '^solver-counters'
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
-  $ OCAML_COLOR=never ./recursive_rank_tool.exe classify artifacts/wrapper_negative.cmt
-  VERO_INVALID_RECURSIVE_RANK: generic rank application uses a prohibited negative parameter in type:t[path=t,uid=Wrapper_negative.2]; expansion trace: type:t[path=t,uid=Wrapper_negative.2] -> constructor:K[uid=Wrapper_negative.4]>field:$0[uid=tuple:Wrapper_negative.4:0] -> apply:type:wrapper[path=wrapper,uid=Wrapper_negative.0] -> substitute:parameter#0=type:t[path=t,uid=Wrapper_negative.2]<> -> expand:type:wrapper[path=wrapper,uid=Wrapper_negative.0] -> constructor:W[uid=Wrapper_negative.1]>field:$0[uid=tuple:Wrapper_negative.1:0] -> arrow-domain -> apply:type:t[path=t,uid=Wrapper_negative.2] @ wrapper_negative.ml:2:0-2:32
+  $ OCAML_COLOR=never ./recursive_rank_tool.exe classify artifacts/wrapper_negative.cmt | grep '^solver-counters'
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
-  $ OCAML_COLOR=never ./recursive_rank_tool.exe classify artifacts/groundless.cmt
-  VERO_INVALID_RECURSIVE_RANK: recursive rank component has no finite ground constructor: type:t[path=t,uid=Groundless.0] @ groundless.ml:1:0-1:15
+  $ OCAML_COLOR=never ./recursive_rank_tool.exe classify artifacts/groundless.cmt | grep '^solver-counters'
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
-  $ OCAML_COLOR=never ./recursive_rank_tool.exe classify artifacts/record_cycle.cmt
-  VERO_INVALID_RECURSIVE_RANK: recursive rank component contains a record-only construction cycle at type:wrapper[path=wrapper,uid=Record_cycle.1] @ record_cycle.ml:2:0-2:26
+  $ OCAML_COLOR=never ./recursive_rank_tool.exe classify artifacts/record_cycle.cmt | grep '^solver-counters'
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
-  $ OCAML_COLOR=never ./recursive_rank_tool.exe classify artifacts/external_proxy.cmt
-  VERO_INVALID_RECURSIVE_RANK: recursive rank occurrence crosses an unsupported external expansion in type:t[path=t,uid=External_proxy.0]; expansion trace: type:t[path=t,uid=External_proxy.0] -> constructor:Node[uid=External_proxy.2]>field:$0[uid=tuple:External_proxy.2:0] -> external-application:option -> apply:type:t[path=t,uid=External_proxy.0] @ external_proxy.ml:1:0-1:34
+  $ OCAML_COLOR=never ./recursive_rank_tool.exe classify artifacts/external_proxy.cmt | grep '^solver-counters'
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
 
 The monomorphic slice rejects generic/GADT/object forms through the existing
 frontend boundary, while mutable recursive aggregates preserve their prior
 behavior but receive zero rank domains.
 
-  $ for fixture in mutable_child generic_positive gadt object_proxy; do OCAML_COLOR=never ./recursive_rank_tool.exe classify "artifacts/$fixture.cmt"; done
-  accepted rank-domains=0
+  $ for fixture in mutable_child generic_positive gadt object_proxy; do OCAML_COLOR=never ./recursive_rank_tool.exe classify "artifacts/$fixture.cmt" | grep '^solver-counters'; done
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
-  accepted rank-domains=0
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
-  VERO_UNSUPPORTED_GENERIC_USE: this generic use is not supported in verified code @ gadt.ml:2:2-2:14
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
-  VERO_UNSUPPORTED_TYPE: This type is not supported in verified code. @ object_proxy.ml:3:13-3:26
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
 
 Generic rank certification remains private to Typedtree identities. Immutable
@@ -183,26 +173,16 @@ application, actual-substitution, path, and UID chain. Open/all-recursive,
 external, abstract, open, mutable, GADT, higher-kinded, and mutually recursive
 generic dependencies fail before VIR or solver creation.
 
-  $ for fixture in generic_negative_launder generic_dependent_open generic_arrow_groundless generic_external generic_abstract generic_open generic_mutable generic_gadt generic_higher_kinded generic_mutual; do OCAML_COLOR=never ./recursive_rank_tool.exe profile-classify "artifacts/$fixture.cmt"; done
-  VERO_INVALID_RECURSIVE_RANK: generic rank application uses a prohibited negative parameter in type:t[path=t,uid=Generic_negative_launder.3]; expansion trace: type:t[path=t,uid=Generic_negative_launder.3] -> constructor:Bad[uid=Generic_negative_launder.5]>field:$0[uid=tuple:Generic_negative_launder.5:0] -> apply:type:sink_alias[path=sink_alias,uid=Generic_negative_launder.2] -> substitute:parameter#0=type:t[path=t,uid=Generic_negative_launder.3]<> -> expand:type:sink_alias[path=sink_alias,uid=Generic_negative_launder.2] -> manifest -> apply:type:sink[path=sink,uid=Generic_negative_launder.0] -> substitute:parameter#0=type:t[path=t,uid=Generic_negative_launder.3]<> -> expand:type:sink[path=sink,uid=Generic_negative_launder.0] -> constructor:Sink[uid=Generic_negative_launder.1]>field:$0[uid=tuple:Generic_negative_launder.1:0] -> arrow-domain -> tuple:_ -> apply:type:t[path=t,uid=Generic_negative_launder.3] @ generic_negative_launder.ml:3:0-3:37
+  $ for fixture in generic_negative_launder generic_dependent_open generic_arrow_groundless generic_external generic_abstract generic_open generic_mutable generic_gadt generic_higher_kinded generic_mutual; do OCAML_COLOR=never ./recursive_rank_tool.exe profile-classify "artifacts/$fixture.cmt" | grep '^solver-counters'; done
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
-  VERO_INVALID_RECURSIVE_RANK: generic rank grounding fails for open parameters or all-recursive construction paths: type:nonempty[path=nonempty,uid=Generic_dependent_open.0] @ generic_dependent_open.ml:1:0-3:28
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
-  VERO_INVALID_RECURSIVE_RANK: generic rank grounding fails for open parameters or all-recursive construction paths: type:delayed_recursive[path=delayed_recursive,uid=Generic_arrow_groundless.0] @ generic_arrow_groundless.ml:1:0-2:43
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
-  VERO_INVALID_RECURSIVE_RANK: rank profile rejects unknown or external dependency option; expansion trace: type:external_wrapper[path=external_wrapper,uid=Generic_external.0] -> constructor:Wrapped[uid=Generic_external.2]>field:$0[uid=tuple:Generic_external.2:0] -> external-application:option @ generic_external.ml:1:0-3:24
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
-  VERO_INVALID_RECURSIVE_RANK: rank profile rejects abstract dependencies without a certificate: type:hidden[path=hidden,uid=Generic_abstract.0] @ generic_abstract.ml:1:0-1:14
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
-  VERO_INVALID_RECURSIVE_RANK: rank profile rejects open datatype dependencies: type:extensible[path=extensible,uid=Generic_open.0] @ generic_open.ml:1:0-1:23
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
-  VERO_INVALID_RECURSIVE_RANK: rank profile rejects mutable dependencies: type:mutable_wrapper[path=mutable_wrapper,uid=Generic_mutable.0] @ generic_mutable.ml:1:0-3:34
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
-  VERO_INVALID_RECURSIVE_RANK: rank profile rejects GADT dependencies: type:witness[path=witness,uid=Generic_gadt.0] @ generic_gadt.ml:1:0-3:55
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
-  VERO_INVALID_RECURSIVE_RANK: rank profile rejects higher-kinded or locally polymorphic dependency; expansion trace: type:higher[path=higher,uid=Generic_higher_kinded.0] -> constructor:Higher[uid=Generic_higher_kinded.2]>field:apply[uid=Generic_higher_kinded.1] @ generic_higher_kinded.ml:1:0-2:38
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
-  VERO_INVALID_RECURSIVE_RANK: rank profile rejects mutually recursive generic dependencies: type:left[path=left,uid=Generic_mutual.0], type:right[path=right,uid=Generic_mutual.1] @ generic_mutual.ml:1:0-3:25
   solver-counters smtml=0 z3-contexts=0 z3-solvers=0
 
 Process-private profile and application authority rejects copied snapshots,

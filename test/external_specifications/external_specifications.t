@@ -66,51 +66,12 @@
   use_promised: verified-with-trusted-axioms (2 obligations, 1 uses)
   use_havoc: verified-with-trusted-axioms (0 obligations, 2 uses)
 
-  $ retained () { n=$1; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$n.cmo" "fixtures/$n.ml"; ./external_specifications_tool.exe reject "artifacts/$n.cmt"; }
-  $ retained altered_argument
-  adapter rejected: VERO_MALFORMED_GHOST_CALL
-  $ retained arity
-  adapter rejected: VERO_MALFORMED_GHOST_CALL
-  $ retained label
-  adapter rejected: VERO_MALFORMED_GHOST_CALL
-  $ retained mode
-  adapter rejected: VERO_MALFORMED_GHOST_CALL
-  $ retained aggregate
-  adapter rejected: VERO_MALFORMED_GHOST_CALL
-  $ retained assertion
-  adapter rejected: VERO_MALFORMED_GHOST_CALL
-  $ retained decreases
-  adapter rejected: VERO_MALFORMED_GHOST_CALL
-  $ retained recursive_target
-  adapter rejected: VERO_MALFORMED_GHOST_CALL
-  $ retained imported_target
-  adapter rejected: VERO_MALFORMED_GHOST_CALL
-  $ retained duplicate_target
-  adapter rejected: VERO_MALFORMED_GHOST_CALL
-  $ retained wrapper_as_target
-  adapter rejected: VERO_MALFORMED_GHOST_CALL
-  $ retained wrapper_invocation
-  semantic validation rejected before VIR
-  $ retained direct_before_spec
-  semantic validation rejected before VIR
-  $ retained proof_calls_target
-  semantic validation rejected before VIR
-
   $ ocamlc -w -A -alert -all -bin-annot -c -o artifacts/raw.cmo fixtures/raw_attribute.ml
   $ ./external_specifications_tool.exe reject artifacts/raw.cmt
   adapter rejected: VERO_MALFORMED_GHOST_CALL
   $ ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -c -o artifacts/counterfeit.cmo fixtures/counterfeit.ml
   $ ./external_specifications_tool.exe reject artifacts/counterfeit.cmt
   adapter rejected: VERO_MALFORMED_GHOST_CALL
-
-  $ ppx_failure () { n=$1; f=$2; if OCAML_COLOR=never ocamlc -c -ppx ../../ppx/vero_ppx.exe -o "artifacts/$n.cmo" "fixtures/$n.ml" >"artifacts/$n.err" 2>&1; then return 1; fi; grep -F "$f" "artifacts/$n.err" >/dev/null; }
-  $ ppx_failure payload "does not accept a payload"
-  $ ppx_failure recursive_wrapper "does not support recursive bindings"
-  $ ppx_failure duplicate_attribute "duplicate [@verocaml.external_specification] attribute"
-  $ ppx_failure nonfunction "requires a function with an"
-  $ ppx_failure multiple_binding "requires a single top-level binding"
-  $ if OCAML_COLOR=never ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o artifacts/type_error.cmo fixtures/type_error.ml >artifacts/type_error.err 2>&1; then false; fi
-  $ grep -F 'expected of type' artifacts/type_error.err >/dev/null
 
   $ retained_compile () { n=$1; ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$n.cmo" "fixtures/$n.ml"; }
   $ retained_compile fabricated_equality

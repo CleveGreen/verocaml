@@ -1,8 +1,9 @@
 (executable
  (name solver_backend_tool)
  (modules solver_backend_tool solver_backend_prerequisites)
- (flags (:standard -I src/.verocaml_core.objs/byte))
- (libraries verocaml_core ))
+ (flags
+  (:standard -I src/.verocaml_core.objs/byte))
+ (libraries verocaml_core))
 
 (rule
  (targets solver_backend_prerequisites.ml)
@@ -10,12 +11,62 @@
   ../../src/.verocaml_core.objs/byte/vir_logic_ir_translation_private.cmi
   ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
  (action
-  (with-stdout-to %{targets} (echo "let ready = ()"))))
+  (with-stdout-to
+   %{targets}
+   (echo "let ready = ()"))))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support verocaml_core))
+
+(rule
+ (targets
+  solver-backend-outcome-cases.result-report
+  solver-backend-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   solver-backend-outcome-cases.result-report
+   solver-backend-outcome-cases.failure-archive)))
+
+(rule
+ (alias solver-backend-outcome-check)
+ (deps
+  (:report solver-backend-outcome-cases.result-report)
+  (:archive solver-backend-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
 
 (cram
- (deps
-  solver_backend_tool.exe))
+ (alias solver-backend-specialist-check)
+ (runtest_alias false)
+ (deps solver_backend_tool.exe))
+
 (alias
  (name solver-backend-check)
  (deps
-  (alias runtest)))
+  (alias solver-backend-outcome-check)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias solver-backend-outcome-check)))

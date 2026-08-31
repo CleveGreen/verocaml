@@ -1,7 +1,10 @@
 (executable
  (name proof_activation_routing_tool)
- (modules proof_activation_routing_tool proof_activation_routing_prerequisites)
- (flags (:standard -I src/.verocaml_core.objs/byte))
+ (modules
+  proof_activation_routing_tool
+  proof_activation_routing_prerequisites)
+ (flags
+  (:standard -I src/.verocaml_core.objs/byte))
  (libraries verocaml_core compiler-libs.common))
 
 (rule
@@ -12,7 +15,9 @@
   ../../src/.verocaml_core.objs/byte/recursive_spec_encoding.cmi
   ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
  (action
-  (with-stdout-to %{targets} (echo "let ready = ()"))))
+  (with-stdout-to
+   %{targets}
+   (echo "let ready = ()"))))
 
 (cram
  (deps
@@ -27,3 +32,50 @@
  (name proof-activation-routing-check)
  (deps
   (alias runtest)))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support))
+
+(rule
+ (targets
+  proof-activation-routing-outcome-cases.result-report
+  proof-activation-routing-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  integration-library-environment.manifest
+  (glob_files fixtures/*.ml))
+ (action
+  (run
+   %{suite}
+   --produce
+   proof-activation-routing-outcome-cases.result-report
+   proof-activation-routing-outcome-cases.failure-archive)))
+
+(rule
+ (alias proof-activation-routing-outcome-check)
+ (deps
+  (:report proof-activation-routing-outcome-cases.result-report)
+  (:archive proof-activation-routing-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
+(alias
+ (name runtest)
+ (deps
+  (alias proof-activation-routing-outcome-check)))

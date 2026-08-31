@@ -2,12 +2,91 @@
  (name cmt_input_tool)
  (libraries verocaml_core compiler-libs.common zarith unix))
 
+(rule
+ (targets
+  prepared_artifacts.ml
+  prepared-implementation.cmt
+  prepared-implementation.cmi
+  prepared-interface.cmti
+  prepared-interface.cmi)
+ (deps
+  (:implementation_cmt
+   fixtures/.prepared_implementation.objs/byte/implementation.cmt)
+  (:implementation_cmi
+   fixtures/.prepared_implementation.objs/byte/implementation.cmi)
+  (:interface_cmti fixtures/.prepared_interface.objs/byte/interface.cmti)
+  (:interface_cmi fixtures/.prepared_interface.objs/byte/interface.cmi))
+ (action
+  (progn
+   (copy %{implementation_cmt} prepared-implementation.cmt)
+   (copy %{implementation_cmi} prepared-implementation.cmi)
+   (copy %{interface_cmti} prepared-interface.cmti)
+   (copy %{interface_cmi} prepared-interface.cmi)
+   (with-stdout-to
+    prepared_artifacts.ml
+    (echo
+     "let implementation = Filename.concat (Filename.dirname Sys.executable_name) \"prepared-implementation.cmt\"\nlet interface = Filename.concat (Filename.dirname Sys.executable_name) \"prepared-interface.cmti\"")))))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases prepared_artifacts integration_environment)
+ (libraries outcome_test_support))
+
+(rule
+ (targets
+  cmt-input-outcome-cases.result-report
+  cmt-input-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  prepared-implementation.cmt
+  prepared-implementation.cmi
+  prepared-interface.cmti
+  prepared-interface.cmi
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   cmt-input-outcome-cases.result-report
+   cmt-input-outcome-cases.failure-archive)))
+
+(rule
+ (alias cmt-input-outcome-check)
+ (deps
+  (:report cmt-input-outcome-cases.result-report)
+  (:archive cmt-input-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
 (cram
+ (alias cmt-input-specialist-check)
+ (runtest_alias false)
  (deps
   (glob_files fixtures/*)
+  prepared-implementation.cmt
+  prepared-interface.cmti
   cmt_input_tool.exe))
 
 (alias
  (name cmt-input-check)
  (deps
-  (alias runtest)))
+  (alias cmt-input-outcome-check)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias cmt-input-outcome-check)))

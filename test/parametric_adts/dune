@@ -13,6 +13,48 @@
    %{targets}
    (echo "let ready = ()"))))
 
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support verocaml_core unix))
+
+(rule
+ (targets
+  parametric-adts-outcome-cases.result-report
+  parametric-adts-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  (glob_files fixtures/*.ml)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   parametric-adts-outcome-cases.result-report
+   parametric-adts-outcome-cases.failure-archive)))
+
+(rule
+ (alias parametric-adts-outcome-check)
+ (deps
+  (:report parametric-adts-outcome-cases.result-report)
+  (:archive parametric-adts-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
 (cram
  (deps
   (glob_files fixtures/*.ml)
@@ -27,4 +69,9 @@
 (alias
  (name parametric-adts-check)
  (deps
-  (alias runtest)))
+  (alias parametric-adts-outcome-check)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias parametric-adts-outcome-check)))

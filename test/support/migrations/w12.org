@@ -1,0 +1,98 @@
+#+OPTIONS: author:nil toc:nil
+#+TITLE: Logical ADT and Symbolic Outcome Coverage
+
+This document describes grouped outcome coverage for logical ADT schemas and
+symbolic specifications.  Ordinary cases use ~Fixture.single_source~ or
+~Fixture.dune_project~, named ~Suite.case~ values, closed
+~Outcome~/~Expectation~ projections, and declared semantic parity.  Specialist
+checks cover direct schema, encoding, compiler, authentication, runtime, and
+resource boundaries.
+
+No assertion in this group is a deliberate presentation contract, so the
+group has no UI golden.
+
+* Logical ADT Schemas
+
+Host: ~test/logical_adt_schema/outcome_cases.ml~
+
+Focused alias:
+~@test/logical_adt_schema/logical-adt-schema-outcome-check~
+
+- ~abstract-payload-reflexivity~ selects the verified ~Abstract_payload~ unit,
+  ~reflexive~, and an assertion obligation.
+- ~nullary-constructor-discrimination~ selects the verified
+  ~Nullary_discrimination~ unit, ~prove~, and an assertion obligation.
+- ~recursive-list-reconstruction~ selects the verified ~Recursive_list~ unit,
+  ~reconstruction~, and an assertion obligation.
+- ~false-identity-counterexample~ selects the counterexample
+  ~False_identity~ unit and the failing ~false_identity~ assertion.
+
+The ~logical-adt-schema-specialist-check~ alias covers direct schema and
+encoding probes for injectivity, discrimination, failed-query handling,
+detached reconstruction, malformed recursion, solver behaviour, module-pair
+authority, source architecture, and backend-handle ownership.
+
+* Symbolic Specifications
+
+Host: ~test/symbolic_specifications/outcome_cases.ml~
+
+Focused alias:
+~@test/symbolic_specifications/symbolic-specifications-outcome-check~
+
+Source, prepared-CMT, and execution-mode parity cases:
+
+- ~scalar-source-cmt-thread-parity~
+- ~nullary-source-cmt-thread-parity~
+- ~polymorphic-nullary-source-cmt-thread-parity~
+- ~parametric-source-cmt-thread-parity~
+- ~adt-source-cmt-thread-parity~
+- ~congruence-source-cmt-thread-parity~
+- ~broadcast-source-cmt-thread-parity~
+- ~general-trigger-source-cmt-thread-parity~
+- ~nested-declaration-source-cmt-thread-parity~
+
+Each case selects verified units and functions and compares the closed
+projection while excluding only ~input-mode~ and ~execution-mode~.  Repeated
+report bytes, generated symbolic-head identities, order, and exact totals are
+not selected.
+
+Counterexample and source-variant cases:
+
+- ~inactive-axiom-counterexample-parity~ selects the failing ~inactive~
+  assertion and mode parity.
+- ~symbolic-injectivity-counterexample-parity~ selects the failing
+  ~false_injectivity~ postcondition and mode parity.
+- ~declaration-order-semantic-parity~ compares the two checked-in declaration
+  variants while excluding only the named source variant.
+
+Frontend rejection cases:
+
+- ~exec-use-rejected~ selects ~VERO_SYMBOLIC_APPLICATION~.
+- ~unsupported-type-rejected~ selects ~VERO_SYMBOLIC_DECLARATION~.
+- ~nullary-trigger-rejected~ selects ~VERO_QUANTIFIER_TRIGGER~.
+- ~callback-symbolic-type-rejected~, ~reference-symbolic-type-rejected~,
+  ~array-symbolic-type-rejected~, and ~float-symbolic-type-rejected~ select
+  ~VERO_SYMBOLIC_AUTHENTICATION~.
+- ~mutable-cycle-symbolic-type-rejected~ selects
+  ~VERO_INVALID_RECURSIVE_RANK~.
+- ~nonapplication-trigger-rejected~, ~incomplete-trigger-rejected~,
+  ~duplicate-trigger-rejected~, ~misplaced-trigger-rejected~, and
+  ~unit-result-trigger-rejected~ select the applicable trigger or malformed
+  ghost-call code.
+- ~foreign-unit-symbolic-use-rejected~ selects
+  ~VERO_UNSUPPORTED_EXTERNAL_CALL~ for the consumer in a two-library project.
+
+The ~symbolic-specifications-specialist-check~ alias covers carrier path
+authentication, ordinary runtime erasure, lifecycle and solver resource
+controls, complete private trigger and binder encoding, compiler-only malformed
+payloads, zero-work rejection, forged or rebound carriers, wrong artifacts,
+exact-program attacks, and source or install architecture.  Deliberately
+failing compiler probes remain outside the ordinary lane because they produce
+no verifier artifact.
+
+* Commands
+
+#+begin_src sh
+dune build @test/logical_adt_schema/logical-adt-schema-outcome-check
+dune build @test/symbolic_specifications/symbolic-specifications-outcome-check
+#+end_src

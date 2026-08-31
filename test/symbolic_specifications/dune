@@ -4,6 +4,14 @@
  (flags (:standard -I src/.verocaml_core.objs/byte))
  (libraries verocaml_core compiler-libs.common))
 
+(executable
+ (name mutate_symbolic_carrier)
+ (modules mutate_symbolic_carrier))
+
+(executable
+ (name generate_declaration_negatives)
+ (modules generate_declaration_negatives))
+
 (rule
  (targets symbolic_specifications_prerequisites.ml)
  (deps
@@ -19,9 +27,54 @@
  (action
   (with-stdout-to %{targets} (echo "let ready = ()"))))
 
-(cram
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
  (deps
-  mutate_symbolic_carrier.py
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support verocaml_core))
+
+(rule
+ (targets
+  symbolic-specifications-outcome-cases.result-report
+  symbolic-specifications-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  (glob_files fixtures/*.ml)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   symbolic-specifications-outcome-cases.result-report
+   symbolic-specifications-outcome-cases.failure-archive)))
+
+(rule
+ (alias symbolic-specifications-outcome-check)
+ (deps
+  (:report symbolic-specifications-outcome-cases.result-report)
+  (:archive symbolic-specifications-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
+(cram
+ (alias symbolic-specifications-specialist-check)
+ (runtest_alias false)
+ (deps
+  generate_declaration_negatives.exe
+  mutate_symbolic_carrier.exe
   (glob_files fixtures/*.ml)
   symbolic_specifications_tool.exe
   ../../verocaml.install
@@ -32,4 +85,10 @@
 
 (alias
  (name symbolic-specifications-check)
- (deps (alias runtest)))
+ (deps
+  (alias symbolic-specifications-outcome-check)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias symbolic-specifications-outcome-check)))

@@ -1,0 +1,15 @@
+(library
+ (name outcome_test_support)
+ (wrapped true)
+ (modules (:standard \ integration_manifest_writer report_validator))
+ (libraries verocaml_core compiler-libs.common delator unix))
+
+(executable
+ (name integration_manifest_writer)
+ (modules integration_manifest_writer)
+ (libraries outcome_test_support unix))
+
+(executable
+ (name report_validator)
+ (modules report_validator)
+ (libraries outcome_test_support))

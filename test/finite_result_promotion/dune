@@ -1,9 +1,8 @@
 (executable
  (name finite_result_promotion_tool)
- (modules
-  finite_result_promotion_tool
-  finite_result_promotion_prerequisites)
- (flags (:standard -I src/.verocaml_core.objs/byte))
+ (modules finite_result_promotion_tool finite_result_promotion_prerequisites)
+ (flags
+  (:standard -I src/.verocaml_core.objs/byte))
  (libraries verocaml_core compiler-libs.common))
 
 (rule
@@ -17,11 +16,56 @@
   ../../src/.verocaml_core.objs/byte/verification_session.cmi
   ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
  (action
-  (with-stdout-to %{targets} (echo "let ready = ()"))))
+  (with-stdout-to
+   %{targets}
+   (echo "let ready = ()"))))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support))
+
+(rule
+ (targets
+  finite-result-promotion-outcome-cases.result-report
+  finite-result-promotion-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  (glob_files fixtures/*.ml)
+  (glob_files fixtures/*.mli)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   finite-result-promotion-outcome-cases.result-report
+   finite-result-promotion-outcome-cases.failure-archive)))
+
+(rule
+ (alias finite-result-promotion-outcome-check)
+ (deps
+  (:report finite-result-promotion-outcome-cases.result-report)
+  (:archive finite-result-promotion-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
 
 (cram
  (deps
- (glob_files fixtures/*.ml)
+  (glob_files fixtures/*.ml)
   (glob_files fixtures/*.mli)
   finite_result_promotion_tool.exe
   ../../src/.verocaml_core.objs/byte/finite_value_registry.cmi
@@ -33,4 +77,10 @@
 
 (alias
  (name finite-result-promotion-check)
- (deps (alias runtest)))
+ (deps
+  (alias finite-result-promotion-outcome-check)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias finite-result-promotion-outcome-check)))

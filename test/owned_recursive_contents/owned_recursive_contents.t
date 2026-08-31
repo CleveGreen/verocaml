@@ -5,9 +5,6 @@ Every verifier invocation in this gate has an external hard timeout.
   $ retained () { n=$1; timeout --signal=TERM --kill-after=2s 30s ocamlc -w -A -alert -all -bin-annot -I ../../runtime/.vero_ghost.objs/byte -ppx "../../ppx/vero_ppx.exe --keep-ghost" -c -o "artifacts/$n.cmo" "fixtures/$n.ml"; }
   $ retained_names='lifecycle_positive closed_baseline missing_predecessor invariant_positive invariant_establishment_failure invariant_preservation_failure grammar_omitted grammar_duplicated grammar_substituted grammar_nonexhaustive grammar_indirect grammar_mutable_result external_recursive_model trusted_recursive_model completion_construction completion_reconstruction completion_model completion_safety completion_contract cyclic_topology general_transition_state_scalar'
   $ for n in $retained_names; do retained "$n"; done
-  $ for n in lifecycle_positive invariant_positive; do timeout --foreground --signal=TERM --kill-after=2s 30s ../../src/verocaml.exe verify "fixtures/$n.ml" --timeout-ms 5000 | sed -E 's@file=fixtures/[^ ]+@file=FIXTURE@; s/functions=[0-9]+ obligations=[0-9]+/verified-shape/'; done
-  verocaml: verified file=FIXTURE verified-shape
-  verocaml: verified file=FIXTURE verified-shape
 
 SST and VIR retain the exact recursive helper, current-version transitions,
 and concrete immutable result construction, while private receipt/permit
@@ -105,24 +102,3 @@ PPX's single-binding boundary.
   mutual-source=rejected
   $ grep -F 'requires a single top-level binding' artifacts/grammar_mutual.out >/dev/null && echo 'mutual-boundary=single-binding'
   mutual-boundary=single-binding
-
-An actual retained provider CMT cannot export hidden recursive observation
-authority to a consumer CMT.
-
-  $ mkdir -p artifacts/import
-  $ cp support/provider.ml artifacts/import/provider.ml
-  $ cat > artifacts/import/consumer.ml <<'EOF'
-  > let imported_contents (stack : Provider.Stack.t @ read) =
-  >   match Provider.Stack.model stack with
-  >   | Provider.End -> 0
-  >   | Provider.More _ -> 1
-  > EOF
-  $ export PPX="$PWD/../../ppx/vero_ppx.exe --keep-ghost"
-  $ export GHOST="$PWD/../../runtime/.vero_ghost.objs/byte"
-  $ timeout --signal=TERM --kill-after=2s 30s sh -c 'cd artifacts/import && ocamlc -w -A -alert -all -bin-annot -I "$GHOST" -ppx "$PPX" -c provider.ml && ocamlc -w -A -alert -all -bin-annot -I . -I "$GHOST" -ppx "$PPX" -c consumer.ml'
-  $ if timeout --foreground --signal=TERM --kill-after=2s 15s env OCAML_COLOR=never ../../src/verocaml.exe verify artifacts/import/consumer.cmt --dependency artifacts/import/provider.cmt --dump-sst artifacts/import/consumer.sst --dump-vir artifacts/import/consumer.vir > artifacts/import/rejected 2>&1; then false; else echo 'cross-cmt=zero-output-rejected'; fi
-  cross-cmt=zero-output-rejected
-  $ actual=$(grep -Eo 'VERO_[A-Z_]+' artifacts/import/rejected | head -1); test "$actual" = VERO_DEPENDENCY; printf 'code=%s\n' "$actual"
-  code=VERO_DEPENDENCY
-  $ test ! -e artifacts/import/consumer.sst && test ! -e artifacts/import/consumer.vir && echo 'cross-cmt-sst-vir=absent'
-  cross-cmt-sst-vir=absent

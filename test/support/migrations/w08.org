@@ -1,0 +1,144 @@
+#+OPTIONS: author:nil toc:nil
+#+TITLE: Broadcast and Callback Outcome Coverage
+
+This document describes grouped outcome coverage for scoped broadcasts,
+verified callback traversals, verified callbacks, and first-class
+specifications.  Ordinary cases use Dune-backed fixtures and select closed
+status, code, function, unit, obligation, and parity facts.  Specialist checks
+cover encoding, authentication, compiler, runtime, package, and bounded-resource
+contracts.
+
+No assertion in this group is a deliberate presentation contract, so the
+group has no UI golden.
+
+* Scoped Broadcasts
+
+Host: ~test/scoped_broadcasts/outcome_cases.ml~
+
+Focused alias:
+~@test/scoped_broadcasts/scoped-broadcasts-outcome-check~
+
+- ~function-valued-trigger-verifies~ selects verified status, its unit, and
+  the selected function.
+- ~parametric-source-cmt-thread-parity~ compares Dune source with a declared
+  prepared CMT across execution modes, excluding only ~input-mode~ and
+  ~execution-mode~.
+- ~broadcast-group-verifies~, ~lexical-scopes-verify~, and
+  ~trusted-and-ordinary-axioms-verify~ select verified units and their grouped,
+  nested, or trusted consumer functions.
+- ~declaration-and-alpha-order-parity~ compares declaration variants while
+  excluding only ~source-variant~.
+- ~inactive-broadcast-counterexample~ and ~e-matching-counterexample~ select
+  counterexample status, keyed units, and assertion or postcondition kinds.
+
+Specialist checks cover quantifier insertion, grouped and lexical activation,
+trusted provenance, PPX carriers, private insertion identity, runtime erasure,
+malformed PPX input, zero-work authentication boundaries, carrier attacks,
+the fixed broadcast-instance cap, and source or install architecture.
+~VERO_BROADCAST_AUTHENTICATION~ remains a real stable code for the applicable
+corrupted-artifact boundary.
+
+* Verified Callback Traversals
+
+Host: ~test/verified_callback_traversals/outcome_cases.ml~
+
+Focused alias:
+~@test/verified_callback_traversals/verified-callback-traversals-outcome-check~
+
+- ~quantifier-source-cmt-thread-parity~ selects verified quantifier functions
+  and closed source/prepared/thread parity.
+- ~quantified-postcondition-counterexamples~ selects counterexample status,
+  keyed units, and postconditions for the false quantified functions.
+- ~symbolic-quantifier-source-cmt-thread-parity~ selects the symbolic function
+  set and closed mode parity.
+- ~quantifier-statements-source-cmt-thread-parity~ selects proof and assertion
+  functions plus closed mode parity.
+
+Specialist checks cover fixed solver policy, binder and trigger encoding,
+symbolic pattern heads, carrier and trigger attacks, private identity,
+zero-work boundaries, cleanup, and hard timeout guards.
+
+* Verified Callbacks
+
+Host: ~test/verified_callbacks/outcome_cases.ml~
+
+Focused alias: ~@test/verified_callbacks/verified-callbacks-outcome-check~
+
+Verified and parity cases:
+
+- ~top-level-source-cmt-thread-parity~
+- ~local-callbacks-verify~
+- ~polymorphic-callbacks-verify~
+- ~relational-result-verifies~
+- ~callback-mode-matrix-verifies~
+
+Frontend rejection cases:
+
+- ~reject-missing-callback-contract~
+- ~reject-builtin-callback-grammar~
+- ~reject-partial-callback-application~
+- ~reject-callback-escape~
+- ~reject-mutable-callback-capture~
+- ~reject-recursive-callback~
+- ~reject-callback-equality~
+- ~reject-mutable-record-capture~
+- ~reject-mutable-adt-capture~
+- ~reject-transitively-mutable-capture~
+- ~reject-function-capture~
+- ~reject-nested-callback-capture~
+
+The rejection cases select frontend status, the stable ~VERO_*~ code, and the
+keyed unit.  ~callback-precondition-counterexample~,
+~callback-closure-postcondition-counterexample~, and
+~stronger-client-postcondition-counterexample~ select counterexample status and
+the owning callback-precondition or postcondition kind.
+
+Specialist checks cover callback relation shape, scheduler and solver
+resources, pre-solver rejection, capture validation, private CMT authority,
+compiler mode boundaries, complete internal encoding, runtime erasure, package
+visibility, and source architecture constraints.
+
+* First-Class Specifications
+
+Host: ~test/first_class_specifications/outcome_cases.ml~
+
+Focused alias:
+~@test/first_class_specifications/first-class-specifications-outcome-check~
+
+Verified and parity cases:
+
+- ~core-source-cmt-thread-parity~
+- ~recursive-collections-verify~
+- ~function-quantifier-verifies~
+- ~symbolic-broadcast-verifies~
+- ~parametric-branching-source-cmt-thread-parity~
+
+~function-identity-counterexamples~ selects counterexample status, the keyed
+unit, and assertion kinds for the two false identity controls.
+
+Frontend rejection cases:
+
+- ~reject-mutable-specification-capture~
+- ~reject-stored-specification-function~
+- ~reject-local-recursive-function-value~
+- ~reject-rank-two-function-storage~
+- ~reject-specification-callback-coercion~
+- ~reject-cross-unit-specification-value~
+
+These cases select keyed units and the applicable stable codes, including
+~VERO_UNSUPPORTED_TYPE~, ~VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION~, and
+~VERO_UNSUPPORTED_EXTERNAL_CALL~.
+
+Specialist checks cover first-class carrier ABI, recursive and broadcast
+encoding, generic instantiation, broadcast resource policy, malformed
+semantic-SST boundaries, stage-specific zero work, runtime erasure, and source
+or install architecture.
+
+* Commands
+
+#+begin_src sh
+dune build @test/scoped_broadcasts/scoped-broadcasts-outcome-check
+dune build @test/verified_callback_traversals/verified-callback-traversals-outcome-check
+dune build @test/verified_callbacks/verified-callbacks-outcome-check
+dune build @test/first_class_specifications/first-class-specifications-outcome-check
+#+end_src
