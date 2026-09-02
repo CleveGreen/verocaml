@@ -1,6 +1,6 @@
 type node = Empty | Node of int * node
 
-let rec length (value : node) : int =
+let rec length (value : node) : Vstd.Int.t =
   [%verocaml.decreases value];
   match value with Empty -> 0 | Node (_, tail) -> 1 + length tail
 [@@verocaml.spec] [@@verocaml.revealed]
@@ -14,7 +14,7 @@ let proof_use (value : node [@finite]) : unit =
   ()
 [@@verocaml.proof]
 
-let spec_use (value : node [@finite]) : int = length value
+let spec_use (value : node [@finite]) : Vstd.Int.t = length value
 [@@verocaml.spec]
 
 let default_ghost_use (value : node [@finite]) : unit =

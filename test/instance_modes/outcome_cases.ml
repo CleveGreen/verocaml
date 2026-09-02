@@ -63,13 +63,13 @@ let project ~name modules =
             contents =
               Printf.sprintf
                 "(library\n (name %s)\n (wrapped false)\n (modules %s)\n \
-                 (libraries verocaml.ghost)\n (flags (:standard -ppx \
+                 (libraries verocaml.ghost verocaml.vstd)\n (flags (:standard -ppx \
                  \"verocaml-ppx --keep-ghost\")))\n"
                 name (String.concat " " module_names);
           };
         ]
         @ source_files;
-      libraries = [ "verocaml.ghost" ];
+      libraries = [ "verocaml.ghost"; "verocaml.vstd" ];
       targets = [ "@all" ];
       selected_units = module_names;
     }

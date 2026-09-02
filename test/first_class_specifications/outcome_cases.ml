@@ -30,7 +30,7 @@ let fixture_source name =
 
 let input module_name fixture =
   Fixture.single_source ~module_name ~source:(fixture_source fixture)
-    ~libraries:[ "verocaml.ghost" ]
+    ~libraries:[ "verocaml.ghost"; "verocaml.vstd" ]
 
 let mismatch format =
   Printf.ksprintf
@@ -86,13 +86,27 @@ let load_implementation cmt =
         (Failure.make Failure.Selected_cmt_load
            (Printf.sprintf "%s: %s" diagnostic.Diagnostic.code diagnostic.message))
 
-let verify_prepared ~threads ~unit_name cmt =
+let verify_prepared ~environment ~threads ~unit_name cmt =
   let* () =
     match Fixture.prepared_cmt ~declared_dependencies:[ cmt ] cmt with
     | Ok _ -> Ok ()
     | Error message -> mismatch "prepared CMT declaration: %s" message
   in
   let* implementation = load_implementation cmt in
+  let* providers =
+    Fixture.retained_providers ~environment
+      ~libraries:[ "verocaml.vstd" ]
+  in
+  let imported_units =
+    implementation.Cmt_input.imports |> Array.to_list
+    |> List.map (fun (import : Cmt_input.import) -> import.unit_name)
+  in
+  let dependencies =
+    List.filter
+      (fun (provider : Cmt_input.implementation) ->
+        List.mem provider.unit_name imported_units)
+      providers
+  in
   let* configuration =
     match
       Verifier_service.configuration ~threads ~timeout_ms:10_000 ~rlimit:None
@@ -105,7 +119,7 @@ let verify_prepared ~threads ~unit_name cmt =
   in
   let request =
     Verifier_service.request ~configuration ~consumer:implementation
-      ~dependencies:[]
+      ~dependencies
   in
   match Verifier_service.verify request with
   | Ok result ->
@@ -130,7 +144,9 @@ let parity_runner module_name fixture ~environment ~workspace =
   let* cmt =
     discover_cmt (Filename.concat source_workspace "project") module_name
   in
-  let* prepared = verify_prepared ~threads:2 ~unit_name:module_name cmt in
+  let* prepared =
+    verify_prepared ~environment ~threads:2 ~unit_name:module_name cmt
+  in
   let source =
     with_modes
       [ ("input-mode", "dune-project"); ("execution-mode", "threads-1") ]
@@ -269,6 +285,9 @@ let () =
       verified_case ~name:"symbolic-broadcast-verifies"
         ~module_name:"Broadcast_symbolic" ~fixture:"broadcast_symbolic.ml"
         [ "apply_reflexive"; "symbolic_functions" ];
+      verified_case ~name:"proof-specification-function-arguments-verify"
+        ~module_name:"Proof_arguments" ~fixture:"proof_arguments.ml"
+        [ "immediate_lambda_in_proof"; "sequence_init_get" ];
       parity_case ~name:"parametric-branching-source-cmt-thread-parity"
         ~module_name:"Parametric_branching" ~fixture:"parametric_branching.ml"
         [ "verify" ];

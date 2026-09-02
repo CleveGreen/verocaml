@@ -31,7 +31,7 @@ let spec_is_empty a =
     | Node _ -> false
 [@@verocaml.spec]
 
-let rec spec_node_len (node : 'a node) : int =
+let rec spec_node_len (node : 'a node) =
   [%verocaml.decreases node];
   match node with
     | Empty -> 0
@@ -123,7 +123,7 @@ let opt_is_some (o : 'a option) =
     | None -> false
 [@@verocaml.spec]
 
-let rec spec_index (i : int) (n : 'a node) : 'a option =
+let rec spec_index (i : Vstd.Int.t) (n : 'a node) : 'a option =
   [%verocaml.decreases n];
   match n with
     | Empty -> None
@@ -133,7 +133,7 @@ let rec spec_index (i : int) (n : 'a node) : 'a option =
 [@@verocaml.spec]
 [@@verocaml.revealed]
 
-let rec lemma_index_oob (i : int) (n : 'a node [@finite]) : unit =
+let rec lemma_index_oob (i : Vstd.Int.t) (n : 'a node [@finite]) : unit =
   [%verocaml.requires i >= 0];
   [%verocaml.ensures fun _ -> iff (i >= spec_node_len n) ((spec_index i n) = None)];
   [%verocaml.decreases n];
@@ -153,10 +153,43 @@ let rec lemma_index_oob (i : int) (n : 'a node [@finite]) : unit =
       end
 [@@verocaml.proof]
 
+[%%verocaml.symbolic val unbound_value : 'a]
 
+let spec_unwrap (o : 'a option) : 'a =
+  match o with
+    | None -> (unbound_value : 'a)
+    | Some v -> v
+[@@verocaml.spec]
 
+let assume_index (i : Vstd.Int.t) (n : 'a node) : 'a =
+  spec_unwrap (spec_index i n)
+[@@verocaml.spec]
 
-let opt_test (x : int) : int option =
-  [%verocaml.ensures fun res -> implies (x < 5) (opt_is_some res)];
-  if x < 5 then Some x
-  else None
+let lemma_assume_index (i : Vstd.Int.t) (n : 'a node [@finite]) =
+  [%verocaml.requires 0 <= i && i < spec_node_len n];
+  [%verocaml.ensures fun _ -> (match spec_index i n with
+    | None -> false
+    | Some value -> value = (assume_index i n))
+  ];
+  lemma_index_oob i n;
+  let si = spec_index i n in
+  assert (opt_is_some si);
+  ()
+[@@verocaml.proof]
+
+let seq_indexer (n : 'a node) : Vstd.Int.t -> 'a =
+  fun i -> assume_index i n
+[@@verocaml.spec]
+
+let seq_view (n : 'a node) : 'a Vstd.Seq.t =
+  Seq.init (spec_node_len n) (seq_indexer n)
+[@@verocaml.spec]
+
+let lemma_index_view (i : Vstd.Int.t) (n : 'a node [@finite]) =
+  [%verocaml.requires 0 <= i && i < spec_node_len n];
+  [%verocaml.ensures fun _ -> Vstd.Seq.get (seq_view n) i = assume_index i n];
+  Vstd.Seq.axiom_init_get
+    (spec_node_len n)
+    (seq_indexer n)
+    i
+[@@verocaml.proof]

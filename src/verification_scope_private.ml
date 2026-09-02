@@ -142,12 +142,16 @@ let preflight_graph ~skipped root dependencies =
         ?unit_name:graph_error.Interface_specification_environment_private.unit_name
         graph_error.message
 
-let validate_inventory_crcs artifacts =
-  let digest_for name =
+let validate_inventory_crcs (artifacts [@delator.skip]) =
+  let digests_for name =
     List.find_map
       (fun artifact ->
         if String.equal (unit_name artifact) name then
-          artifact.implementation.Cmt_input.interface_digest
+          Option.map
+            (fun digest ->
+              digest
+              :: artifact.implementation.Cmt_input.interface_view_receipts)
+            artifact.implementation.Cmt_input.interface_digest
         else None)
       artifacts
   in
@@ -155,19 +159,60 @@ let validate_inventory_crcs artifacts =
     (fun artifact ->
       Array.find_map
         (fun (import : Cmt_input.import) ->
-          match digest_for import.unit_name with
-          | Some digest when import.crc <> Some digest ->
+          match digests_for import.unit_name with
+          | Some (interface_digest :: interface_views) -> (
+              match import.crc with
+              | Some receipt when String.equal receipt interface_digest ->
+                  [%log.trace "matched inventory import to explicit interface receipt"
+                    ~stage:(Delator.Field.string "inventory-crc-validation")
+                    ~receipt_class:(Delator.Field.string "explicit-interface")
+                    ~decision:(Delator.Field.string "accepted")];
+                  None
+              | Some receipt when List.mem receipt interface_views ->
+                  [%log.trace "matched inventory import to retained interface view receipt"
+                    ~stage:(Delator.Field.string "inventory-crc-validation")
+                    ~receipt_class:(Delator.Field.string "retained-interface-view")
+                    ~available_view_count:
+                      (Delator.Field.int (List.length interface_views))
+                    ~decision:(Delator.Field.string "accepted")];
+                  None
+              | Some _ | None -> Some (artifact, import.unit_name))
+          | Some [] ->
               Some (artifact, import.unit_name)
-          | Some _ | None -> None)
+          | None -> None)
         artifact.implementation.imports)
     artifacts
   |> function
-  | None -> Ok ()
+  | None ->
+      [%log.debug "validated inventory import interface receipts"
+        ~stage:(Delator.Field.string "inventory-crc-validation")
+        ~artifact_count:(Delator.Field.int (List.length artifacts))
+        ~import_count:
+          (Delator.Field.int
+             (List.fold_left
+                (fun count artifact ->
+                  count + Array.length artifact.implementation.Cmt_input.imports)
+                0 artifacts))
+        ~decision:(Delator.Field.string "accepted")];
+      Ok ()
   | Some (artifact, imported) ->
+      [%log.debug "rejected inventory import interface receipt"
+        ~stage:(Delator.Field.string "inventory-crc-validation")
+        ~artifact_role:
+          (Delator.Field.string
+             (match artifact.role with
+             | Root -> "root"
+             | Dependency -> "dependency"))
+        ~artifact_count:(Delator.Field.int (List.length artifacts))
+        ~decision:(Delator.Field.string "rejected")
+        ~reason_class:(Delator.Field.string "receipt-mismatch")];
       error ~unit_name:(unit_name artifact)
         (Printf.sprintf
            "inventory import CRC does not match explicit CMI for unit %s"
            imported)
+[@@delator.instrument]
+[@@delator.level debug]
+[@@delator.no_exn_log]
 
 let classify_all artifacts =
   let rec loop marked skipped = function
@@ -187,12 +232,41 @@ let rec authenticate_all = function
       | Error _ as error -> error
       | Ok () -> authenticate_all rest)
 
+let rec authenticate_retained_skipped = function
+  | [] -> Ok ()
+  | artifact :: rest ->
+      if Cmt_input.retained_preprocessing artifact.implementation then
+        (match authenticate artifact.role artifact with
+        | Error _ as error ->
+            [%log.warn "rejected retained skipped verification target"
+              ~stage:(Delator.Field.string "scope-skipped-authentication")
+              ~artifact_role:
+                (Delator.Field.string
+                   (match artifact.role with Root -> "root" | Dependency -> "dependency"))
+              ~decision:(Delator.Field.string "rejected")
+              ~reason_class:(Delator.Field.string "strict-candidate")];
+            error
+        | Ok () ->
+            [%log.debug "authenticated retained skipped verification target"
+              ~stage:(Delator.Field.string "scope-skipped-authentication")
+              ~decision:(Delator.Field.string "accepted")];
+            authenticate_retained_skipped rest)
+      else (
+        [%log.trace "preserved ordinary skipped verification target"
+          ~stage:(Delator.Field.string "scope-skipped-authentication")
+          ~decision:(Delator.Field.string "skipped")
+          ~reason_class:(Delator.Field.string "ordinary-nonauthority")];
+        authenticate_retained_skipped rest)
+
 let build_plan marked skipped =
   let roots =
     List.filter (fun artifact -> artifact.role = Root) marked |> sorted
   and dependencies =
     List.filter (fun artifact -> artifact.role = Dependency) marked |> sorted
   in
+  match authenticate_retained_skipped skipped with
+  | Error _ as error -> error
+  | Ok () ->
   match authenticate_all (roots @ dependencies) with
   | Error _ as error -> error
   | Ok () ->
@@ -238,21 +312,63 @@ let build_plan marked skipped =
           in
           preflight closures)
 
-let plan artifacts =
+let plan (artifacts [@delator.skip]) =
   match duplicate artifacts with
   | Some (name, left, right) ->
       let detail =
         if left = right then "duplicate inventory unit"
         else "inventory unit has duplicate root/dependency roles"
       in
+      [%log.warn "rejected verification scope inventory"
+        ~stage:(Delator.Field.string "scope-plan")
+        ~artifact_count:(Delator.Field.int (List.length artifacts))
+        ~decision:(Delator.Field.string "rejected")
+        ~reason_class:
+          (Delator.Field.string
+             (if left = right then "duplicate-unit" else "role-conflict"))];
       error ~unit_name:name detail
   | None -> (
       match validate_inventory_crcs artifacts with
-      | Error _ as error -> error
+      | Error _ as error ->
+          [%log.warn "rejected verification scope inventory"
+            ~stage:(Delator.Field.string "scope-plan")
+            ~artifact_count:(Delator.Field.int (List.length artifacts))
+            ~decision:(Delator.Field.string "rejected")
+            ~reason_class:(Delator.Field.string "inventory-crc")];
+          error
       | Ok () -> (
           match classify_all artifacts with
-          | Error _ as error -> error
-          | Ok (marked, skipped) -> build_plan marked skipped))
+          | Error _ as error ->
+              [%log.warn "rejected verification scope inventory"
+                ~stage:(Delator.Field.string "scope-plan")
+                ~artifact_count:(Delator.Field.int (List.length artifacts))
+                ~decision:(Delator.Field.string "rejected")
+                ~reason_class:(Delator.Field.string "artifact-classification")];
+              error
+          | Ok (marked, skipped) -> (
+              match build_plan marked skipped with
+              | Error _ as error ->
+                  [%log.warn "rejected verification scope graph"
+                    ~stage:(Delator.Field.string "scope-plan")
+                    ~artifact_count:(Delator.Field.int (List.length artifacts))
+                    ~marked_count:(Delator.Field.int (List.length marked))
+                    ~skipped_count:(Delator.Field.int (List.length skipped))
+                    ~decision:(Delator.Field.string "rejected")
+                    ~reason_class:(Delator.Field.string "authentication-or-graph")];
+                  error
+              | Ok plan ->
+                  [%log.info "completed verification scope plan"
+                    ~stage:(Delator.Field.string "scope-plan")
+                    ~artifact_count:(Delator.Field.int (List.length artifacts))
+                    ~root_count:(Delator.Field.int (List.length plan.roots))
+                    ~dependency_count:
+                      (Delator.Field.int (List.length plan.dependencies))
+                    ~skipped_count:(Delator.Field.int (List.length plan.skipped))
+                    ~decision:(Delator.Field.string "accepted")];
+                  Ok plan)))
+[@@delator.instrument]
+[@@delator.level info]
+[@@delator.no_exn_log]
 
 let dependencies_for_root plan root =
   Option.value ~default:[]

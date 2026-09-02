@@ -34,6 +34,11 @@ type option_instance = {
   option_present : constructor;
 }
 
+type optional_carrier_error =
+  | Missing_optional_descriptor
+  | Invalid_optional_descriptor
+  | Optional_payload_mismatch
+
 type error = { descriptor : string; message : string }
 
 val create :
@@ -54,11 +59,16 @@ val recursive_fields : t -> (int option * field) list
 val authenticates_recursive_field :
   t -> constructor_index:int option -> field_index:int -> bool
 val compiler_uid : t -> string
+(** Retained signature metadata only; use-site authentication does not consult it. *)
 val is_optional_carrier : t -> bool
 val validate_registry : t list -> (unit, error) result
 val find : t list -> Parametric_type.constructor -> t option
 val option_instance : t list -> Parametric_type.t -> option_instance option
-val option_application : t list -> Parametric_type.t -> Parametric_type.t option
+val authenticate_optional_carrier :
+  t list ->
+  carrier:Parametric_type.t ->
+  payload:Parametric_type.t ->
+  (option_instance, optional_carrier_error) result
 val instantiate_field : t -> Parametric_type.t list -> field -> (Parametric_type.t, string) result
 val instantiate_field_by_index :
   t ->

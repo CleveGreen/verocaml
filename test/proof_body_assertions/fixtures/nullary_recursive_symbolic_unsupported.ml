@@ -5,7 +5,7 @@ let spec_is_empty (value : int node) : bool =
   match value with Empty -> true | Node _ -> false
 [@@verocaml.spec]
 
-let rec spec_index_alt_imp (idx : int) (nodes : int node) : int node =
+let rec spec_index_alt_imp (idx : Vstd.Int.t) (nodes : int node) : int node =
   [%verocaml.decreases nodes];
   match nodes with
   | Empty -> Empty
@@ -36,7 +36,7 @@ let rec spec_guarded (idx : int) (nodes : int node) : int node =
   | Node (_, rest) -> spec_guarded idx rest
 [@@verocaml.spec] [@@verocaml.opaque]
 
-let rec spec_count (nodes : int node) : int =
+let rec spec_count (nodes : int node) : Vstd.Int.t =
   [%verocaml.decreases nodes];
   match nodes with
   | Empty -> 0
@@ -44,7 +44,7 @@ let rec spec_count (nodes : int node) : int =
 [@@verocaml.spec] [@@verocaml.opaque]
 
 let rec spec_recursive_branch
-    (idx : int)
+    (idx : Vstd.Int.t)
     (nodes : int node) : int node =
   [%verocaml.decreases idx];
   match nodes with
@@ -54,7 +54,7 @@ let rec spec_recursive_branch
   | Node _ -> Empty
 [@@verocaml.spec] [@@verocaml.opaque]
 
-let non_nullary_input (idx : int) (nodes : int node [@finite]) =
+let non_nullary_input (idx : Vstd.Int.t) (nodes : int node [@finite]) =
   [%verocaml.reveal_with_fuel (spec_index_alt_imp, 2)];
   match nodes with
   | Empty -> ()
@@ -89,7 +89,7 @@ let selector_actual
   | Node _ -> ()
 [@@verocaml.proof]
 
-let nested_application (idx : int) (nodes : int node [@finite]) =
+let nested_application (idx : Vstd.Int.t) (nodes : int node [@finite]) =
   [%verocaml.reveal_with_fuel (spec_index_alt_imp, 2)];
   match nodes with
   | Empty ->
@@ -105,7 +105,7 @@ let guarded_branch (idx : int) (nodes : int node [@finite]) =
   | Node _ -> ()
 [@@verocaml.proof]
 
-let multiple_applications (idx : int) (nodes : int node [@finite]) =
+let multiple_applications (idx : Vstd.Int.t) (nodes : int node [@finite]) =
   [%verocaml.reveal_with_fuel (spec_index_alt_imp, 2)];
   match nodes with
   | Empty ->
@@ -133,7 +133,7 @@ let recursive_scalar_actual (idx : int) (nodes : int node [@finite]) =
 [@@verocaml.proof]
 
 let recursive_selected_branch
-    (idx : int)
+    (idx : Vstd.Int.t)
     (nodes : int node [@finite]) =
   [%verocaml.reveal_with_fuel (spec_recursive_branch, 2)];
   match nodes with

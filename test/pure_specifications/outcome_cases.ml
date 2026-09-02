@@ -7,9 +7,11 @@ let run_fixture input ~environment ~workspace =
 
 let positive_source =
   {|
-let math_succ (x : int) : int = x + 1 [@@verocaml.spec]
+open Vstd
 
-let twice (x : int) : int = math_succ (math_succ x) [@@verocaml.spec]
+let math_succ (x : int) : Int.t = x + 1 [@@verocaml.spec]
+
+let twice (x : int) : Int.t = x + 2 [@@verocaml.spec]
 
 let growing (x : int) : bool = twice x > x [@@verocaml.spec]
 
@@ -22,8 +24,8 @@ let verified (x : int) : int =
 
 let verified_expansion_case =
   let input =
-    Fixture.single_source ~module_name:"Verified_expansion"
-      ~source:positive_source ~libraries:[ "verocaml.ghost" ]
+      Fixture.single_source ~module_name:"Verified_expansion"
+      ~source:positive_source ~libraries:[ "verocaml.vstd"; "verocaml.ghost" ]
   in
   Suite.case ~name:"logical-expansion-verifies"
     ~expectation:
@@ -40,7 +42,8 @@ let verified_expansion_case =
     (run_fixture input)
 
 let retained_input ~module_name ~source =
-  Fixture.single_source ~module_name ~source ~libraries:[ "verocaml.ghost" ]
+  Fixture.single_source ~module_name ~source
+    ~libraries:[ "verocaml.vstd"; "verocaml.ghost" ]
 
 let rejection_case ~name ~module_name ~code ~source =
   let input = retained_input ~module_name ~source in
@@ -99,7 +102,7 @@ let ordinary_rejection_cases =
     pre_vir_case ~name:"runtime-spec-use-rejected-before-vir"
       ~module_name:"Runtime_spec_use" ~code:"VERO_ERASED_CALL"
       ~source:
-        {|let math_succ (x : int) : int = x + 1 [@@verocaml.spec]
+        {|let math_succ (x : int) : int = x [@@verocaml.spec]
 let runtime_use (x : int) : int = math_succ x
 |};
     pre_vir_case ~name:"spec-to-exec-call-rejected-before-vir"
@@ -121,7 +124,7 @@ let bad (x : int) : int = executable x [@@verocaml.spec]
       ~source:
         {|let bad (x : int) : int =
   [%verocaml.requires x > 0];
-  x + 1
+  x
 [@@verocaml.spec]
 |};
     rejection_case ~name:"assertion-on-spec-rejected"
@@ -151,13 +154,13 @@ let bad (x : int) : int = executable x [@@verocaml.spec]
 |};
     raw_rejection_case ~name:"raw-attribute-is-not-authority"
       ~module_name:"Raw_attribute"
-      ~source:"let raw (x : int) : int = x + 1 [@@verocaml.spec]\n";
+      ~source:"let raw (x : int) : int = x [@@verocaml.spec]\n";
     raw_rejection_case ~name:"counterfeit-ghost-call-is-not-authority"
       ~module_name:"Counterfeit_ghost_call"
       ~source:
         {|let fake (x : int) : int =
   Vero_ghost.spec_definition "verocaml:spec:1:0:0:0:0:fake"
-    (fun () -> x + 1)
+    (fun () -> x)
 |};
   ]
 
@@ -174,7 +177,7 @@ let admitted_spec_cases =
     admitted_spec_case ~name:"required-labelled-spec-admitted"
       ~module_name:"Labelled_spec"
       ~source:
-        "let labelled ~(x : int) : int = x + 1 [@@verocaml.spec]\n";
+        "let labelled ~(x : int) : Vstd.Int.t = x + 1 [@@verocaml.spec]\n";
     admitted_spec_case ~name:"higher-order-spec-admitted"
       ~module_name:"Higher_order_spec"
       ~source:

@@ -111,7 +111,7 @@ Host: ~test/direct_totality/outcome_cases.ml~
 
 - ~countdown-totality~ selects the verified unit and entry, arithmetic, call,
   recursive nonnegative, strict-descent, and postcondition kinds.
-- ~overflowing-measure-counterexample~ and ~harmless-let-rec~ select their
+- ~overflowing-measure-is-logical~ and ~harmless-let-rec~ select their
   counterexample or verified units and measure facts.
 - ~mutual-recursion-rejected~ and ~loop-rejected~ select frontend rejection,
   ~VERO_UNSUPPORTED_MUTUAL_RECURSION~ or ~VERO_UNSUPPORTED_LOOP~, and keyed

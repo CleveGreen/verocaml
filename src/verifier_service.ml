@@ -33,6 +33,7 @@ type operation =
   | Add
   | Subtract
   | Negate
+  | Multiply
   | Multiply_constant of string
   | Successor
   | Predecessor
@@ -164,6 +165,19 @@ type result = {
 }
 
 type error = Interface_specification_loaded_private.error
+type error_classification = Source_error | Dependency_error | Internal_error
+
+let classify_error error =
+  match Interface_specification_loaded_private.error_diagnostic error with
+  | Some diagnostic -> (
+      match Diagnostic.failure_class diagnostic.Diagnostic.classification with
+      | Diagnostic.Source_failure -> Source_error
+      | Diagnostic.Artifact_failure -> Dependency_error
+      | Diagnostic.Internal_failure -> Internal_error)
+  | None
+    when Interface_specification_loaded_private.error_is_internal error ->
+      Internal_error
+  | None -> Dependency_error
 
 type scope_role = Scope_root | Scope_dependency
 
@@ -222,6 +236,7 @@ let operation = function
   | Vir.Add -> Add
   | Subtract -> Subtract
   | Negate -> Negate
+  | Multiply -> Multiply
   | Multiply_constant value -> Multiply_constant (Z.to_string value)
   | Successor -> Successor
   | Predecessor -> Predecessor
@@ -425,9 +440,23 @@ let verify_with_external ?external_specifications ?(external_targets = []) reque
   | Error error ->
       [%log.debug "verification loading failed"
         ~unit_name:(Delator.Field.string request.consumer.unit_name)
-        ~message:
+        ~stage:(Delator.Field.string "verification-load")
+        ~failure_class:
           (Delator.Field.string
-             (Interface_specification_loaded_private.error_message error))];
+             (match classify_error error with
+             | Source_error -> "source"
+             | Dependency_error -> "artifact"
+             | Internal_error -> "internal"))
+        ~diagnostic_code:
+          (Delator.Field.string
+             (Interface_specification_loaded_private.error_diagnostic error
+             |> Option.map (fun diagnostic -> diagnostic.Diagnostic.code)
+             |> Option.value ~default:
+                  (match classify_error error with
+                  | Source_error -> "VERO_SOURCE"
+                  | Dependency_error -> "VERO_DEPENDENCY"
+                  | Internal_error -> "VERO_INTERNAL")))
+        ~decision:(Delator.Field.string "rejected")];
       Error error
   | Ok loaded ->
       let driver = Interface_specification_loaded_private.driver loaded in
@@ -462,16 +491,15 @@ let verify_with_external ?external_specifications ?(external_targets = []) reque
           trusted_external_observations = trusted_external_observations vir;
         }
       in
-      let outcome =
-        match result.status with
-        | Verified -> "verified"
-        | Counterexample -> "counterexample"
-        | Inconclusive -> "inconclusive"
-        | Incomplete_source -> "incomplete-source"
-      in
       [%log.info "verification completed"
         ~unit_name:(Delator.Field.string request.consumer.unit_name)
-        ~outcome
+        ~outcome:
+          (Delator.Field.string
+             (match result.status with
+             | Verified -> "verified"
+             | Counterexample -> "counterexample"
+             | Inconclusive -> "inconclusive"
+             | Incomplete_source -> "incomplete-source"))
         ~functions:(Delator.Field.int result.functions)
         ~obligations:(Delator.Field.int result.obligations)
         ~dependency_count:(Delator.Field.int (List.length request.dependencies))];
@@ -610,6 +638,7 @@ let error_unit_name = Interface_specification_loaded_private.error_unit_name
 let error_message = Interface_specification_loaded_private.error_message
 let error_diagnostic = Interface_specification_loaded_private.error_diagnostic
 let error_is_internal = Interface_specification_loaded_private.error_is_internal
+let error_classification = classify_error
 let status result = result.status
 let semantic_sst result = Lazy.force result.semantic_sst
 let vir result = result.vir

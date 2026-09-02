@@ -7,14 +7,14 @@ type stack = {
   length : int;
 }
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
   | Node (_, next) -> 1 + spec_node_len next
 [@@verocaml.spec] [@@verocaml.opaque]
 
-let rec seeded_node_len (node : int node) : int =
+let rec seeded_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0

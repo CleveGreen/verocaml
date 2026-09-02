@@ -170,7 +170,10 @@ type lowering_state = {
 }
 
 type mixed_call_argument =
-  | Lowered_call_argument of Sst.call_argument
+  | Lowered_call_argument of {
+      argument : Sst.call_argument;
+      source : Typedtree.expression;
+    }
   | Pending_callback_argument of {
       shape : Callback_shape_private.t;
       label : string option;
@@ -217,14 +220,14 @@ let deeply_immutable ~parametric_adts ~definitions typ =
               &&
               match field.field_type with
               | Sst.Aggregate nested -> aggregate (type_id :: visiting) nested
-              | Sst.Unit | Sst.Bool | Sst.Int -> true
+              | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> true
               | Sst.Tuple _ | Sst.Parameter _ | Sst.Application _ ->
                   Parametric_adt.deeply_immutable_instance descriptors
                     field.field_type)
             fields
   in
   match typ with
-  | Sst.Unit | Sst.Bool | Sst.Int -> true
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> true
   | Sst.Aggregate type_id -> aggregate [] type_id
   | Sst.Tuple _ | Sst.Application _ | Sst.Parameter _ ->
       Parametric_adt.deeply_immutable_instance descriptors typ
@@ -581,6 +584,70 @@ let source_type_variables ~parameters ~result ~substitutions =
       not (List.exists (fun (candidate, _) -> candidate = id) substitutions))
     variables
 
+let same_retained_source_type left right =
+  let rec same seen left right =
+    let left = Callback_shape_private.canonical_type left in
+    let right = Callback_shape_private.canonical_type right in
+    let pair = (Types.get_id left, Types.get_id right) in
+    if fst pair = snd pair || List.mem pair seen then true
+    else
+      let seen = pair :: seen in
+      match (Types.get_desc left, Types.get_desc right) with
+      | ( (Types.Tvar _ | Types.Tunivar _),
+          (Types.Tvar _ | Types.Tunivar _) ) ->
+          false
+      | ( Types.Tconstr (left_path, left_arguments, _),
+          Types.Tconstr (right_path, right_arguments, _) ) ->
+          Path.same left_path right_path
+          && List.length left_arguments = List.length right_arguments
+          && List.for_all2 (same seen) left_arguments right_arguments
+      | Types.Ttuple left, Types.Ttuple right
+      | Types.Tunboxed_tuple left, Types.Tunboxed_tuple right ->
+          List.map fst left = List.map fst right
+          && List.for_all2
+               (fun (_, left) (_, right) -> same seen left right)
+               left right
+      | Types.Tpoly (left, []), _
+      | Types.Tlink left, _
+      | Types.Tsubst (left, _), _ ->
+          same seen left right
+      | _, Types.Tpoly (right, [])
+      | _, Types.Tlink right
+      | _, Types.Tsubst (right, _) ->
+          same seen left right
+      | ( Types.Tarrow (left_label, left_domain, left_range, _),
+          Types.Tarrow (right_label, right_domain, right_range, _) ) ->
+          left_label = right_label
+          && same seen left_domain right_domain
+          && same seen left_range right_range
+      | ( Types.Tpoly (_, _ :: _), _ )
+      | ( _, Types.Tpoly (_, _ :: _) )
+      | ( Types.Tobject _, _ ) | ( _, Types.Tobject _ )
+      | ( Types.Tfield _, _ ) | ( _, Types.Tfield _ )
+      | ( Types.Tnil, _ ) | ( _, Types.Tnil )
+      | ( Types.Tvariant _, _ ) | ( _, Types.Tvariant _ )
+      | ( Types.Tpackage _, _ ) | ( _, Types.Tpackage _ )
+      | ( Types.Tquote _, _ ) | ( _, Types.Tquote _ )
+      | ( Types.Tsplice _, _ ) | ( _, Types.Tsplice _ )
+      | ( Types.Tof_kind _, _ ) | ( _, Types.Tof_kind _ )
+      | ( Types.Tconstr _,
+          (Types.Tvar _ | Types.Tunivar _ | Types.Ttuple _
+          | Types.Tunboxed_tuple _ | Types.Tarrow _) )
+      | ( (Types.Tvar _ | Types.Tunivar _ | Types.Ttuple _
+          | Types.Tunboxed_tuple _ | Types.Tarrow _),
+          Types.Tconstr _ )
+      | ( (Types.Tvar _ | Types.Tunivar _),
+          (Types.Ttuple _ | Types.Tunboxed_tuple _ | Types.Tarrow _) )
+      | ( (Types.Ttuple _ | Types.Tunboxed_tuple _ | Types.Tarrow _),
+          (Types.Tvar _ | Types.Tunivar _) )
+      | ( Types.Ttuple _, (Types.Tunboxed_tuple _ | Types.Tarrow _) )
+      | ( (Types.Tunboxed_tuple _ | Types.Tarrow _), Types.Ttuple _ )
+      | ( Types.Tunboxed_tuple _, Types.Tarrow _ )
+      | ( Types.Tarrow _, Types.Tunboxed_tuple _ ) ->
+          false
+  in
+  same [] left right
+
 let rec retained_shadow_type_aliases aliases source_type shadow_type =
   let source_type = Callback_shape_private.canonical_type source_type in
   let shadow_type = Callback_shape_private.canonical_type shadow_type in
@@ -591,11 +658,21 @@ let rec retained_shadow_type_aliases aliases source_type shadow_type =
       else
         match List.assoc_opt shadow_id aliases with
         | None -> Some ((shadow_id, source_type) :: aliases)
-        | Some previous
-          when Types.get_id (Callback_shape_private.canonical_type previous)
-               = Types.get_id source_type ->
-            Some aliases
-        | Some _ -> None)
+        | Some previous ->
+            let same_source =
+              same_retained_source_type previous source_type
+            in
+            [%log.trace "validated retained callback shadow alias reuse"
+              ~stage:(Delator.Field.string "retained-shadow-alias")
+              ~decision:
+                (Delator.Field.string
+                   (if same_source then "accepted" else "rejected"))
+              ~reason_class:
+                (Delator.Field.string
+                   (if same_source then "structural-source-match"
+                    else "structural-source-mismatch"))
+              ~alias_count:(Delator.Field.int (List.length aliases))];
+            if same_source then Some aliases else None)
   | Types.Tpoly (shadow_body, [])
   | Types.Tlink shadow_body
   | Types.Tsubst (shadow_body, _) ->

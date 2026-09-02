@@ -2,7 +2,7 @@ type 'a node = Empty | Node of 'a * 'a node
 
 type 'a option = None | Some of 'a
 
-let rec spec_index_alt (idx : int) (nodes : int node) : int option =
+let rec spec_index_alt (idx : Vstd.Int.t) (nodes : int node) : int option =
   [%verocaml.decreases nodes];
   match nodes with
   | Empty -> None

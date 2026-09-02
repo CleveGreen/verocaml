@@ -475,15 +475,17 @@ let seal implementation program =
       fail fallback "instance-mode authority rejected a changed SST snapshot"
   | Some registration
     when
-      (not (Cmt_input.retained_preprocessing implementation))
-      && registration.requests = []
-      && registration.family_markers = [] ->
+      registration.requests = []
+      &&
+      (Cmt_input.ordinary_ppx_artifact implementation
+      || ((not (Cmt_input.retained_ppx_artifact implementation))
+         && registration.family_markers = [])) ->
       (* Legacy/default-only CMTs may still pass through ordinary semantic
          verification. They remain deliberately unsealed, so no
          mode-sensitive or invariant-authority query can authenticate them. *)
       Ok ()
   | Some _registration
-    when not (Cmt_input.retained_preprocessing implementation) ->
+    when not (Cmt_input.retained_ppx_artifact implementation) ->
       fail fallback
         "instance-mode authority requires the retained artifact family"
   | Some registration

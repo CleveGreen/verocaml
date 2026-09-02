@@ -52,7 +52,7 @@ let transparent_schema_embedding descriptors definitions typ =
           constructors
   in
   let rec supported visiting = function
-    | Sst.Unit | Sst.Bool | Sst.Int -> true
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> true
     | Sst.Parameter _ -> false
     | Sst.Application (constructor, arguments) ->
         application constructor arguments
@@ -87,7 +87,7 @@ let transparent_schema_embedding descriptors definitions typ =
 let argument_has_type typ argument =
   match (typ, argument) with
   | Sst.Unit, Vir.Recursive_boolean_argument (Vir.Boolean_constant true) -> true
-  | Sst.Int, Vir.Recursive_integer_argument _ -> true
+  | (Sst.Int | Sst.Mathematical_int), Vir.Recursive_integer_argument _ -> true
   | Sst.Bool, Vir.Recursive_boolean_argument _ -> true
   | Sst.Aggregate type_id, Vir.Recursive_aggregate_argument aggregate ->
       exact_aggregate_type type_id aggregate
@@ -95,6 +95,8 @@ let argument_has_type typ argument =
       ( Vir.Recursive_integer_argument _ | Vir.Recursive_aggregate_argument _
       | Vir.Recursive_boolean_argument _ ) )
   | ( Sst.Int,
+      (Vir.Recursive_boolean_argument _ | Vir.Recursive_aggregate_argument _) )
+  | ( Sst.Mathematical_int,
       (Vir.Recursive_boolean_argument _ | Vir.Recursive_aggregate_argument _) )
   | ( Sst.Bool,
       (Vir.Recursive_integer_argument _ | Vir.Recursive_aggregate_argument _) )
@@ -108,7 +110,7 @@ let argument_has_type typ argument =
 let selected_argument descriptors aggregate make_selector path = function
   | Sst.Unit ->
       Some (Vir.Recursive_boolean_argument (Vir.Boolean_constant true))
-  | Sst.Int ->
+  | Sst.Int | Sst.Mathematical_int ->
       Some
         (Vir.Recursive_integer_argument
            (Vir.Integer_selector (make_selector path Vir.Integer, aggregate)))
@@ -311,7 +313,7 @@ let rec nested_equalities descriptors definitions aggregate make_selector path
       | Sst.Unit_pattern | Sst.Record_pattern _ | Sst.Constructor_pattern _
       | Sst.Or_pattern _ ->
           Error "immutable tuple pattern changed shape")
-  | Sst.Unit | Sst.Bool | Sst.Int -> Ok []
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> Ok []
   | Sst.Parameter _ ->
       Error "open reconstruction has no exact schema"
 
@@ -425,7 +427,8 @@ and reconstruct_application descriptors definitions (pattern : Sst.pattern)
               Error "application reconstruction pattern changed shape")
       | Some _ | None ->
           Error "application reconstruction has no exact schema")
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Aggregate _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Aggregate _
   | Sst.Parameter _ ->
       Error "application reconstruction received a non-application pattern"
 
@@ -558,7 +561,8 @@ and reconstruct_aggregate descriptors definitions (pattern : Sst.pattern)
       | Sst.Unit_pattern | Sst.Tuple_pattern _ | Sst.Or_pattern _ ->
           Error "immutable aggregate pattern changed shape")
   | Sst.Aggregate _ -> Ok []
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Parameter _
   | Sst.Application _ ->
       Error "aggregate reconstruction received a non-aggregate/open pattern"
 
@@ -567,7 +571,8 @@ let pattern_reconstruction_equalities descriptors definitions
   match pattern.Sst.typ with
   | Sst.Application _ ->
       reconstruct_application descriptors definitions pattern aggregate
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Aggregate _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Aggregate _
   | Sst.Parameter _ ->
       reconstruct_aggregate descriptors definitions pattern aggregate
 
@@ -579,6 +584,7 @@ let rec owned_tree_transitions expression =
   | Sst.Owned_tree_nested_write { transition; value } ->
       transition :: owned_tree_transitions value
   | Sst.Owned_tree_rebase { transition } -> [ transition ]
+  | Sst.Lift_runtime_int operand -> owned_tree_transitions operand
   | Sst.Tuple_value components ->
       nested (List.map snd components)
   | Sst.Record_value { fields; _ } -> nested (List.map snd fields)

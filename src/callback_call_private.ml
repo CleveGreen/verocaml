@@ -34,9 +34,19 @@ type 'error direct_lowering_services = {
     Types.type_expr ->
     (Parametric_type.t, 'error) result;
   optional_carrier :
-    Location.t -> Parametric_type.t -> (Parametric_type.t, 'error) result;
+    Location.t ->
+    Parametric_type.t ->
+    Parametric_type.t ->
+    (Parametric_type.t, 'error) result;
   lower_expression :
     Typedtree.expression -> (Sst.expression, 'error) result;
+  lower_expression_expected :
+    expected:Sst.typ -> Typedtree.expression -> (Sst.expression, 'error) result;
+  adapt_argument :
+    Location.t ->
+    expected:Sst.typ ->
+    Sst.expression ->
+    (Sst.expression, 'error) result;
   callback_actual :
     Callback_shape_private.t ->
     string option ->
@@ -47,6 +57,7 @@ type 'error direct_lowering_services = {
   policy_error : Location.t -> string -> 'error;
   polymorphic_error : Location.t -> 'error;
   higher_order_error : Location.t -> 'error;
+  semantic_result_type : Sst.typ option;
   span : Location.t -> Sst.span;
   current : Ident.t option;
 }
@@ -63,15 +74,15 @@ let shape_for_type services candidate location typ =
   | Error (Typedtree_callback_private.Invalid_shape message) ->
       Error (services.policy_error location message)
 let rec lower_mixed services candidate call_location lowered formal_types
-    formal_labels actual_types parameters arguments =
-  match parameters, arguments with
-  | [], [] ->
+    formal_labels actual_types parameters domains arguments =
+  match parameters, domains, arguments with
+  | [], [], [] ->
       Ok
         ( List.rev lowered,
           List.rev formal_types,
           List.rev formal_labels,
           List.rev actual_types )
-  | (parameter : Typedtree.function_param) :: parameters,
+  | (parameter : Typedtree.function_param) :: parameters, domain :: domains,
     (label, Typedtree.Arg ((source : Typedtree.expression), _)) :: arguments ->
       let expected_label = services.parameter_label parameter.fp_arg_label in
       let actual_label = services.parameter_label label in
@@ -105,15 +116,22 @@ let rec lower_mixed services candidate call_location lowered formal_types
                   pattern.pat_type
               in
               let* carrier =
-                services.optional_carrier pattern.pat_loc payload
+                let* carrier =
+                  services.normalized_type candidate pattern.pat_loc domain
+                in
+                services.optional_carrier pattern.pat_loc carrier payload
               in
               lower_mixed services candidate call_location
                 (Typedtree_callback_private.Lowered_call_argument
-                   (Sst.Value_argument { label = actual_label; value })
+                   {
+                     argument =
+                       Sst.Value_argument { label = actual_label; value };
+                     source;
+                   }
                 :: lowered)
                 (carrier :: formal_types)
                 (expected_label :: formal_labels)
-                (value.typ :: actual_types) parameters arguments
+                (value.typ :: actual_types) parameters domains arguments
         | Typedtree.Tparam_pat pattern ->
             if
               Typedtree_callback_private.callback_arrow_type pattern.pat_type
@@ -126,25 +144,35 @@ let rec lower_mixed services candidate call_location lowered formal_types
                 (Typedtree_callback_private.Pending_callback_argument
                    { shape; label = actual_label; source }
                 :: lowered)
-                formal_types formal_labels actual_types parameters arguments
+                formal_types formal_labels actual_types parameters domains
+                arguments
             else
-              let* value = services.lower_expression source in
               let* formal_type =
                 services.normalized_type candidate pattern.pat_loc
                   pattern.pat_type
               in
+              let* lowered_value = services.lower_expression source in
+              let* value =
+                services.adapt_argument source.exp_loc ~expected:formal_type
+                  lowered_value
+              in
               lower_mixed services candidate call_location
                 (Typedtree_callback_private.Lowered_call_argument
-                   (Sst.Value_argument { label = actual_label; value })
+                   {
+                     argument =
+                       Sst.Value_argument { label = actual_label; value };
+                     source;
+                   }
                 :: lowered)
                 (formal_type :: formal_types)
                 (expected_label :: formal_labels)
-                (value.typ :: actual_types) parameters arguments)
-  | _ :: _, (_, Typedtree.Omitted _) :: _ ->
+                (value.typ :: actual_types) parameters domains arguments)
+  | _ :: _, _ :: _, (_, Typedtree.Omitted _) :: _ ->
       let error = if has_callback_formal candidate then services.policy_error
         else fun location _ -> services.higher_order_error location in
       Error (error call_location "higher-order call is partial")
-  | [], _ :: _ | _ :: _, [] ->
+  | [], _, _ :: _ | [], _ :: _, [] | _ :: _, [], _
+  | _ :: _, _ :: _, [] ->
       let error = if has_callback_formal candidate then services.policy_error
         else fun location _ -> services.higher_order_error location in
       Error (error call_location "higher-order call arity differs from its formals")
@@ -171,7 +199,7 @@ let infer_type_arguments services candidate ~formal_types ~formal_labels
 let resolve_mixed services substitutions lowered =
   let rec resolve resolved = function
     | [] -> Ok (List.rev resolved)
-    | Typedtree_callback_private.Lowered_call_argument argument :: rest ->
+    | Typedtree_callback_private.Lowered_call_argument { argument; _ } :: rest ->
         resolve (argument :: resolved) rest
     | Typedtree_callback_private.Pending_callback_argument
         { shape; label; source }
@@ -181,6 +209,41 @@ let resolve_mixed services substitutions lowered =
         resolve (argument :: resolved) rest
   in
   resolve [] lowered
+
+let adapt_logical_values services call_location formal_types lowered =
+  let rec adapt adapted formal_types = function
+    | [] ->
+        if formal_types = [] then Ok (List.rev adapted)
+        else Error (services.higher_order_error call_location)
+    | Typedtree_callback_private.Pending_callback_argument _ as argument :: rest ->
+        adapt (argument :: adapted) formal_types rest
+    | Typedtree_callback_private.Lowered_call_argument
+        { argument = Sst.Value_argument ({ value; _ } as argument); source }
+      :: rest -> (
+        match formal_types with
+        | expected :: formal_types ->
+            let* initially_adapted =
+              services.adapt_argument call_location ~expected value
+            in
+            let* value =
+              if Parametric_type.equal initially_adapted.Sst.typ expected then
+                Ok initially_adapted
+              else services.lower_expression_expected ~expected source
+            in
+            adapt
+              (Typedtree_callback_private.Lowered_call_argument
+                 {
+                   argument = Sst.Value_argument { argument with value };
+                   source;
+                 }
+              :: adapted)
+              formal_types rest
+        | [] -> Error (services.higher_order_error call_location))
+    | Typedtree_callback_private.Lowered_call_argument
+        { argument = Sst.Callback_argument _; _ } :: _ ->
+        Error (services.higher_order_error call_location)
+  in
+  adapt [] formal_types lowered
 
 let lower_direct_candidate services
     ~application:(application : Typedtree.expression) ~result_type
@@ -206,8 +269,17 @@ let lower_direct_candidate services
         else Ok ()
       in
       let* lowered, formal_types, formal_labels, actual_types =
+        let* domains =
+          match
+            Parametric_lowering_private.compiler_parameter_domains
+              candidate.value_binding.vb_expr.exp_type params
+          with
+          | Ok domains -> Ok domains
+          | Error (location, message) ->
+              Error (services.policy_error location message)
+        in
         lower_mixed services candidate application.exp_loc [] [] [] [] params
-          source_arguments
+          domains source_arguments
       in
       let* formal_result =
         match terminal_body candidate.value_binding.vb_expr with
@@ -215,10 +287,93 @@ let lower_direct_candidate services
             services.normalized_type candidate body.exp_loc body.exp_type
         | None -> Error (services.higher_order_error application.exp_loc)
       in
-      let* type_arguments =
-        infer_type_arguments services candidate ~formal_types ~formal_labels
-          ~actual_types ~formal_result ~result_type application.exp_loc
+      let semantic_result = services.semantic_result_type in
+      let* type_arguments, result_type =
+        match semantic_result with
+        | Some semantic -> (
+            match
+              Parametric_lowering_private
+              .infer_labeled_type_arguments_for_logical_call
+                ~binders:candidate.type_binders ~formal_types ~formal_labels
+                ~actual_types ~actual_labels:formal_labels ~formal_result:semantic
+                ~actual_result:result_type
+            with
+            | Ok type_arguments ->
+                let* semantic_result =
+                  Parametric_lowering_private.instantiate
+                    ~binders:candidate.type_binders ~arguments:type_arguments
+                    semantic
+                  |> Result.map_error (fun _ ->
+                         services.polymorphic_error application.exp_loc)
+                in
+                let* result_type =
+                  Parametric_lowering_private.reconcile_authenticated_result
+                    ~binders:[] ~semantic:semantic_result ~compiler:result_type
+                  |> Result.map_error (fun _ ->
+                         services.polymorphic_error application.exp_loc)
+                in
+                [%log.debug "selected direct generic call inference strategy"
+                  ~stage:
+                    (Delator.Field.string "direct-call-result-reconciliation")
+                  ~function_name:
+                    (Delator.Field.string candidate.function_id.function_name)
+                  ~inference_strategy:
+                    (Delator.Field.string "semantic-arguments")
+                  ~decision:(Delator.Field.string "selected")];
+                Ok (type_arguments, result_type)
+            | Error _ ->
+                let* inference_actual_result =
+                  Parametric_lowering_private.reconcile_authenticated_result
+                    ~binders:candidate.type_binders ~semantic
+                    ~compiler:result_type
+                  |> Result.map_error (fun _ ->
+                         services.polymorphic_error application.exp_loc)
+                in
+                let* type_arguments =
+                  infer_type_arguments services candidate ~formal_types
+                    ~formal_labels ~actual_types ~formal_result:semantic
+                    ~result_type:inference_actual_result application.exp_loc
+                in
+                let* result_type =
+                  Parametric_lowering_private.instantiate
+                    ~binders:candidate.type_binders ~arguments:type_arguments
+                    semantic
+                  |> Result.map_error (fun _ ->
+                         services.polymorphic_error application.exp_loc)
+                in
+                [%log.debug "selected direct generic call inference strategy"
+                  ~stage:
+                    (Delator.Field.string "direct-call-result-reconciliation")
+                  ~function_name:
+                    (Delator.Field.string candidate.function_id.function_name)
+                  ~inference_strategy:
+                    (Delator.Field.string "compiler-result-fallback")
+                  ~decision:(Delator.Field.string "selected")];
+                Ok (type_arguments, result_type))
+        | None ->
+            let* type_arguments =
+              infer_type_arguments services candidate ~formal_types ~formal_labels
+                ~actual_types ~formal_result ~result_type application.exp_loc
+            in
+            [%log.debug "selected direct generic call inference strategy"
+              ~stage:
+                (Delator.Field.string "direct-call-result-reconciliation")
+              ~function_name:
+                (Delator.Field.string candidate.function_id.function_name)
+              ~inference_strategy:(Delator.Field.string "compiler-result")
+              ~decision:(Delator.Field.string "selected")];
+            Ok (type_arguments, result_type)
       in
+      [%log.debug "resolved direct candidate semantic result type"
+        ~stage:(Delator.Field.string "direct-call-result-reconciliation")
+        ~function_name:
+          (Delator.Field.string candidate.function_id.function_name)
+        ~semantic_authority:
+          (Delator.Field.bool (Option.is_some semantic_result))
+        ~result_sort:
+          (Delator.Field.string (Parametric_type.to_string result_type))
+        ~type_argument_count:(Delator.Field.int (List.length type_arguments))
+        ~decision:(Delator.Field.string "accepted")];
       let recursive =
         Option.fold ~none:false
           ~some:(fun ident -> Ident.same candidate.ident ident)
@@ -242,6 +397,30 @@ let lower_direct_candidate services
         then List.combine candidate.type_binders type_arguments
         else []
       in
+      let* instantiated_formal_types =
+        List.fold_left
+          (fun result formal ->
+            let* formals = result in
+            let* formal =
+              Parametric_lowering_private.instantiate
+                ~binders:candidate.type_binders ~arguments:type_arguments formal
+              |> Result.map_error (fun _ ->
+                     services.polymorphic_error application.exp_loc)
+            in
+            Ok (formal :: formals))
+          (Ok []) (List.rev formal_types)
+      in
+      let* lowered =
+        adapt_logical_values services application.exp_loc
+          instantiated_formal_types lowered
+      in
+      [%log.trace "adapted direct generic call arguments"
+        ~stage:(Delator.Field.string "direct-call-argument-reconciliation")
+        ~function_name:
+          (Delator.Field.string candidate.function_id.function_name)
+        ~value_argument_count:
+          (Delator.Field.int (List.length formal_types))
+        ~decision:(Delator.Field.string "accepted")];
       let* arguments = resolve_mixed services substitutions lowered in
       let* () =
         callback_contract

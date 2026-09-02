@@ -51,7 +51,7 @@ let supported_binding_pattern (pattern : Sst.pattern) =
 let rec supported_conditional_type ~integer_conditionals = function
   | Sst.Unit | Sst.Bool | Sst.Aggregate _ | Sst.Parameter _
   | Sst.Application _ -> true
-  | Sst.Int -> integer_conditionals
+  | Sst.Int | Sst.Mathematical_int -> integer_conditionals
   | Sst.Tuple components ->
       List.for_all (fun (_, typ) -> supported_conditional_type ~integer_conditionals typ) components
 
@@ -62,6 +62,7 @@ let rec recursive_argument_is_branch_free classify (expression : Sst.expression)
   | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
   | Sst.Variable _ ->
       true
+  | Sst.Lift_runtime_int operand -> recurse operand
   | Sst.Optional_present payload | Sst.Optional_forward payload ->
       recurse payload
   | Sst.Optional_absent -> true
@@ -71,7 +72,8 @@ let rec recursive_argument_is_branch_free classify (expression : Sst.expression)
       match expression.typ with
       | Sst.Application _ ->
           List.for_all (fun (_, field) -> recurse field) fields
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Aggregate _ | Sst.Tuple _
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Aggregate _
+      | Sst.Tuple _
       | Sst.Parameter _ ->
           false)
   | Sst.Constructor_value { arguments; _ } -> List.for_all recurse arguments
@@ -134,6 +136,7 @@ let authenticate_with ~integer_conditionals ~classify root =
     | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
     | Sst.Variable _ ->
         true
+    | Sst.Lift_runtime_int operand -> recurse operand
     | Sst.Optional_present payload | Sst.Optional_forward payload ->
         recurse payload
     | Sst.Optional_absent -> true
@@ -143,7 +146,8 @@ let authenticate_with ~integer_conditionals ~classify root =
         match expression.typ with
         | Sst.Application _ ->
             List.for_all (fun (_, field) -> recurse field) fields
-        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Aggregate _ | Sst.Tuple _
+        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+        | Sst.Aggregate _ | Sst.Tuple _
         | Sst.Parameter _ ->
             false)
     | Sst.Constructor_value { arguments; _ } -> List.for_all recurse arguments

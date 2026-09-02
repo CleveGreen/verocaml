@@ -64,7 +64,7 @@ val application :
   span:Diagnostic.span ->
   (Vir.recursive_spec_argument Symbolic_application_private.t, string) result
 
-val application_symbol_name :
+val application_backend_head :
   arrow:Parametric_type.t ->
   result_type:Parametric_type.t ->
   span:Diagnostic.span ->

@@ -275,6 +275,10 @@ and translate_integer function_index = function
   | Vir.Integer_negate value ->
       Raw.raw_unop Smtml.Ty.Ty_int Smtml.Ty.Unop.Neg
         (translate_integer function_index value)
+  | Vir.Integer_multiply (left, right) ->
+      Raw.raw_binop Smtml.Ty.Ty_int Smtml.Ty.Binop.Mul
+        (translate_integer function_index left)
+        (translate_integer function_index right)
   | Vir.Integer_multiply_constant (coefficient, value) ->
       raw_scale coefficient (translate_integer function_index value)
   | Vir.Integer_absolute_value value ->

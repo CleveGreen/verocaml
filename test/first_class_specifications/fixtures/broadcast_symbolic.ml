@@ -1,8 +1,10 @@
-[%%verocaml.symbolic val observe : (int -> int) -> int]
+open Vstd
+
+[%%verocaml.symbolic val observe : (int -> Int.t) -> int]
 [%%verocaml.symbolic val make : int -> int -> int]
 [%%verocaml.symbolic val image : ('a -> 'b) -> 'a -> 'b]
 
-let increment (value : int) : int = value + 1 [@@verocaml.spec]
+let increment (value : int) : Int.t = value + 1 [@@verocaml.spec]
 
 let apply_reflexive (f : 'a -> 'b) (value : 'a) : unit =
   [%verocaml.ensures fun _ -> (f value [@trigger]) = f value] ; ()

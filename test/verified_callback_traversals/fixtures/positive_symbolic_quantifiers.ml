@@ -1,3 +1,5 @@
+open Vstd
+
 type 'a option_specification = 'a option
 [@@verocaml.external_type_specification]
 
@@ -5,20 +7,20 @@ type 'a box = Box of 'a
 type 'a sequence = Empty | Item of 'a * 'a sequence
 type ('a, 'b) pair = { left : 'a; right : 'b }
 
-[%%verocaml.symbolic val integer_image : int -> int]
-[%%verocaml.symbolic val integer_predicate : int -> bool]
+[%%verocaml.symbolic val integer_image : Int.t -> Int.t]
+[%%verocaml.symbolic val integer_predicate : Int.t -> bool]
 [%%verocaml.symbolic val boolean_image : bool -> bool]
 [%%verocaml.symbolic val parametric_image : 'a -> 'a]
 [%%verocaml.symbolic val option_image : 'a option -> 'a option]
 [%%verocaml.symbolic val box_image : 'a box -> 'a box]
 [%%verocaml.symbolic val sequence_image : 'a sequence -> 'a sequence]
 [%%verocaml.symbolic val pair_image : ('a, 'b) pair -> ('a, 'b) pair]
-[%%verocaml.symbolic val combined_image : bool -> int -> int]
+[%%verocaml.symbolic val combined_image : bool -> Int.t -> Int.t]
 [%%verocaml.symbolic val symbolic_apply : ('a -> 'b) -> 'a -> 'b]
 
-let successor (value : int) : int = value + 1 [@@verocaml.spec]
+let successor (value : Int.t) : Int.t = value + 1 [@@verocaml.spec]
 
-let named_integer_image (value : int) : int = integer_image value
+let named_integer_image (value : Int.t) : Int.t = integer_image value
 [@@verocaml.spec]
 
 let named_box_image (value : 'a box) : 'a box = box_image value
@@ -35,15 +37,15 @@ let has_value_witness (f : 'a -> 'b) (value : 'a) : bool =
 
 let symbolic_integer_instantiation (value : int) : int =
   [%verocaml.requires
-    forall (fun (candidate : int) ->
+    forall (fun (candidate : Int.t) ->
       ((integer_image candidate) [@trigger]) = candidate + 1)];
   [%verocaml.requires
-    forall (fun (candidate : int) ->
+    forall (fun (candidate : Int.t) ->
       ((integer_predicate candidate) [@trigger]) = (candidate >= 0))];
   [%verocaml.assert integer_image value = value + 1];
   [%verocaml.assert integer_predicate value = (value >= 0)];
   [%verocaml.assert
-    exists (fun (candidate : int) ->
+    exists (fun (candidate : Int.t) ->
       candidate = value && integer_image candidate = value + 1)];
   [%verocaml.ensures fun result -> result = value];
   value
@@ -61,7 +63,7 @@ let symbolic_boolean_instantiation (value : bool) : bool =
 
 let symbolic_multiargument_instantiation (flag : bool) (value : int) : int =
   [%verocaml.requires
-    forall (fun (candidate : int) ->
+    forall (fun (candidate : Int.t) ->
       ((combined_image flag candidate) [@trigger]) = candidate)];
   [%verocaml.assert combined_image flag value = value];
   [%verocaml.ensures fun result -> result = value];
@@ -69,7 +71,7 @@ let symbolic_multiargument_instantiation (flag : bool) (value : int) : int =
 
 let direct_spec_triggers (value : int) (boxed : 'a box) : int =
   [%verocaml.requires
-    forall (fun (candidate : int) ->
+    forall (fun (candidate : Int.t) ->
       ((named_integer_image candidate) [@trigger]) = candidate)];
   [%verocaml.requires
     forall (fun (candidate : 'a box) ->
@@ -126,28 +128,28 @@ let symbolic_record_instantiation (value : ('a, 'b) pair) : ('a, 'b) pair =
 
 let nested_quantifiers (value : int) : int =
   [%verocaml.requires
-    forall (fun (outer : int) ->
+    forall (fun (outer : Int.t) ->
       ((integer_image outer) [@trigger]) = outer)];
   [%verocaml.assert
-    forall (fun (outer : int) ->
+    forall (fun (outer : Int.t) ->
       ((integer_image outer) [@trigger]) = outer
-      && exists (fun (inner : int) ->
+      && exists (fun (inner : Int.t) ->
            inner = outer && integer_image inner = inner))];
   [%verocaml.assert
-    exists (fun (outer : int) ->
+    exists (fun (outer : Int.t) ->
       outer = value
-      && forall (fun (inner : int) ->
+      && forall (fun (inner : Int.t) ->
            ((integer_image inner) [@trigger]) = inner))];
   [%verocaml.ensures fun result -> result = value];
   value
 
 let quantified_postcondition (value : int) : int =
   [%verocaml.requires
-    forall (fun (candidate : int) ->
+    forall (fun (candidate : Int.t) ->
       ((integer_image candidate) [@trigger]) = candidate)];
   [%verocaml.ensures fun result ->
     result = value
-    && forall (fun (candidate : int) ->
+    && forall (fun (candidate : Int.t) ->
          ((integer_image candidate) [@trigger]) = candidate)];
   value
 
@@ -163,34 +165,34 @@ let spec_function_quantifiers (value : int) : int =
 
 let quantified_function_binder (value : int) : int =
   [%verocaml.requires
-    forall (fun (f : int -> int) -> (f value [@trigger]) = f value)];
+    forall (fun (f : Int.t -> Int.t) -> (f value [@trigger]) = f value)];
   [%verocaml.requires
-    forall (fun (predicate : int -> bool) ->
+    forall (fun (predicate : Int.t -> bool) ->
       ((predicate value) [@trigger]) = predicate value)];
   [%verocaml.requires
-    forall (fun (project : int -> int option) ->
+    forall (fun (project : Int.t -> Int.t option) ->
       ((project value) [@trigger]) = project value)];
   [%verocaml.requires
-    forall (fun (staged : int -> int -> int) ->
+    forall (fun (staged : Int.t -> Int.t -> Int.t) ->
       ((staged value) [@trigger]) = staged value)];
   [%verocaml.requires
-    forall (fun (labelled : base:int -> int) ->
+    forall (fun (labelled : base:Int.t -> Int.t) ->
       ((labelled ~base:value) [@trigger]) = labelled ~base:value)];
   [%verocaml.requires
-    forall (fun (f : int -> int) ->
+    forall (fun (f : Int.t -> Int.t) ->
       ((symbolic_apply f value) [@trigger]) = f value)];
   [%verocaml.assert symbolic_apply successor value = value + 1];
   [%verocaml.assert
-    exists (fun (f : int -> int) -> f value = f value)];
+    exists (fun (f : Int.t -> Int.t) -> f value = f value)];
   [%verocaml.ensures fun result -> result = value];
   value
 
-let quantified_proof (value : int) : unit =
+let quantified_proof (value : Int.t) : unit =
   [%verocaml.requires
-    forall (fun (candidate : int) ->
+    forall (fun (candidate : Int.t) ->
       ((integer_image candidate) [@trigger]) = candidate)];
   [%verocaml.assert integer_image value = value];
   [%verocaml.assert
-    exists (fun (candidate : int) -> candidate = value)];
+    exists (fun (candidate : Int.t) -> candidate = value)];
   ()
 [@@verocaml.proof]

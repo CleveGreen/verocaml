@@ -1,4 +1,6 @@
-let rec recurse (x : int) (y : int) : int =
+open Vstd
+
+let rec recurse (x : Int.t) (y : Int.t) : Int.t =
   [%verocaml.decreases y];
   if y <= 0 then x else recurse (x + 1) (y - 1)
 [@@verocaml.spec] [@@verocaml.opaque]

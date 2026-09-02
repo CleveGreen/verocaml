@@ -15,7 +15,7 @@ let read_file path =
 let source_input name =
   Fixture.single_source ~module_name:(String.capitalize_ascii name)
     ~source:(read_file ("fixtures/" ^ name ^ ".ml"))
-    ~libraries:[ "verocaml.ghost" ]
+    ~libraries:[ "verocaml.ghost"; "verocaml.vstd" ]
 
 let source_case name fixture expectation =
   Suite.case ~name ~expectation (fun ~environment ~workspace ->
@@ -47,7 +47,7 @@ let verified (node : int node) =
 let shape_only =
   let input =
     Fixture.single_source ~module_name:"Shape_only" ~source:shape_only_source
-      ~libraries:[ "verocaml.ghost" ]
+      ~libraries:[ "verocaml.ghost"; "verocaml.vstd" ]
   in
   Suite.case ~name:"shape-only-verification"
     ~expectation:(verified "Shape_only" [ "verified" ])

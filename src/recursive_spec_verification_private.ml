@@ -74,15 +74,24 @@ let seal_verified prepared =
   Ok
     (Verified
        { prepared; preservation_capabilities = List.rev preservation_capabilities })
-let prepare program =
+let prepare_with operation =
   match
-    Sst_validation_private.Public.with_owned_contents_helpers_hidden (fun () ->
-        Spec_unfolding_private.prepare program)
+    Sst_validation_private.Public.with_owned_contents_helpers_hidden operation
   with
   | Ok prepared -> Ok prepared
   | Error error ->
-      fail (Diagnostic.file_span "<recursive-spec>") "%s"
-        (Spec_unfolding_private.error_to_string error)
+      let detail = Spec_unfolding_private.error_to_string error in
+      [%log.debug "recursive specification preparation was rejected"
+        ~stage:(Delator.Field.string "recursive-specification-preflight")
+        ~detail:(Delator.Field.string detail)
+        ~decision:(Delator.Field.string "rejected")];
+      fail (Diagnostic.file_span "<recursive-spec>") "%s" detail
+
+let prepare program =
+  prepare_with (fun () -> Spec_unfolding_private.prepare program)
+
+let prepare_validated validated =
+  prepare_with (fun () -> Spec_unfolding_private.prepare_validated validated)
 let has_definitions prepared =
   Spec_unfolding_private.definitions prepared <> []
 let termination_obligation_count prepared =

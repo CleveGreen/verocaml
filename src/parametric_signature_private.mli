@@ -73,6 +73,19 @@ val infer_partial_type_arguments :
   actual_result:Parametric_type.t ->
   (Parametric_type.t list, string) result
 
+val infer_partial_type_arguments_from_logical_actuals :
+  t ->
+  actual_types:Parametric_type.t option list ->
+  actual_labels:string option list ->
+  (Parametric_type.t list, string) result
+
+val infer_partial_type_arguments_for_logical_call :
+  t ->
+  actual_types:Parametric_type.t option list ->
+  actual_labels:string option list ->
+  actual_result:Parametric_type.t ->
+  (Parametric_type.t list, string) result
+
 val instantiate : t -> Parametric_type.t list -> (instantiated, string) result
 
 val validate_call :

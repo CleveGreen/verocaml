@@ -14,6 +14,8 @@ type scoped_request
 type scoped_result
 type scoped_row
 
+type error_classification = Source_error | Dependency_error | Internal_error
+
 type scoped_classification =
   | Scoped_verified
   | Scoped_verified_dependency
@@ -35,6 +37,7 @@ type operation =
   | Add
   | Subtract
   | Negate
+  | Multiply
   | Multiply_constant of string
   | Successor
   | Predecessor
@@ -171,6 +174,7 @@ val error_unit_name : error -> string option
 val error_message : error -> string
 val error_diagnostic : error -> Diagnostic.t option
 val error_is_internal : error -> bool
+val error_classification : error -> error_classification
 
 val status : result -> status
 val semantic_sst : result -> string

@@ -39,10 +39,25 @@ type provider_callable = {
   model : provider_model option;
 }
 
+type provider_broadcast_declaration = {
+  broadcast_identity : Retained_broadcast_private.identity;
+  broadcast_definition : Sst.function_definition;
+  broadcast_signature : Parametric_signature_private.t;
+  broadcast_trigger_span : Diagnostic.span;
+  broadcast_trust : Retained_broadcast_private.trust;
+}
+
 type provider_broadcast_group = {
-  resolved_path : string;
-  binding_uid : string;
-  target_paths : string list;
+  broadcast_group_identity : Retained_broadcast_private.identity;
+  broadcast_members : Retained_broadcast_private.identity list;
+  broadcast_sources : provider_broadcast_source list;
+}
+
+and provider_broadcast_source = {
+  broadcast_source_reference : Retained_broadcast_private.source_reference;
+  broadcast_source_identity : Retained_broadcast_private.identity;
+  broadcast_source_edge : Retained_interface_authority_private.dependency option;
+  broadcast_source_authority_index : string option;
 }
 
 type provider_type = {
@@ -71,8 +86,10 @@ type provider_description = {
   family_digest : string;
   import_digest : string;
   callables : provider_callable list;
+  broadcast_declarations : provider_broadcast_declaration list;
   broadcast_groups : provider_broadcast_group list;
   types : provider_type list;
+  logical_sorts : Logical_sort_private.t list;
   external_specifications : provider_external_specification list;
 }
 
@@ -81,6 +98,7 @@ type environment
 type registration
 type call
 type aggregate_application_identity
+type seal_error
 
 type callable_snapshot = {
   path : string;
@@ -96,12 +114,6 @@ type callable_snapshot = {
   provider_import : string;
   summary_digest : string;
   model : provider_model option;
-}
-
-type broadcast_group_snapshot = {
-  path : string;
-  binding_uid : string;
-  target_paths : string list;
 }
 
 type type_snapshot = {
@@ -120,6 +132,19 @@ type external_specification_snapshot = {
   provider_interface : string;
 }
 
+type broadcast_declaration_snapshot = {
+  identity : Retained_broadcast_private.identity;
+  definition : Sst.function_definition;
+  trigger_span : Diagnostic.span;
+  trust : Retained_broadcast_private.trust;
+}
+
+type broadcast_group_snapshot = {
+  identity : Retained_broadcast_private.identity;
+  members : Retained_broadcast_private.identity list;
+  sources : provider_broadcast_source list;
+}
+
 val seal_provider :
   provider_completion:Verified_provider_completion_private.t ->
   implementation:Cmt_input.implementation ->
@@ -127,6 +152,18 @@ val seal_provider :
   direct_dependencies:provider list ->
   provider_description ->
   (provider, string) result
+
+val seal_provider_with_diagnostic :
+  provider_completion:Verified_provider_completion_private.t ->
+  implementation:Cmt_input.implementation ->
+  program:Sst.program ->
+  direct_dependencies:provider list ->
+  provider_description ->
+  (provider, seal_error) result
+
+val seal_error_message : seal_error -> string
+val seal_error_diagnostic : seal_error -> Diagnostic.t option
+val seal_error_is_internal : seal_error -> bool
 
 val provider_matches :
   provider ->
@@ -136,8 +173,10 @@ val provider_matches :
 
 val create : provider list -> (environment, string) result
 val callables : environment -> callable_snapshot list
+val broadcast_declarations : environment -> broadcast_declaration_snapshot list
 val broadcast_groups : environment -> broadcast_group_snapshot list
 val types : environment -> type_snapshot list
+val logical_sorts : environment -> Logical_sort_private.t list
 val external_specifications : environment -> external_specification_snapshot list
 val empty : environment
 
@@ -188,6 +227,13 @@ val finite_requirement :
 val dump : environment -> string
 
 module For_testing : sig
+  val symbolic_marker_matches_material :
+    Cmt_input.interface_symbolic_declaration ->
+    canonical_path:string ->
+    value_uid:string ->
+    typed_abi:string ->
+    bool
+
   type aggregate_lifecycle = {
     descriptors_issued : int;
     applications_admitted : int;

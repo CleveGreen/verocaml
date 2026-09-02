@@ -36,7 +36,7 @@
     };
 
     delator-source = {
-      url = "github:CleveGreen/delator/c6d9de5092eabbcb5711f4d5b7b1231f509294e8";
+      url = "github:CleveGreen/delator/a38be199a04cd934d51e51b7b2b96b3ece556aed";
       flake = false;
     };
 
@@ -132,7 +132,7 @@
 
       verocaml = scope.verocaml.overrideAttrs (old: {
         nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgs.makeWrapper ];
-        DELATOR_STATIC_LEVEL = "info";
+        DELATOR_STATIC_LEVEL = "trace";
         postFixup = (old.postFixup or "") + ''
           wrapProgram "$out/bin/verocaml" \
             --set VEROCAML_OCAMLC "${oxcamlCompiler}/bin/ocamlc" \
@@ -893,7 +893,7 @@
                 > verified.out 2> verified.err
             grep -F 'result=verified' verified.out
             grep -F 'verocaml: project directory=' verified.out
-            grep -F 'roots=2 result=verified' verified.out
+            grep -F 'roots=3 result=verified' verified.out
             test ! -s verified.err
 
             OCAML_COLOR=never DELATOR_COLOR=never DELATOR_FORMAT=flat \
@@ -909,8 +909,36 @@
               ${verocaml}/bin/verocaml verify project/lib \
                 --threads 2 --timeout-ms 20000 \
                 > json.out 2> json.err
-            grep -F 'roots=2 result=verified' json.out
+            grep -F 'roots=3 result=verified' json.out
             test -s json.err
+
+            cp -R ${./test/dune_project_cli/project} poisoned-project
+            chmod -R u+w poisoned-project
+            mkdir poisoned-project/unrelated
+            cat > poisoned-project/unrelated/dune <<'EOF'
+            (library
+             (name unrelated_broken_library)
+             (modules module_that_does_not_exist))
+            EOF
+            OCAML_COLOR=never DELATOR_COLOR=never \
+              ${verocaml}/bin/verocaml verify poisoned-project/lib \
+                --threads 2 --timeout-ms 20000 \
+                > poisoned.out 2> poisoned.err
+            grep -F 'roots=3 result=verified' poisoned.out
+
+            cp -R ${./test/dune_project_cli/project} empty-description-project
+            chmod -R u+w empty-description-project
+            mkdir empty-description-project/unrelated
+            cat > empty-description-project/unrelated/dune <<'EOF'
+            (library
+             (name verified_dune_project)
+             (modules module_that_does_not_exist))
+            EOF
+            OCAML_COLOR=never DELATOR_COLOR=never \
+              ${verocaml}/bin/verocaml verify empty-description-project/lib \
+                --threads 2 --timeout-ms 20000 \
+                > empty-description.out 2> empty-description.err
+            grep -F 'roots=3 result=verified' empty-description.out
 
             cp -R ${./test/dune_project_cli/project} unmarked-project
             chmod -R u+w unmarked-project

@@ -9,6 +9,8 @@ type activation = Spec_unfolding.activation = {
 }
 
 val prepare : Sst.program -> (prepared, error) result
+val prepare_validated :
+  Sst_validation.validated_program -> (prepared, error) result
 val validated_program : prepared -> Sst_validation.validated_program
 val termination_plan : prepared -> Termination.plan
 val termination_obligations : prepared -> Vir.obligation list

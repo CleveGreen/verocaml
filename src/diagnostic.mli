@@ -25,6 +25,7 @@ type unsupported_construct =
   | Partial_function_parameter
   | Mutual_recursion
   | Unsupported_generic_use
+  | Polymorphic_function
   | Higher_order_function
   | Higher_order_call
   | Unknown_or_external_call
@@ -35,7 +36,6 @@ type unsupported_construct =
   | Object
   | First_class_module
   | Concurrency
-  | Nonlinear_multiplication
   | Structural_aggregate_equality
   | Wrapping_arithmetic
   | Aggregate
@@ -52,6 +52,15 @@ type unsupported_construct =
   | Quantifier_type
   | Unsupported_logical_quantifier
 
+type failure_class = Source_failure | Artifact_failure | Internal_failure
+
+type broadcast_artifact_failure =
+  | Missing_provider_artifact
+  | Malformed_provider_artifact
+  | Stale_provider_artifact
+  | Mismatched_provider_artifact
+  | Conflicting_provider_artifact
+
 type classification =
   | Unsupported_target of {
       expected_int_size : int;
@@ -63,9 +72,18 @@ type classification =
   | Input_io_error
   | Invalid_recursive_rank of string
   | Invalid_broadcast of string
+  | Invalid_broadcast_dependency of {
+      provider : string;
+      failure : broadcast_artifact_failure;
+    }
   | Invalid_symbolic_declaration of string
   | Invalid_symbolic_application of string
   | Invalid_symbolic_authentication of string
+  | Invalid_symbolic_dependency of {
+      provider : string;
+      reason : string;
+      remedy : string;
+    }
   | Executable_function_in_specification of { function_name : string }
   | Unannotated_erased_call of {
       caller_name : string;
@@ -100,10 +118,12 @@ type t = {
 }
 
 val file_span : string -> span
+val failure_class : classification -> failure_class
 val span_of_location : fallback_file:string -> Location.t -> span
 val location_of_span : span -> Location.t
 val make : classification -> span -> t
 val with_message : string -> t -> t
 val with_hint : string -> t -> t
+val with_hints : string list -> t -> t
 val with_note : span:span -> string -> t -> t
 val report : t -> Location.report

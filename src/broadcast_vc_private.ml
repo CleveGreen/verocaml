@@ -27,7 +27,13 @@ type report_entry = {
   report : report;
 }
 
+type completed_report_entry = {
+  completed_obligation : Vir.obligation Weak.t;
+  completed_report : report;
+}
+
 let reports : report_entry list ref = ref []
+let completed_reports : completed_report_entry list ref = ref []
 let instance_cap = 16
 
 let ( let* ) result continuation =
@@ -126,7 +132,7 @@ let make_lowering ~error ~aggregate_of_type ~integer_value ~boolean_value
     ~parametric_value ~spec_function_value ~aggregate_value ~initial_state ~evaluate
     ~evaluate_ensure ~evaluate_trigger =
   let sort_of_type = function
-    | Parametric_type.Int -> Ok Vir.Integer
+    | Parametric_type.Int | Parametric_type.Mathematical_int -> Ok Vir.Integer
     | Bool -> Ok Vir.Boolean
     | Parameter binder -> Ok (Vir.Parametric binder)
     | Application _ as typ when Parametric_type.is_spec_function typ ->
@@ -311,7 +317,8 @@ and symbolic_occurrences occurrences application =
 
 and integer_occurrences occurrences = function
   | Vir.Integer_constant _ | Integer_symbol _ -> occurrences
-  | Integer_add (left, right) | Integer_subtract (left, right) ->
+  | Integer_add (left, right) | Integer_subtract (left, right)
+  | Integer_multiply (left, right) ->
       integer_occurrences (integer_occurrences occurrences left) right
   | Integer_negate term
   | Integer_multiply_constant (_, term)
@@ -445,6 +452,11 @@ let candidates ~program selections occurrences =
           ~id:declaration.declaration_id
       with
       | None ->
+          [%log.debug "rejected missing active broadcast declaration"
+            ~route:(Delator.Field.string "broadcast-vc")
+            ~stage:(Delator.Field.string "candidate-filter")
+            ~decision:(Delator.Field.string "rejected")
+            ~reason_class:(Delator.Field.string "missing-declaration")];
           Error
             ("active broadcast declaration is absent: "
            ^ declaration.declaration_id)
@@ -456,6 +468,15 @@ let candidates ~program selections occurrences =
                   (Broadcast_declaration_private.trigger_head theorem))
               occurrences
           in
+          [%log.trace "correlated authenticated broadcast trigger members"
+            ~route:(Delator.Field.string "broadcast-vc")
+            ~stage:(Delator.Field.string "member-correlation")
+            ~member_kind:(Delator.Field.string "declaration")
+            ~occurrence_count:(Delator.Field.int (List.length occurrences))
+            ~matching_count:(Delator.Field.int (List.length matching))
+            ~decision:
+              (Delator.Field.string
+                 (if matching = [] then "no-match" else "matched"))];
           List.fold_left
             (fun result (_, type_arguments) ->
               let* instances = result in
@@ -495,7 +516,7 @@ let remember program obligation base_obligation report =
     { program = program_weak; obligation = weak; base_obligation; report }
     :: live
 
-let materialize ~program ~function_id ~obligation ~build =
+let materialize_internal ~program ~function_id ~obligation ~build =
   if not (Broadcast_scope_private.registered program) then Ok obligation
   else
   let base_obligation = obligation in
@@ -507,14 +528,23 @@ let materialize ~program ~function_id ~obligation ~build =
   let* candidates = candidates ~program selections occurrences in
   [%log.debug "materialize broadcast obligation"
     ~function_name:(Delator.Field.string function_id.Sst.function_name)
+    ~function_index:(Delator.Field.int function_id.function_index)
     ~obligation_index:(Delator.Field.int obligation.Vir.obligation_index)
     ~selections:(Delator.Field.int (List.length selections))
     ~occurrences:(Delator.Field.int (List.length occurrences))
     ~candidates:(Delator.Field.int (List.length candidates))];
-  if List.length candidates > instance_cap then
+  if List.length candidates > instance_cap then (
+    [%log.debug "rejected broadcast candidate instance cap"
+      ~route:(Delator.Field.string "broadcast-vc")
+      ~stage:(Delator.Field.string "candidate-cap")
+      ~selection_count:(Delator.Field.int (List.length selections))
+      ~occurrence_count:(Delator.Field.int (List.length occurrences))
+      ~candidate_count:(Delator.Field.int (List.length candidates))
+      ~decision:(Delator.Field.string "rejected")
+      ~reason_class:(Delator.Field.string "instance-cap")];
     Error
       (Printf.sprintf "broadcast instance cap exceeded: %d > %d"
-         (List.length candidates) instance_cap)
+         (List.length candidates) instance_cap))
   else
     let* assumptions, inserted =
       List.fold_left
@@ -547,8 +577,7 @@ let materialize ~program ~function_id ~obligation ~build =
                 Broadcast_declaration_private.declaration_span theorem;
               witness_span =
                 Broadcast_declaration_private.witness_span theorem;
-              requires_count =
-                List.length definition.Sst.contracts.requires;
+              requires_count = List.length definition.Sst.contracts.requires;
               ensures_count = List.length definition.Sst.contracts.ensures;
               selecting_paths = selection.selecting_paths;
             }
@@ -562,6 +591,25 @@ let materialize ~program ~function_id ~obligation ~build =
     in
     let scope_counters = Broadcast_scope_private.counters selections in
     let inserted = List.rev inserted in
+    [%log.debug "materialized authenticated broadcast route"
+      ~route:(Delator.Field.string "broadcast-vc")
+      ~stage:(Delator.Field.string "solver-admission")
+      ~selection_count:(Delator.Field.int (List.length selections))
+      ~occurrence_count:(Delator.Field.int (List.length occurrences))
+      ~candidate_count:(Delator.Field.int (List.length candidates))
+      ~proved_count:
+        (Delator.Field.int
+           (List.fold_left
+              (fun count item -> if item.trusted then count else count + 1)
+              0 inserted))
+      ~trusted_count:
+        (Delator.Field.int
+           (List.fold_left
+              (fun count item -> if item.trusted then count + 1 else count)
+              0 inserted))
+      ~decision:
+        (Delator.Field.string
+           (if candidates = [] then "no-candidate" else "admitted"))];
     remember program obligation base_obligation
       {
         active_declarations = scope_counters.active_declarations;
@@ -575,6 +623,24 @@ let materialize ~program ~function_id ~obligation ~build =
       };
     Ok obligation
 
+let materialize ~program:(program [@delator.skip])
+    ~function_id:(function_id [@delator.skip])
+    ~obligation:(obligation [@delator.skip]) ~build:(build [@delator.skip]) =
+  let result =
+    materialize_internal ~program ~function_id ~obligation ~build
+  in
+  [%log.debug "completed authenticated broadcast VC insertion"
+    ~stage:(Delator.Field.string "vc-insertion")
+    ~route:(Delator.Field.string "broadcast-vc")
+    ~active:(Delator.Field.bool (Broadcast_scope_private.registered program))
+    ~decision:
+      (Delator.Field.string
+         (if Result.is_ok result then "completed" else "rejected"))];
+  result
+[@@delator.instrument]
+[@@delator.level debug]
+[@@delator.no_exn_log]
+
 let report obligation =
   let live, found =
     List.fold_left
@@ -587,7 +653,22 @@ let report obligation =
       ([], None) !reports
   in
   reports := List.rev live;
-  found
+  match found with
+  | Some _ -> found
+  | None ->
+      let live, found =
+        List.fold_left
+          (fun (live, found) entry ->
+            match Weak.get entry.completed_obligation 0 with
+            | None -> (live, found)
+            | Some candidate ->
+                ( entry :: live,
+                  if candidate == obligation then Some entry.completed_report
+                  else found ))
+          ([], None) !completed_reports
+      in
+      completed_reports := List.rev live;
+      found
 
 let pre_materialization_obligation obligation =
   List.find_map
@@ -626,11 +707,25 @@ let materialize_and_attach ~program ~function_id ~descriptors ~obligation
   Result.map_error map_error attached
 
 let clear_program program =
-  reports :=
-    List.filter
-      (fun entry ->
-        Option.fold ~none:false
-          ~some:(fun candidate -> candidate != program)
-          (Weak.get entry.program 0)
-        && Option.is_some (Weak.get entry.obligation 0))
-      !reports
+  let retained, completed =
+    List.fold_left
+      (fun (retained, completed) entry ->
+        match (Weak.get entry.program 0, Weak.get entry.obligation 0) with
+        | Some candidate, Some obligation when candidate == program ->
+            let completed_obligation = Weak.create 1 in
+            Weak.set completed_obligation 0 (Some obligation);
+            ( retained,
+              { completed_obligation; completed_report = entry.report }
+              :: completed )
+        | Some _, Some _ -> (entry :: retained, completed)
+        | None, _ | _, None -> (retained, completed))
+      ([], []) !reports
+  in
+  reports := List.rev retained;
+  completed_reports := List.rev_append completed !completed_reports;
+  [%log.debug "retired authenticated broadcast VC lifecycle entries"
+    ~stage:(Delator.Field.string "lifecycle-cleanup")
+    ~route:(Delator.Field.string "broadcast-vc")
+    ~resource:(Delator.Field.string "weak-vc-report")
+    ~set_cardinality:(Delator.Field.int (List.length completed))
+    ~decision:(Delator.Field.string "released")]

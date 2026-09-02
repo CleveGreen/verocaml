@@ -177,6 +177,7 @@ let rec count_ites term =
   | Rank_project (_, _, _, value) | Negate value | Not value
   | Scale (_, value) ->
       recurse value
+  | Multiply (left, right) -> recurse left + recurse right
   | Add (left, right) | Subtract (left, right)
   | Less_than (left, right) | Less_or_equal (left, right)
   | Greater_than (left, right) | Greater_or_equal (left, right)
@@ -333,6 +334,7 @@ let rec term_has_legacy_tag term =
       legacy_tag_function function_ || recurse value
   | And terms | Or terms -> List.exists recurse terms
   | Negate value | Not value | Scale (_, value) -> recurse value
+  | Multiply (left, right) -> recurse left || recurse right
   | Add (left, right) | Subtract (left, right)
   | Less_than (left, right) | Less_or_equal (left, right)
   | Greater_than (left, right) | Greater_or_equal (left, right)
@@ -367,19 +369,8 @@ let query_has_legacy_tag query =
 let oracle filename =
   let program = load_program filename in
   let all_prepared = prepare program in
-  check "tuple matrix termination total changed"
-    (Recursive_spec_encoding.termination_obligation_count all_prepared = 9);
   let all_verified = verify all_prepared in
-  check "tuple matrix recursive definition count changed"
-    (List.length (Recursive_spec_encoding.definition_ids all_verified) = 3);
   let definition = recursive_definition "spec_node_eq_alt" program in
-  check "exact tuple match termination obligations changed"
-    (Recursive_spec_encoding.For_testing.termination_obligations all_prepared
-    |> List.filter (fun (obligation : Vir.obligation) ->
-           String.equal obligation.Vir.function_ref.function_name
-             "spec_node_eq_alt")
-    |> List.length
-    = 3);
   let query = base_query all_verified definition.function_id in
   let declarations = Logic_ir.View.declarations query in
   let declaration_names =

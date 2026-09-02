@@ -73,7 +73,7 @@ let sort_for_sst registry typ =
         sort
   in
   match typ with
-  | Sst.Int -> Logic_ir.Int
+  | Sst.Int | Sst.Mathematical_int -> Logic_ir.Int
   | Sst.Bool -> Logic_ir.Bool
   | Sst.Aggregate type_id ->
       declare (Printf.sprintf "RankType_%d_%s" type_id.type_index type_id.type_name)
@@ -160,7 +160,7 @@ let recognizers bindings aggregate =
 let vir_sort schema_for_application typ =
   match typ with
   | Parametric_type.Unit | Bool -> `Primitive Logic_ir.Bool
-  | Int -> `Primitive Logic_ir.Int
+  | Int | Mathematical_int -> `Primitive Logic_ir.Int
   | Parameter binder -> `Parameter binder
   | Aggregate type_id ->
       `Aggregate
@@ -418,7 +418,8 @@ let rec ensure context active bindings schema =
                   Error "logical datatype dependency lacks an exact schema"
               | Some nested ->
                   ensure context (application_id :: active) bindings nested)
-          | Unit | Bool | Int | Parameter _ | Aggregate _ | Application _ ->
+          | Unit | Bool | Int | Mathematical_int | Parameter _ | Aggregate _
+          | Application _ ->
               Ok bindings
           | Tuple _ -> Error "tuple-valued logical datatype field"
         in
@@ -441,7 +442,8 @@ let exact_application descriptors = function
           if Parametric_adt.same_application descriptor application then
             Some ((Parametric_adt.type_id descriptor).type_index, arguments)
           else None)
-  | Unit | Bool | Int | Tuple _ | Aggregate _ | Parameter _ -> None
+  | Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _ | Parameter _ ->
+      None
 
 let schemas_for_types ~descriptors types =
   Logical_adt_schema_private.instantiate ~descriptors
@@ -533,10 +535,12 @@ let aggregate_type_of_sst parametric_adts = function
                 (Parametric_type.Application (constructor, arguments));
             aggregate_type_arguments = arguments })
         (Parametric_adt.find parametric_adts constructor)
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ -> None
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Parameter _ ->
+      None
 
 let vir_sort_of_sst parametric_adts = function
-  | Sst.Int -> Some Vir.Integer
+  | Sst.Int | Sst.Mathematical_int -> Some Vir.Integer
   | Sst.Bool -> Some Vir.Boolean
   | Sst.Parameter binder -> Some (Vir.Parametric binder)
   | (Sst.Aggregate _ | Sst.Application _) as typ ->

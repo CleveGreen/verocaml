@@ -29,6 +29,7 @@
 (executable
  (name outcome_cases)
  (modules outcome_cases integration_environment)
+ (flags (:standard -opaque))
  (libraries outcome_test_support compiler-libs.common))
 
 (rule
@@ -54,19 +55,6 @@
   (:validator ../support/report_validator.exe))
  (action
   (run %{validator} %{report} %{archive})))
-
-(cram
- (deps
-  (glob_files fixtures/*)
-  generate_value_mode_matrix.exe
-  value_mode_inventory.ml.in
-  value_mode_axes.ml
-  value_mode_observations.expected
-  value_mode_inventory.exe
-  ../verification_scope/verification_scope_counter_tool.exe
-  ../../src/verocaml.exe
-  ../../ppx/vero_ppx.exe
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
 
 (alias
  (name usability-p0-project-check)

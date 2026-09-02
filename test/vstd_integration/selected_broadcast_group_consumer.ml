@@ -1,3 +1,5 @@
+[@@@verocaml.verify]
+
 [@@@verocaml.activate [Vstd_broadcast_forwarder.selected_seq_init]]
 
 let constant_sequence (size : int) (value : 'a) : 'a Vstd.Seq.t =

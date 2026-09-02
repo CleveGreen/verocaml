@@ -20,7 +20,7 @@ let spec_opt_eq (a : int option) (b : int option) : bool =
       | Some bv -> av = bv)
 [@@verocaml.spec]
 
-let rec spec_index_alt_imp (idx : int) (nodes : int node) : int node =
+let rec spec_index_alt_imp (idx : Vstd.Int.t) (nodes : int node) : int node =
   [%verocaml.decreases nodes];
   match nodes with
     | Empty -> Empty

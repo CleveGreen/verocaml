@@ -163,6 +163,7 @@ let rec map_expression transform (expression : Sst.expression) =
           (Sst.map_symbolic_application_arguments recurse application)
     | Sst.Callback_call _ | Sst.Callback_requires _ | Sst.Callback_ensures _ ->
         invalid_arg "callback rewrite is not implemented"
+    | Sst.Lift_runtime_int operand -> Sst.Lift_runtime_int (recurse operand)
     | Sst.Optional_present payload -> Sst.Optional_present (recurse payload)
     | Sst.Optional_forward carrier -> Sst.Optional_forward (recurse carrier)
     | Sst.Use_type_invariant value ->

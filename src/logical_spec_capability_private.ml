@@ -332,7 +332,9 @@ let vir_aggregate_type_of_sst descriptors = function
                 ^ ">";
               aggregate_type_arguments = arguments;
             })
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ -> None
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Parameter _ ->
+      None
 
 let validate_aggregate_value permit ~validated ~descriptor typ actual =
   let* () = authorize_aggregate permit ~validated descriptor in
@@ -389,8 +391,8 @@ let authorize_field_read permit ~validated ~current_model field ~result_type =
 module For_testing = struct
   type formula_observation = {
     identity : root_identity;
-    authority_before : string;
-    events_before : int;
+    authority_before : string [@log_value.info];
+    events_before : int [@log_value.info];
   }
 
   let formula_events = ref []
@@ -408,12 +410,12 @@ module For_testing = struct
     formula_observations := [];
     registry_unchanged := false
 
-  let before_authentication identity ~authority_snapshot =
+  let before_authentication identity ~authority_snapshot:_authority_snapshot =
     formula_observations :=
       {
         identity;
-        authority_before = authority_snapshot;
-        events_before = event_count identity;
+        authority_before = (_authority_snapshot [@log_value.info]);
+        events_before = (event_count identity [@log_value.info]);
       }
       :: !formula_observations
 
@@ -422,53 +424,75 @@ module For_testing = struct
     let next = event_count identity + 1 in
     formula_events := (key, next) :: List.remove_assoc key !formula_events
 
-  let trace_profile identity outcome =
+  (* FIXME(delator): fully gated hook formals and tuple destructuring *)
+  let trace_profile _identity _outcome =
     if tracing () then
       [%log.info "formula profile"
-        ~root:(Delator.Field.string (root_identity_to_string identity))
-        ~outcome:(Delator.Field.string outcome)]
+        ~root:
+          (Delator.Field.string
+             (root_identity_to_string _identity))
+        ~outcome:(Delator.Field.string _outcome)]
 
-  let trace_registry ~unchanged ~entries =
+  let trace_registry ~unchanged ~entries:_entries =
     registry_unchanged := unchanged;
     if tracing () then
       [%log.info "formula registry constructed"
         ~authority_unchanged:(Delator.Field.bool unchanged)
-        ~entries:(Delator.Field.int entries)]
+        ~entries:(Delator.Field.int _entries)]
 
-  let trace_authority function_name =
+  let trace_authority _function_name =
     if tracing () then
       [%log.info "formula authority observed"
-        ~function_name:(Delator.Field.string function_name)
+        ~function_name:
+          (Delator.Field.string _function_name)
         ~registry_unchanged:(Delator.Field.bool !registry_unchanged)]
 
-  let trace_abstention identity ~reason ~authority_snapshot =
+  let trace_abstention _identity ~reason:_reason
+      ~authority_snapshot:_authority_snapshot =
     if tracing () then
-      let before =
+      let _before =
         List.find
           (fun observation ->
             root_identity_to_string observation.identity
-            = root_identity_to_string identity)
+            = root_identity_to_string _identity)
           !formula_observations
       in
       [%log.info "formula abstention"
-        ~root:(Delator.Field.string (root_identity_to_string identity))
-        ~reason:(Delator.Field.string reason)
-        ~formula_events_before:(Delator.Field.int before.events_before)
-        ~formula_events_before_fallback:(Delator.Field.int (event_count identity))
-        ~authority_before:(Delator.Field.string before.authority_before)
-        ~authority_before_fallback:(Delator.Field.string authority_snapshot)
+        ~root:
+          (Delator.Field.string
+             (root_identity_to_string _identity))
+        ~reason:(Delator.Field.string _reason)
+        ~formula_events_before:
+          (Delator.Field.int
+             (_before.events_before [@log_value.info]))
+        ~formula_events_before_fallback:
+          (Delator.Field.int
+             (event_count _identity))
+        ~authority_before:
+          (Delator.Field.string
+             (_before.authority_before [@log_value.info]))
+        ~authority_before_fallback:
+          (Delator.Field.string _authority_snapshot)
         ~authority_equal:
           (Delator.Field.bool
-             (String.equal before.authority_before authority_snapshot))
+             (String.equal
+                (_before.authority_before [@log_value.info])
+                _authority_snapshot))
         ~fallback_unchanged:(Delator.Field.bool true)]
 
-  let trace_evaluation identity ~function_name ~authority_unchanged =
+  let trace_evaluation _identity ~function_name:_function_name
+      ~authority_unchanged:_authority_unchanged =
     if tracing () then
       [%log.info "formula evaluation"
-        ~root:(Delator.Field.string (root_identity_to_string identity))
-        ~function_name:(Delator.Field.string function_name)
-        ~formula_events:(Delator.Field.int (event_count identity))
-        ~authority_unchanged:(Delator.Field.bool authority_unchanged)]
+        ~root:
+          (Delator.Field.string
+             (root_identity_to_string _identity))
+        ~function_name:
+          (Delator.Field.string _function_name)
+        ~formula_events:
+          (Delator.Field.int (event_count _identity))
+        ~authority_unchanged:
+          (Delator.Field.bool _authority_unchanged)]
 
   let has_model_capability permit =
     List.exists (fun (_, fields) -> fields <> []) permit.model_capabilities
@@ -486,7 +510,7 @@ module For_testing = struct
               };
           }
         in
-        let reason, rejected =
+        let reason, _rejected =
           match validate_model_capture validated stale with
           | Error reason -> (reason, true)
           | Ok () -> ("accepted", false)
@@ -494,7 +518,7 @@ module For_testing = struct
         [%log.info "formula validator control"
           ~candidate:(Delator.Field.string "stale-model")
           ~reason:(Delator.Field.string reason)
-          ~rejected:(Delator.Field.bool rejected)];
+          ~rejected:(Delator.Field.bool _rejected)];
         Some
           (Printf.sprintf "formula-validator candidate=stale-model reason=%s"
              reason)

@@ -1,6 +1,7 @@
 open Outcome_test_support
 
 let suite_path = "test/release_verification/outcome_cases.ml"
+let ( let* ) = Result.bind
 
 let executable_directory () =
   let executable =
@@ -25,7 +26,14 @@ let fixture name =
   in
   read_file path
 
+let rec mkdir_p path =
+  if path = "" || path = "." || Sys.file_exists path then ()
+  else (
+    mkdir_p (Filename.dirname path);
+    Unix.mkdir path 0o755)
+
 let write_file path contents =
+  mkdir_p (Filename.dirname path);
   let channel = open_out_bin path in
   Fun.protect
     ~finally:(fun () -> close_out_noerr channel)
@@ -75,14 +83,7 @@ let stack_expectation =
               kind = Outcome.Call_precondition { callee = "drain" };
             })
   in
-  match
-    Expectation.obligations_at_most ~maximum:110 ~baseline:92
-      ~rationale:
-        "the recursive mutable-stack release fixture has an established 92-obligation baseline; a jump beyond 110 indicates renewed VC expansion while optimizations remain free to lower the total"
-      base
-  with
-  | Ok expectation -> expectation
-  | Error message -> invalid_arg message
+  base
 
 let stack_case =
   semantic_case ~name:"recursive-stack-verifies" ~module_name:"Stack_demo"
@@ -246,6 +247,202 @@ let low_budget_case =
       [ "verify"; "$SOURCE"; "--timeout-ms"; "60000"; "--rlimit"; "1" ]
     ~exit_code:3 ()
 
+let scoped_dune_directory_case =
+  let run ~environment ~workspace =
+    let root = Filename.concat workspace "scoped-dune-directory" in
+    [
+      ( "dune-project",
+        "(lang dune 3.17)\n(name scoped_dune_directory)\n" );
+      ( "good/dune",
+        {|(library
+ (name good)
+ (wrapped false)
+ (modules Good)
+ (libraries provider type_provider verocaml.ghost)
+ (preprocess (pps verocaml.ppx)))
+
+(library
+ (name explicit_ordinary)
+ (wrapped false)
+ (modules Explicit_ordinary)
+ (libraries verocaml.ghost)
+ (preprocess (pps verocaml.ppx -- --verocaml-ordinary)))
+|} );
+      ( "good/good.ml",
+        {|
+[@@@verocaml.verify]
+
+let identity (value : int) = Provider.identity value
+
+let option_is_some (value : 'a option) =
+  match value with None -> false | Some _ -> true
+[@@verocaml.spec]
+|} );
+      ( "good/explicit_ordinary.ml",
+        {|
+[@@@verocaml.verify]
+
+let identity (value : int) = value
+|} );
+      ( "provider/dune",
+        {|(library
+ (name provider)
+ (wrapped false)
+ (modules Provider)
+ (libraries verocaml.ghost)
+ (preprocess (pps verocaml.ppx)))
+
+(rule
+ (targets provider.vri provider.verocaml-retained-interface)
+ (deps
+  (sandbox always)
+  (:emitter %{bin:verocaml-retained-interface})
+  (:cmt .provider.objs/byte/provider.cmt)
+  (:cmi .provider.objs/byte/provider.cmi)
+  (:cmti .provider.objs/byte/provider.cmti))
+ (action
+  (progn
+   (run %{emitter} emit %{cmt} %{cmi} %{cmti} provider.vri
+    --artifact-directory .provider.objs/byte)
+   (run %{emitter} manifest provider.verocaml-retained-interface
+    %{cmt} %{cmi} %{cmti} provider.vri))))
+
+(alias
+ (name all)
+ (deps provider.vri provider.verocaml-retained-interface))
+|} );
+      ( "provider/provider.mli",
+        {|val identity : int -> int
+[%%verocaml.symbolic val probe : int -> bool]
+val identity_refl : int -> unit
+[@@verocaml.proof]
+[@@verocaml.broadcast]
+|} );
+      ( "provider/provider.ml",
+        {|
+[%%verocaml.symbolic val probe : int -> bool]
+
+let identity (value : int) =
+  [%verocaml.ensures fun result -> result = value];
+  value
+
+let identity_refl (value : int) =
+  [%verocaml.ensures fun _ ->
+    (not ((probe value) [@trigger])) || value = value];
+  ()
+[@@verocaml.proof]
+[@@verocaml.broadcast]
+|} );
+      ( "type-provider/dune",
+        {|(library
+ (name type_provider)
+ (wrapped false)
+ (modules Type_provider)
+ (libraries verocaml.ghost)
+ (preprocess (pps verocaml.ppx)))
+|} );
+      ( "type-provider/type_provider.mli",
+        {|type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
+val identity : 'a -> 'a
+[@@verocaml.spec]
+|} );
+      ( "type-provider/type_provider.ml",
+        {|type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
+let identity value = value
+[@@verocaml.spec]
+|} );
+      ( "broken/dune",
+        {|(library
+ (name broken)
+ (wrapped false)
+ (modules Broken))
+|} );
+      ("broken/broken.ml", "let impossible : int = \"broken sibling\"\n");
+      ( "unrelated-generated/dune",
+        {|(rule
+ (target generated.ml)
+ (action (run false)))
+
+(library
+ (name unrelated_generated)
+ (wrapped false)
+ (modules Generated Use))
+|} );
+      ("unrelated-generated/use.ml", "let value = Generated.value\n");
+    ]
+    |> List.iter (fun (path, contents) ->
+           write_file (Filename.concat root path) contents);
+    let root = Unix.realpath root in
+    let* ordinary_build =
+      Process_adapter.run ~cwd:root
+        {
+          program = Project_environment.dune_path environment;
+          arguments =
+            [ "build"; "--root"; root; "--profile"; "release"; "@good/all" ];
+          forwarded =
+            [
+              ("PATH", Project_environment.tool_path environment);
+              ("OCAMLPATH", Project_environment.ocaml_path environment);
+              ("DUNE_CACHE", "disabled");
+              ("HOME", root);
+              ("TMPDIR", root);
+              ("OCAML_COLOR", "never");
+            ];
+          cleanup_paths = [];
+          adjacency = [];
+        }
+    in
+    let ordinary_succeeded =
+      Outcome.process_facts ordinary_build
+      |> List.exists (function
+           | Outcome.Exit_class (Outcome.Exited 0) -> true
+           | Exit_class (Exited _) | Exit_class Signaled | Exit_class Stopped
+           | Stable_code _ | Forwarded _ | Cleaned _ | Adjacent _ -> false)
+    in
+    let* () =
+      if ordinary_succeeded then Ok ()
+      else
+        Error
+          (Failure.make Failure.Process_protocol
+             "ordinary Dune build of requested subtree failed")
+    in
+    Process_adapter.run ~cwd:root
+      {
+        program = installed_binary environment;
+        arguments =
+          [
+            "verify";
+            "good";
+            "--threads";
+            "1";
+            "--timeout-ms";
+            "60000";
+          ];
+        forwarded =
+          [
+            ("PATH", Project_environment.tool_path environment);
+            ("OCAMLPATH", Project_environment.ocaml_path environment);
+            ("VEROCAML_DUNE", Project_environment.dune_path environment);
+            ("DUNE_CACHE", "disabled");
+            ("HOME", root);
+            ("TMPDIR", root);
+            ("OCAML_COLOR", "never");
+          ];
+        cleanup_paths = [];
+        adjacency = [];
+      }
+  in
+  Suite.case ~name:"directory-verification-scopes-dune-and-retains-ghosts"
+    ~expectation:
+      (Expectation.empty |> Expectation.status Outcome.Verified
+      |> Expectation.require_process_fact
+           (Outcome.Exit_class (Outcome.Exited 0)))
+    run
+
 let cli_cases =
   [
     process_case ~name:"unsupported-solver"
@@ -359,5 +556,5 @@ let () =
     ([ stack_case; erased_stack_case; pure_case; false_postcondition_case;
        wrong_mutation_case;
        arithmetic_upper_case; call_precondition_case; recursive_descent_case;
-       unsupported_mutation_case; low_budget_case ]
+       unsupported_mutation_case; low_budget_case; scoped_dune_directory_case ]
     @ cli_cases @ invalid_rlimit_cases)

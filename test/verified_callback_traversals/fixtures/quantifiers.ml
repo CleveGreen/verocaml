@@ -1,3 +1,5 @@
+open Vstd
+
 type 'a option_specification = 'a option
 [@@verocaml.external_type_specification]
 
@@ -5,11 +7,11 @@ type 'a seq = Nil | Cons of 'a * 'a seq
 type 'a tree = Leaf | Node of 'a * 'a tree * 'a tree
 
 let observed (_value : 'a) : bool = false [@@verocaml.spec]
-let observed_scalar (_value : int) : bool = false [@@verocaml.spec]
+let observed_scalar (_value : Int.t) : bool = false [@@verocaml.spec]
 
-let rec observed_int (value : int) : bool =
+let rec observed_int (value : Int.t) : bool =
   [%verocaml.decreases value];
-  forall (fun (candidate : int) ->
+  forall (fun (candidate : Int.t) ->
     ((observed_scalar candidate) [@trigger])
     = if value <= 0 then true else observed_int (value - 1))
 [@@verocaml.spec]
@@ -23,7 +25,7 @@ let quantifiers
     (number : int)
     (flag : bool) : int =
   [%verocaml.requires
-    forall (fun (n : int) -> ((observed n) [@trigger]) || n = n)];
+    forall (fun (n : Int.t) -> ((observed n) [@trigger]) || n = n)];
   [%verocaml.requires
     forall (fun (b : bool) ->
       ((observed b) [@trigger]) || b = b)];
@@ -52,33 +54,33 @@ let quantifiers
       | Leaf -> x = Leaf
       | Node (value, left, right) ->
           x = Node (value, left, right) && left = left && right = right)];
-  [%verocaml.requires exists (fun (n : int) -> n = number)];
+  [%verocaml.requires exists (fun (n : Int.t) -> n = number)];
   [%verocaml.requires exists (fun (b : bool) -> b = flag)];
   [%verocaml.requires exists (fun (x : 'a) -> x = abstract)];
   [%verocaml.requires exists (fun (x : 'a option) -> x = optional)];
   [%verocaml.requires exists (fun (x : 'a seq) -> x = sequence)];
   [%verocaml.requires exists (fun (x : 'a tree) -> x = tree)];
   [%verocaml.requires
-    forall (fun (outer : int) ->
+    forall (fun (outer : Int.t) ->
       ((observed outer) [@trigger])
-      || exists (fun (inner : int) ->
+      || exists (fun (inner : Int.t) ->
            inner = outer
-           && forall (fun (nested : int) ->
+           && forall (fun (nested : Int.t) ->
                 ((observed nested) [@trigger]) || nested = nested)))];
-  [%verocaml.ensures fun result -> exists (fun (n : int) -> n = result)];
+  [%verocaml.ensures fun result -> exists (fun (n : Int.t) -> n = result)];
   [%verocaml.ensures fun result ->
-    forall (fun (candidate : int) ->
+    forall (fun (candidate : Int.t) ->
       ((observed candidate) [@trigger]) || result = result)];
   [%verocaml.assert
-    forall (fun (n : int) -> ((observed n) [@trigger]) || n = n)];
+    forall (fun (n : Int.t) -> ((observed n) [@trigger]) || n = n)];
   [%verocaml.proof ()];
   number
 
-let proof_quantifier (value : int) : unit =
+let proof_quantifier (value : Int.t) : unit =
   [%verocaml.assert
-    forall (fun (candidate : int) ->
+    forall (fun (candidate : Int.t) ->
       ((observed candidate) [@trigger]) || candidate = candidate)];
-  [%verocaml.assert exists (fun (witness : int) -> witness = value)];
+  [%verocaml.assert exists (fun (witness : Int.t) -> witness = value)];
   ()
 [@@verocaml.proof]
 

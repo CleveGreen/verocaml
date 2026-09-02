@@ -77,7 +77,20 @@ type ('context, 'state, 'error) callbacks = {
   with_environment : 'state -> (int * value) list -> 'state;
   assume : 'state -> Vir.boolean_term list -> 'state;
   observe_field_read :
-    'context -> 'state -> Sst.field_id -> Vir.aggregate_term -> value -> 'state;
+    'context ->
+    'state ->
+    Sst.expression ->
+    Sst.field_id ->
+    Vir.aggregate_term ->
+    value ->
+    ('state, 'error) result;
+  observe_construction :
+    'context ->
+    'state ->
+    Sst.expression ->
+    (Sst.expression * value) list ->
+    Vir.aggregate_term ->
+    (Vir.aggregate_term * 'state, 'error) result;
   enter_definition : 'context -> Sst.function_definition -> 'context;
   evaluate_recursive :
     'context -> Sst.expression -> 'state -> (value * 'state, 'error) result;
@@ -136,7 +149,7 @@ val selected_parametric_value_without_state :
   Sst.typ ->
   value
 
-val ranges_of_value : value -> Vir.boolean_term list
+val ranges_of_value : Sst.typ -> value -> Vir.boolean_term list
 
 val resolve_optional :
   error:(string -> 'error) ->

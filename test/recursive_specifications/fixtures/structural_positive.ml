@@ -1,7 +1,9 @@
+open Vstd
+
 type 'a chain = Empty | Link of 'a * 'a chain
 type 'a tree = Leaf of 'a | Node of 'a tree * 'a tree
 
-let rec length (xs : int chain) : int =
+let rec length (xs : int chain) : Int.t =
   [%verocaml.decreases xs];
   match xs with Empty -> 0 | Link (_, tail) -> 1 + length tail
 [@@verocaml.spec] [@@verocaml.revealed]
@@ -18,7 +20,7 @@ let rec equal_chain (xs : int chain) (ys : int chain) : bool =
         | Link (y, yt) -> x = y && equal_chain xt yt)
 [@@verocaml.spec] [@@verocaml.revealed]
 
-let rec tree_size (tree : int tree) : int =
+let rec tree_size (tree : int tree) : Int.t =
   [%verocaml.decreases tree];
   match tree with
   | Leaf _ -> 1

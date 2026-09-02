@@ -21,7 +21,21 @@ type ('context, 'state, 'error) callbacks = {
   environment : 'state -> (int * value) list;
   with_environment : 'state -> (int * value) list -> 'state;
   assume : 'state -> Vir.boolean_term list -> 'state;
-  observe_field_read : 'context -> 'state -> Sst.field_id -> Vir.aggregate_term -> value -> 'state;
+  observe_field_read :
+    'context ->
+    'state ->
+    Sst.expression ->
+    Sst.field_id ->
+    Vir.aggregate_term ->
+    value ->
+    ('state, 'error) result;
+  observe_construction :
+    'context ->
+    'state ->
+    Sst.expression ->
+    (Sst.expression * value) list ->
+    Vir.aggregate_term ->
+    (Vir.aggregate_term * 'state, 'error) result;
   enter_definition : 'context -> Sst.function_definition -> 'context;
   evaluate_recursive : 'context -> Sst.expression -> 'state -> (value * 'state, 'error) result;
   error : Diagnostic.span -> string -> 'error;
@@ -42,19 +56,17 @@ let application_term error span =
 let boolean_conditional condition consequent alternative =
   Vir.Boolean_or (Vir.Boolean_and (condition, consequent),
     Vir.Boolean_and (Vir.Boolean_not condition, alternative))
-let conjunction = function
-  | [] -> Vir.Boolean_constant true
-  | first :: rest -> List.fold_left
-      (fun combined term -> Vir.Boolean_and (combined, term)) first rest
-let quantified_body kind binder body =
-  match binder.Vir.sort with
-  | Vir.Integer ->
-      let range = conjunction (Vir.integer_range (Vir.Integer_symbol binder)) in
-      (match kind with
-      | Logic_quantifier_private.Forall ->
-          Vir.Boolean_or (Vir.Boolean_not range, body)
-      | Logic_quantifier_private.Exists -> Vir.Boolean_and (range, body))
-  | Vir.Boolean | Vir.Aggregate _ | Vir.Parametric _ -> body
+let quantified_body kind binder_type binder body =
+  Spec_function_type_private.quantifier_body
+    {
+      integer_range =
+        (fun () -> Vir.integer_range (Vir.Integer_symbol binder));
+      truth = Vir.Boolean_constant true;
+      conjunction = (fun left right -> Vir.Boolean_and (left, right));
+      disjunction = (fun left right -> Vir.Boolean_or (left, right));
+      negation = (fun term -> Vir.Boolean_not term);
+    }
+    kind binder_type body
 let quantified_value callbacks =
   Spec_function_logic_private.quantified_value
     ~aggregate_type:callbacks.aggregate_type ~error:callbacks.error
@@ -368,9 +380,11 @@ let authorize_field_read runtime (expression : Sst.expression) field =
       Logical_spec_capability_private.authorize_field_read permit ~validated
         ~current_model:runtime.current_model field ~result_type:expression.Sst.typ
       |> Result.map_error (runtime.callbacks.error expression.span))
-let observe_field_read callbacks observe context state field aggregate value =
-  if observe then callbacks.observe_field_read context state field aggregate value
-  else state
+let observe_field_read callbacks observe context state expression field aggregate
+    value =
+  if observe then
+    callbacks.observe_field_read context state expression field aggregate value
+  else Ok state
 let field_read_eval runtime context (expression : Sst.expression) state field aggregate =
   let* observe = authorize_field_read runtime expression field in
   let conditional_assumptions = ref [] in
@@ -397,7 +411,23 @@ let field_read_eval runtime context (expression : Sst.expression) state field ag
     | Vir.Aggregate_recursive_spec_application _
     | Vir.Aggregate_symbolic_application _ -> select_symbolically aggregate
   and select_symbolically aggregate =
-    if aggregate.Vir.aggregate_type.aggregate_type_arguments = [] then
+    let aggregate_argument_count =
+      List.length aggregate.Vir.aggregate_type.aggregate_type_arguments
+    in
+    let parametric_result = requires_parametric_selection expression.typ in
+    [%log.trace "selected logical aggregate field representation"
+      ~stage:(Delator.Field.string "logical-field-selection")
+      ~aggregate_argument_count:(Delator.Field.int aggregate_argument_count)
+      ~result_type:
+        (Delator.Field.string (Parametric_type.to_string expression.typ))
+      ~parametric_result:(Delator.Field.bool parametric_result)
+      ~route:
+        (Delator.Field.string
+           (if aggregate_argument_count > 0 || parametric_result then
+              "parametric-selector"
+            else "legacy-selector"))
+      ~decision:(Delator.Field.string "selected")];
+    if aggregate_argument_count = 0 && not parametric_result then
       Ok (selected_value_without_state aggregate (field_selector field) [] expression.typ)
     else Ok (selected_parametric_value_without_state
       ~aggregate_type:runtime.callbacks.aggregate_type aggregate
@@ -406,7 +436,11 @@ let field_read_eval runtime context (expression : Sst.expression) state field ag
   in
   let* value = select aggregate in
   let state = runtime.callbacks.assume state !conditional_assumptions in
-  Ok (value, observe_field_read runtime.callbacks observe context state field aggregate value)
+  let* state =
+    observe_field_read runtime.callbacks observe context state expression field
+      aggregate value
+  in
+  Ok (value, state)
 let rec evaluate_list runtime context state expressions =
   match expressions with
   | [] -> Ok ([], state)
@@ -435,6 +469,7 @@ and expression_eval runtime context (expression : Sst.expression) state =
       in
       Ok (Tuple_value values, state)
   | Sst.Record_value { record_type; fields } ->
+      let source_fields = fields in
       let* values, state =
         evaluate_list runtime context state (List.map snd fields)
       in
@@ -459,15 +494,21 @@ and expression_eval runtime context (expression : Sst.expression) state =
         validate_aggregate runtime expression.span record_type expression.typ
           aggregate_type
       in
-      Ok
-        ( Aggregate_value
-            {
-              Vir.aggregate_type;
-              aggregate_desc = Vir.Aggregate_record { record_type; fields };
-            },
-          state )
-  | Sst.Constructor_value { constructor; arguments } ->
-      let* values, state = evaluate_list runtime context state arguments in
+      let aggregate =
+        {
+          Vir.aggregate_type;
+          aggregate_desc = Vir.Aggregate_record { record_type; fields };
+        }
+      in
+      let children = List.map2 (fun (_, child) value -> (child, value)) source_fields values in
+      let* aggregate, state =
+        callbacks.observe_construction context state expression children aggregate
+      in
+      Ok (Aggregate_value aggregate, state)
+  | Sst.Constructor_value { constructor; arguments = source_arguments } ->
+      let* values, state =
+        evaluate_list runtime context state source_arguments
+      in
       let rec convert converted = function
         | [] -> Ok (List.rev converted)
         | value :: rest ->
@@ -487,14 +528,18 @@ and expression_eval runtime context (expression : Sst.expression) state =
         validate_aggregate runtime expression.span constructor.constructor_type
           expression.typ aggregate_type
       in
-      Ok
-        ( Aggregate_value
-            {
-              Vir.aggregate_type;
-              aggregate_desc =
-                Vir.Aggregate_constructor { constructor; arguments };
-            },
-          state )
+      let aggregate =
+        {
+          Vir.aggregate_type;
+          aggregate_desc =
+            Vir.Aggregate_constructor { constructor; arguments };
+        }
+      in
+      let children = List.map2 (fun child value -> (child, value)) source_arguments values in
+      let* aggregate, state =
+        callbacks.observe_construction context state expression children aggregate
+      in
+      Ok (Aggregate_value aggregate, state)
   | Sst.Field_read { record; field } -> (
       let* record, state = recurse record state in
       match record with
@@ -606,6 +651,10 @@ and checked_arithmetic_eval runtime context (expression : Sst.expression) state
       let* operand, state = recurse operand state in
       let* operand = expect_integer runtime expression.span operand in
       Ok (Integer_value (Vir.Integer_negate operand), state)
+  | Sst.Multiply, [ left; right ] ->
+      binary_integer
+        (fun left right -> Vir.Integer_multiply (left, right))
+        left right
   | Sst.Multiply_constant coefficient, [ operand ] ->
       let* operand, state = recurse operand state in
       let* operand = expect_integer runtime expression.span operand in
@@ -663,7 +712,8 @@ and quantifier_eval runtime context (expression : Sst.expression) state
     Vir.make_boolean_quantifier
       ~sort_of_type:(fun typ ->
         match typ with
-        | Parametric_type.Int -> Ok Vir.Integer
+        | Parametric_type.Int | Parametric_type.Mathematical_int ->
+            Ok Vir.Integer
         | Bool -> Ok Vir.Boolean
         | Parameter binder -> Ok (Vir.Parametric binder)
         | Application _ as typ when Parametric_type.is_spec_function typ ->
@@ -676,7 +726,10 @@ and quantifier_eval runtime context (expression : Sst.expression) state
             Error "unsupported quantifier binder sort")
       ~schema:
         (Logic_quantifier_private.singleton quantifier.quantifier_metadata)
-      ~binders:[ binder ] ~body:(quantified_body kind binder body) ~trigger
+      ~binders:[ binder ]
+      ~body:
+        (quantified_body kind quantifier.quantifier_binder.typ binder body)
+      ~trigger
     |> Result.map_error (callbacks.error expression.span)
   in
   Ok
@@ -690,6 +743,7 @@ and scalar_eval runtime context (expression : Sst.expression) state =
   let error = callbacks.error in
   let recurse = expression_eval runtime context in
   match expression.expression_desc with
+  | Sst.Lift_runtime_int operand -> recurse operand state
   | Sst.Checked_arithmetic (operation, arguments) ->
       checked_arithmetic_eval runtime context expression state operation
         arguments
@@ -964,12 +1018,6 @@ and specification_function_reference_eval runtime _context expression state
         List.map (fun (argument : Sst.expression) -> argument.typ)
           source_arguments
       in
-      let* function_term =
-        Spec_function_logic_private.named ~arrow:expression.typ
-          ~function_id:callee ~type_arguments ~arguments:vir_arguments
-          ~argument_types ~span:expression.span
-        |> Result.map_error (error expression.span)
-      in
       let named_arguments =
         List.map2
           (fun argument value ->
@@ -977,25 +1025,113 @@ and specification_function_reference_eval runtime _context expression state
             (label, value))
           arguments values
       in
-      let function_ =
-        {
-          function_term;
-          function_arrow = expression.typ;
-          function_closure =
-            Named_function
-              {
-                definition;
-                named_arguments;
-                named_argument_types = argument_types;
-                named_type_arguments = type_arguments;
-              };
-        }
+      let substitute =
+        Parametric_type.substitute
+          (List.combine definition.type_binders type_arguments)
       in
-      let* state =
-        materialize_named_axioms runtime _context expression.span function_
-          state
+      let parameters =
+        List.map Sst.require_value_parameter definition.parameters
+        |> List.map (fun (parameter : Sst.value_parameter) ->
+               {
+                 parameter with
+                 Sst.pattern =
+                   Sst.map_pattern_types substitute parameter.pattern;
+               })
       in
-      Ok (Function_value function_, state)
+      if List.length named_arguments < List.length parameters then
+        let* function_term =
+          Spec_function_logic_private.named ~arrow:expression.typ
+            ~function_id:callee ~type_arguments ~arguments:vir_arguments
+            ~argument_types ~span:expression.span
+          |> Result.map_error (error expression.span)
+        in
+        let function_ =
+          {
+            function_term;
+            function_arrow = expression.typ;
+            function_closure =
+              Named_function
+                {
+                  definition;
+                  named_arguments;
+                  named_argument_types = argument_types;
+                  named_type_arguments = type_arguments;
+                };
+          }
+        in
+        let* state =
+          materialize_named_axioms runtime _context expression.span function_
+            state
+        in
+        Ok (Function_value function_, state)
+      else if List.length named_arguments = List.length parameters then
+        let caller_environment = callbacks.environment state in
+        let* environment =
+          List.fold_left2
+            (fun result parameter (_, actual) ->
+              let* environment = result in
+              bind_pattern callbacks.aggregate_type error environment
+                parameter.Sst.pattern actual)
+            (Ok []) parameters named_arguments
+        in
+        let[@log_value.debug] argument_type_view =
+          let rec bounded remaining reversed = function
+            | rest when remaining = 0 ->
+                (List.rev reversed, List.length rest)
+            | [] -> (List.rev reversed, 0)
+            | typ :: rest ->
+                bounded (remaining - 1)
+                  (Delator.Field.string (Parametric_type.to_string typ)
+                  :: reversed)
+                  rest
+          in
+          let shown, dropped = bounded 16 [] argument_types in
+          Delator.Field.seq ~dropped shown
+        in
+        [%log.debug "evaluating saturated named specification-function reference"
+          ~stage:(Delator.Field.string "specification-function-evaluation")
+          ~function_name:(Delator.Field.string callee.function_name)
+          ~application_shape:
+            (Delator.Field.map
+               [ ("argument_types", argument_type_view [@log_value.debug]);
+                 ( "result",
+                   Delator.Field.string
+                     (Parametric_type.to_string expression.typ) ) ])
+          ~decision:(Delator.Field.string "evaluate-body")];
+        (match definition.body with
+        | Sst.Spec_definition body ->
+            let nested_context =
+              callbacks.enter_definition _context definition
+            in
+            let* value, state =
+              expression_eval runtime nested_context
+                (Sst.map_expression_types substitute body.expression)
+                (callbacks.with_environment state environment)
+            in
+            Ok
+              (value, callbacks.with_environment state caller_environment)
+        | Sst.Symbolic_declaration declaration ->
+            let* symbolic =
+              Symbolic_application_private.create declaration
+                ~type_arguments ~arguments:vir_arguments ~argument_types
+                ~result_type:expression.typ ~span:expression.span
+              |> Result.map_error (error expression.span)
+            in
+            let* value =
+              value_of_function_application callbacks error expression.span
+                expression.typ symbolic
+            in
+            Ok
+              ( value,
+                callbacks.with_environment state caller_environment )
+        | Sst.Checked_exec _ | Sst.Recursive_spec_definition _
+        | Sst.Proof_body _ | Sst.External_specification _
+        | Sst.Trusted_external_spec_target _ | Sst.Trusted_external_body _ ->
+            assert false)
+      else
+        Error
+          (error expression.span
+             "specification-function reference exceeds its declared arity")
 and specification_function_application_eval runtime context expression state
     application =
   let callbacks = runtime.callbacks in

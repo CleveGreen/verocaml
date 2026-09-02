@@ -19,23 +19,49 @@ let rec aggregate_contains_recursive_specification
       aggregate_contains_recursive_specification consequent
       || aggregate_contains_recursive_specification alternative
   | Vir.Aggregate_symbol _ -> false
-and argument_contains_recursive_specification = function
-  | Vir.Recursive_aggregate_argument aggregate ->
-      aggregate_contains_recursive_specification aggregate
-  | Vir.Recursive_integer_argument _ | Vir.Recursive_boolean_argument _ ->
-      false
-  | Vir.Recursive_parametric_argument term ->
-      (match term.parametric_desc with
-      | Vir.Parametric_symbol _ -> false
-      | Vir.Parametric_selector (_, source) ->
-          aggregate_contains_recursive_specification source
-      | Vir.Parametric_conditional _ -> false
-      | Vir.Parametric_symbolic_application application ->
-          List.exists argument_contains_recursive_specification
-            (Symbolic_application_private.arguments application))
+and argument_contains_recursive_specification argument =
+  let contains_recursive_specification =
+    Vir.recursive_spec_argument_has_recursive_specification argument
+  in
+  [%log.trace "classified recursive specification argument"
+    ~stage:(Delator.Field.string "recursive-term-analysis")
+    ~argument_kind:
+      (Delator.Field.string
+         (match argument with
+         | Vir.Recursive_integer_argument _ -> "integer"
+         | Vir.Recursive_boolean_argument _ -> "boolean"
+         | Vir.Recursive_aggregate_argument _ -> "aggregate"
+         | Vir.Recursive_parametric_argument _ -> "parametric"))
+    ~contains_recursive_specification:
+      (Delator.Field.bool contains_recursive_specification)];
+  contains_recursive_specification
 
 let argument_type ~parametric_adts ~expected = function
-  | Vir.Recursive_integer_argument _ -> Sst.Int
+  | Vir.Recursive_integer_argument _ ->
+      let resolved =
+        match expected with
+        | Some (Sst.Int | Sst.Mathematical_int as typ) -> typ
+        | Some
+            ( Sst.Unit | Sst.Bool | Sst.Tuple _ | Sst.Aggregate _
+            | Sst.Parameter _ | Sst.Application _ )
+        | None ->
+            Sst.Int
+      in
+      [%log.trace "resolved recursive integer argument semantic sort"
+        ~stage:(Delator.Field.string "recursive-term-analysis")
+        ~expected_sort:
+          (Delator.Field.string
+             (Option.fold ~none:"absent"
+                ~some:Parametric_type.to_string expected))
+        ~resolved_sort:
+          (Delator.Field.string (Parametric_type.to_string resolved))
+        ~decision:
+          (Delator.Field.string
+             (match expected with
+             | Some (Sst.Int | Sst.Mathematical_int) ->
+                 "preserved-authenticated-integer-sort"
+             | Some _ | None -> "runtime-integer-fallback"))];
+      resolved
   | Vir.Recursive_boolean_argument _ -> Sst.Bool
   | Vir.Recursive_aggregate_argument term ->
       let aggregate = term.Vir.aggregate_type in

@@ -1,21 +1,56 @@
-(cram
- (applies_to external_specifications)
- (alias ui-goldens-check)
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
  (deps
-  (glob_files ../external_specifications/fixtures/*.ml)
-  ../external_specifications/external_specifications_tool.exe
-  ../../src/verocaml.exe
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
 
-(cram
- (applies_to source_input)
- (alias ui-goldens-check)
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support))
+
+(rule
+ (targets
+  ui-semantic-outcome-cases.result-report
+  ui-semantic-outcome-cases.failure-archive)
  (deps
-  (glob_files ../source_input/fixtures/*.ml)
-  ../source_input/source_input_compiler_helper.exe
-  ../../src/verocaml.exe
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  ../external_specifications/fixtures/payload.ml
+  ../pure_specifications/fixtures/payload.ml
+  ../specification_frontend/fixtures/invalid_empty.ml
+  ../trusted_external_bodies/fixtures/missing_ensures.ml
+  ../source_input/fixtures/compile_error.ml
+  ../release_verification/fixtures/pure_verified.ml
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   ui-semantic-outcome-cases.result-report
+   ui-semantic-outcome-cases.failure-archive)))
+
+(rule
+ (alias ui-goldens-outcome-check)
+ (deps
+  (:report ui-semantic-outcome-cases.result-report)
+  (:archive ui-semantic-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
+(alias
+ (name ui-goldens-check)
+ (deps
+  (alias ui-goldens-outcome-check)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias ui-goldens-outcome-check)))

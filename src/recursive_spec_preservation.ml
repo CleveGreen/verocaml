@@ -257,7 +257,7 @@ module Finite_expression = struct
                          (Local_pattern (pattern, finite), finite))
               in
               Ok ((binding.id, finite) :: environment)
-          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _
+          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
           | Sst.Parameter _ -> Ok environment)
       | Sst.Record_pattern fields ->
           List.fold_left
@@ -291,14 +291,15 @@ module Finite_expression = struct
                  match binding.typ with
                  | Sst.Aggregate _ | Sst.Application _ ->
                      (binding.id, issue_local Exact_formal) :: environment
-                 | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _
+                 | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                 | Sst.Tuple _
                  | Sst.Parameter _ -> environment)
              | _ -> environment)
            []
     in
     let rec check environment (expression : Sst.expression) =
       match expression.typ with
-      | Sst.Unit | Sst.Bool | Sst.Int ->
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int ->
           Error "scalar escaped aggregate recursive-Spec finite checking"
       | Sst.Tuple _ | Sst.Parameter _ ->
           Error "non-aggregate escaped immutable recursive-Spec finite checking"
@@ -346,7 +347,7 @@ module Finite_expression = struct
                   (fun result (pattern, value) ->
                     let* environment, counts = result in
                     match value.Sst.typ with
-                    | Sst.Unit | Sst.Bool | Sst.Int ->
+                    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int ->
                         Ok (environment, counts)
                     | Sst.Tuple _ | Sst.Parameter _ ->
                         Error
@@ -403,7 +404,8 @@ module Finite_expression = struct
                     | Sst.Aggregate _ | Sst.Application _ ->
                         let* finite, next = check environment actual in
                         Ok (finite :: facts, add_counts counts next)
-                    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _
+                    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                    | Sst.Tuple _
                     | Sst.Parameter _ ->
                         Ok (facts, counts))
                   (Ok ([], empty_counts)) arguments
@@ -430,7 +432,8 @@ module Finite_expression = struct
             | Sst.Aggregate _ | Sst.Application _ ->
                 let* finite, next = check environment child in
                 Ok (Exact_fact finite :: facts, add_counts counts next)
-            | Sst.Unit | Sst.Bool | Sst.Int -> Ok (facts, counts)
+            | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int ->
+                Ok (facts, counts)
             | Sst.Tuple _ | Sst.Parameter _ ->
                 Error "non-aggregate child escaped immutable finite construction")
           (Ok ([], empty_counts)) children
@@ -514,7 +517,8 @@ let authenticated_logical_application program = function
                        ]) ->
           true
       | Some _ | None -> false)
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Aggregate _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Aggregate _
   | Sst.Parameter _ ->
       false
 
@@ -536,7 +540,7 @@ let rank_domain_for_result program rank_domains result_type =
     | Some _, Some _ -> None
   in
   let rec classify visiting = function
-    | Sst.Unit | Sst.Bool | Sst.Int -> Some None
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> Some None
     | Sst.Tuple _ | Sst.Parameter _ -> None
     | Sst.Application _ as application -> (
         match aggregate_type_of_typ program application with
@@ -601,7 +605,7 @@ let frozen_helper program (definition : Sst.function_definition) =
 let analyze ~program ~(definition : Sst.function_definition) ~expanded_body
     ~helper_closure_snapshot ~rank_domains ~termination_obligations =
   match definition.result_type with
-  | Sst.Int | Sst.Bool | Sst.Parameter _ -> Ok None
+  | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Parameter _ -> Ok None
   | Sst.Application _ as typ when Parametric_type.is_spec_function typ ->
       Ok None
   | Sst.Unit | Sst.Tuple _ ->

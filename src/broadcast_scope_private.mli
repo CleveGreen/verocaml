@@ -2,6 +2,7 @@ type declaration_kind = Proved | Trusted
 
 type declaration = {
   declaration_id : string;
+  compiler_uid : string;
   function_id : Sst.function_id;
   kind : declaration_kind;
   declaration_span : Diagnostic.span;
@@ -9,10 +10,17 @@ type declaration = {
   preverified : bool;
 }
 
-type target = { target_id : string; target_group : bool }
+type target = {
+  target_id : string;
+  target_group : bool;
+  target_path : string;
+  target_uid : string;
+  target_interface_uid : string option;
+}
 
 type group = {
   group_id : string;
+  compiler_uid : string;
   group_name : string;
   targets : target list;
   span : Diagnostic.span;

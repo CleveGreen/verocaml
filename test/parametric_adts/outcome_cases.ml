@@ -22,7 +22,7 @@ let fixture_source name =
 
 let input module_name fixture =
   Fixture.single_source ~module_name ~source:(fixture_source fixture)
-    ~libraries:[ "verocaml.ghost" ]
+    ~libraries:[ "verocaml.ghost"; "verocaml.vstd" ]
 
 let mismatch format =
   Printf.ksprintf
@@ -78,13 +78,27 @@ let load_implementation cmt =
         (Failure.make Failure.Selected_cmt_load
            (Printf.sprintf "%s: %s" diagnostic.Diagnostic.code diagnostic.message))
 
-let verify_prepared ~threads ~unit_name cmt =
+let verify_prepared ~environment ~threads ~unit_name cmt =
   let* () =
     match Fixture.prepared_cmt ~declared_dependencies:[ cmt ] cmt with
     | Ok _ -> Ok ()
     | Error message -> mismatch "prepared CMT declaration: %s" message
   in
   let* implementation = load_implementation cmt in
+  let* providers =
+    Fixture.retained_providers ~environment
+      ~libraries:[ "verocaml.vstd" ]
+  in
+  let imported_units =
+    implementation.Cmt_input.imports |> Array.to_list
+    |> List.map (fun (import : Cmt_input.import) -> import.unit_name)
+  in
+  let dependencies =
+    List.filter
+      (fun (provider : Cmt_input.implementation) ->
+        List.mem provider.unit_name imported_units)
+      providers
+  in
   let* configuration =
     match
       Verifier_service.configuration ~threads ~timeout_ms:10_000 ~rlimit:None
@@ -97,7 +111,7 @@ let verify_prepared ~threads ~unit_name cmt =
   in
   let request =
     Verifier_service.request ~configuration ~consumer:implementation
-      ~dependencies:[]
+      ~dependencies
   in
   match Verifier_service.verify request with
   | Ok result ->
@@ -121,7 +135,9 @@ let parity_runner module_name fixture ~environment ~workspace =
   in
   let project_root = Filename.concat source_workspace "project" in
   let* cmt = discover_cmt project_root module_name in
-  let* prepared = verify_prepared ~threads:2 ~unit_name:module_name cmt in
+  let* prepared =
+    verify_prepared ~environment ~threads:2 ~unit_name:module_name cmt
+  in
   let source =
     with_modes
       [ ("input-mode", "dune-project"); ("execution-mode", "threads-1") ]
@@ -294,6 +310,121 @@ let abstract_false_case =
         (input "Abstract_logical_equality_false"
            "abstract_logical_equality_false.ml"))
 
+let nested_external_type_case =
+  let module_name = "Nested_external_types" in
+  let project =
+    Fixture.dune_project
+      {
+        files =
+          [
+            {
+              path = "dune-project";
+              contents = "(lang dune 3.17)\n(name nested_external_types)\n";
+            };
+            {
+              path = "dune";
+              contents =
+                "(library\n (name nested_external_types)\n (wrapped false)\n \
+                 (modules Foreign_external_types Nested_external_types)\n \
+                 (libraries verocaml.ghost)\n (flags (:standard -ppx \
+                 \"verocaml-ppx --keep-ghost\")))\n";
+            };
+            {
+              path = "foreign_external_types.ml";
+              contents = fixture_source "foreign_external_types.ml";
+            };
+            {
+              path = "nested_external_types.ml";
+              contents = fixture_source "nested_external_types.ml";
+            };
+          ];
+        libraries = [ "verocaml.ghost" ];
+        targets = [ "@all" ];
+        selected_units = [ module_name ];
+      }
+  in
+  Suite.case ~name:"generic-external-types-compose-when-deeply-nested"
+    ~expectation:
+      (Expectation.empty |> Expectation.status Outcome.Verified
+      |> Expectation.require_unit module_name Outcome.Unit_verified
+      |> Expectation.require_named_fact "function:make_nested_option"
+           (Outcome.Function_exists "make_nested_option")
+      |> Expectation.require_named_fact "function:make_deep_value"
+           (Outcome.Function_exists "make_deep_value")
+      |> Expectation.require_named_fact "function:lemma_observes_box_reflexive"
+           (Outcome.Function_exists "lemma_observes_box_reflexive"))
+    (fun ~environment ~workspace ->
+      Fixture.run ~environment ~workspace project)
+
+let optional_carrier_project ~name ~consumer_module ~consumer_fixture =
+  Fixture.dune_project
+    {
+      files =
+        [
+          {
+            path = "dune-project";
+            contents = Printf.sprintf "(lang dune 3.17)\n(name %s)\n" name;
+          };
+          {
+            path = "dune";
+            contents =
+              Printf.sprintf
+                "(library\n (name %s)\n (wrapped false)\n (modules \
+                 Optional_carrier_shapes %s)\n (libraries verocaml.ghost)\n \
+                 (flags (:standard -ppx \"verocaml-ppx --keep-ghost\")))\n"
+                name consumer_module;
+          };
+          {
+            path = "optional_carrier_shapes.ml";
+            contents = fixture_source "optional_carrier_shapes.ml";
+          };
+          {
+            path = String.uncapitalize_ascii consumer_module ^ ".ml";
+            contents = fixture_source consumer_fixture;
+          };
+        ];
+      libraries = [ "verocaml.ghost" ];
+      targets = [ "@all" ];
+      selected_units = [ consumer_module ];
+    }
+
+let optional_carrier_identity_case =
+  let module_name = "Optional_carrier_identity" in
+  let project =
+    optional_carrier_project ~name:"optional_carrier_identity"
+      ~consumer_module:module_name
+      ~consumer_fixture:"optional_carrier_identity.ml"
+  in
+  Suite.case ~name:"optional-carrier-uses-exact-compiler-domain-identity"
+    ~expectation:
+      (Expectation.empty |> Expectation.status Outcome.Verified
+      |> Expectation.require_unit module_name Outcome.Unit_verified
+      |> Expectation.require_named_fact "function:omitted"
+           (Outcome.Function_exists "omitted")
+      |> Expectation.require_named_fact "function:provided"
+           (Outcome.Function_exists "provided")
+      |> Expectation.require_named_fact "function:forwarded"
+           (Outcome.Function_exists "forwarded")
+      |> Expectation.require_named_fact "function:nested_forwarded"
+           (Outcome.Function_exists "nested_forwarded"))
+    (fun ~environment ~workspace ->
+      Fixture.run ~environment ~workspace project)
+
+let optional_carrier_forgery_case =
+  let module_name = "Optional_carrier_forgery" in
+  let project =
+    optional_carrier_project ~name:"optional_carrier_forgery"
+      ~consumer_module:module_name
+      ~consumer_fixture:"optional_carrier_forgery.ml"
+  in
+  Suite.case ~name:"lookalike-descriptor-cannot-forge-optional-carrier"
+    ~expectation:
+      (Expectation.empty |> Expectation.status Outcome.Frontend_rejected
+      |> Expectation.require_frontend_code "VERO_UNSUPPORTED_TYPE"
+      |> Expectation.require_unit module_name Outcome.Unit_frontend_rejected)
+    (fun ~environment ~workspace ->
+      Fixture.run ~environment ~workspace project)
+
 let () =
   Suite.run_cli ~suite_path ~manifest:Integration_environment.manifest
     ~expected_environment:Integration_environment.expected
@@ -361,4 +492,7 @@ let () =
         ~fixture:"abstract_logical_equality.ml"
         [ "tree_reflexive"; "tree_reconstruction"; "record_reconstruction" ];
       abstract_false_case;
+      nested_external_type_case;
+      optional_carrier_identity_case;
+      optional_carrier_forgery_case;
     ]

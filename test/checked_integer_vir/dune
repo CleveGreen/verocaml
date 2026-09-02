@@ -44,12 +44,6 @@
  (action
   (run %{validator} %{report} %{archive})))
 
-(cram
- (deps
-  (glob_files fixtures/*.ml)
-  checked_integer_vir_tool.exe
-  ../../src/.verocaml_core.objs/byte/vir.cmi))
-
 (alias
  (name checked-integer-vir-check)
  (deps

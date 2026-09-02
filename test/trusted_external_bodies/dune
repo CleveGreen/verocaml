@@ -32,6 +32,7 @@
 (executable
  (name outcome_cases)
  (modules outcome_cases integration_environment)
+ (flags (:standard -opaque))
  (libraries outcome_test_support unix))
 
 (rule
@@ -58,14 +59,6 @@
   (:validator ../support/report_validator.exe))
  (action
   (run %{validator} %{report} %{archive})))
-
-(cram
- (alias trusted-external-bodies-specialist-check)
- (runtest_alias false)
- (deps (glob_files fixtures/*.ml) trusted_external_bodies_tool.exe
-  ../../ppx/vero_ppx.exe ../../src/verocaml.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
 
 (alias
  (name trusted-external-bodies-check)

@@ -1,3 +1,5 @@
+[@@@verocaml.verify]
+
 type 'a box = Box of 'a
 
 type 'a node = Empty | Node of 'a * 'a node
@@ -55,7 +57,7 @@ let use_sequence_axiom (sequence : 'a Vstd.Seq.t) : unit =
   axiom_sequence_value sequence
 [@@verocaml.proof]
 
-let rec node_length (node : 'a node) : int =
+let rec node_length (node : 'a node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with Empty -> 0 | Node (_, rest) -> 1 + node_length rest
 [@@verocaml.spec]

@@ -63,18 +63,6 @@
  (action
   (run %{validator} %{report} %{archive})))
 
-(cram
- (deps
-  (glob_files fixtures/*.ml)
-  (glob_files fixtures/*.mli)
-  finite_result_promotion_tool.exe
-  ../../src/.verocaml_core.objs/byte/finite_value_registry.cmi
-  ../../src/.verocaml_core.objs/byte/sst.cmi
-  ../../src/verocaml.exe
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
-
 (alias
  (name finite-result-promotion-check)
  (deps

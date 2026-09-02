@@ -27,7 +27,8 @@ type t = {
   type_constructor : Parametric_type.constructor;
   binders : Parametric_type.binder list;
   provenance : provenance;
-  optional_carrier : bool;
+  (* Serialized compatibility metadata; optional lowering never treats it as authority. *)
+  legacy_optional_carrier : bool;
   kind : kind;
   recursive_fields : (int option * field) list;
 }
@@ -42,6 +43,11 @@ type option_instance = {
   option_present : constructor;
 }
 
+type optional_carrier_error =
+  | Missing_optional_descriptor
+  | Invalid_optional_descriptor
+  | Optional_payload_mismatch
+
 type error = { descriptor : string; message : string }
 
 let type_id descriptor = descriptor.type_id
@@ -50,7 +56,7 @@ let binders descriptor = descriptor.binders
 let provenance descriptor = descriptor.provenance
 let kind descriptor = descriptor.kind
 let recursive_fields descriptor = descriptor.recursive_fields
-let is_optional_carrier descriptor = descriptor.optional_carrier
+let is_optional_carrier descriptor = descriptor.legacy_optional_carrier
 let authenticates_recursive_field descriptor ~constructor_index ~field_index =
   List.exists
     (fun (candidate_constructor, field) ->
@@ -109,7 +115,7 @@ let binder_matches_type type_id binder =
   binder.Parametric_type.owner.owner_index = type_id.Parametric_type.type_index
   && String.equal binder.owner.owner_name type_id.type_name
 
-let create ~optional_carrier ~type_id ~type_constructor ~binders
+let create ~optional_carrier:legacy_optional_carrier ~type_id ~type_constructor ~binders
     ~provenance ~kind =
   let descriptor_name = type_constructor.Parametric_type.constructor_path in
   let fail message = error type_constructor message in
@@ -121,7 +127,7 @@ let create ~optional_carrier ~type_id ~type_constructor ~binders
         type_constructor;
         binders;
         provenance;
-        optional_carrier;
+        legacy_optional_carrier;
         kind;
         recursive_fields = [];
       }
@@ -183,7 +189,7 @@ let create ~optional_carrier ~type_id ~type_constructor ~binders
             type_constructor;
             binders;
             provenance;
-            optional_carrier;
+            legacy_optional_carrier;
             kind;
             recursive_fields;
           }
@@ -202,7 +208,6 @@ let option_instance descriptors = function
       match find descriptors constructor with
       | Some
           ({ binders = [ binder ];
-             optional_carrier = true;
              kind =
                Variant
                  [ ({ constructor_index = 0; constructor_fields = []; _ } as absent);
@@ -228,8 +233,25 @@ let option_instance descriptors = function
                   option_present = present }
           | Error _ -> None)
       | Some _ | None -> None)
-  | Parametric_type.Unit | Bool | Int | Tuple _ | Aggregate _ | Parameter _ ->
+  | Parametric_type.Unit | Bool | Int | Mathematical_int | Tuple _
+  | Aggregate _ | Parameter _ ->
       None
+
+let authenticate_optional_carrier descriptors ~carrier ~payload =
+  match carrier with
+  | Parametric_type.Application (constructor, _) -> (
+      match find descriptors constructor with
+      | None -> Error Missing_optional_descriptor
+      | Some _ -> (
+          match option_instance descriptors carrier with
+          | None -> Error Invalid_optional_descriptor
+          | Some instance
+            when Parametric_type.equal instance.option_payload_type payload ->
+              Ok instance
+          | Some _ -> Error Optional_payload_mismatch))
+  | Parametric_type.Unit | Bool | Int | Mathematical_int | Tuple _
+  | Aggregate _ | Parameter _ ->
+      Error Missing_optional_descriptor
 
 let application descriptor arguments =
   if List.length arguments <> List.length descriptor.binders then
@@ -237,19 +259,6 @@ let application descriptor arguments =
       (Printf.sprintf "type constructor %s expects %d argument(s)"
          descriptor.type_constructor.constructor_path (List.length descriptor.binders))
   else Ok (Parametric_type.Application (descriptor.type_constructor, arguments))
-
-let option_application descriptors payload =
-  let candidates =
-    List.filter_map
-      (fun descriptor ->
-        match application descriptor [ payload ] with
-        | Ok application
-          when Option.is_some (option_instance [ descriptor ] application) ->
-            Some application
-        | Ok _ | Error _ -> None)
-      descriptors
-  in
-  match candidates with [ application ] -> Some application | [] | _ -> None
 
 let same_application descriptor = function
   | Parametric_type.Application (constructor, arguments) ->
@@ -301,7 +310,9 @@ let validate_registry descriptors =
 
 let deeply_immutable_instance descriptors typ =
   let rec immutable visiting = function
-    | Parametric_type.Bool | Parametric_type.Int -> true
+    | Parametric_type.Bool | Parametric_type.Int
+    | Parametric_type.Mathematical_int ->
+        true
     | Parametric_type.Unit -> true
     | Parametric_type.Parameter _ -> true
     | Parametric_type.Tuple components -> List.for_all (fun (_, typ) -> immutable visiting typ) components
@@ -327,7 +338,8 @@ let deeply_immutable_instance descriptors typ =
 let scalar_kind = function
   | Parametric_type.Bool -> Some Scalar_bool
   | Parametric_type.Int -> Some Scalar_int
-  | Parametric_type.Unit | Tuple _ | Aggregate _ | Parameter _ | Application _ ->
+  | Parametric_type.Mathematical_int | Parametric_type.Unit | Tuple _
+  | Aggregate _ | Parameter _ | Application _ ->
       None
 
 let exec_scalar_layout descriptors typ =
@@ -363,7 +375,8 @@ let exec_scalar_layout descriptors typ =
               else None
           | (false, _ | true, Record _) -> None)
       | Some _ | None -> None)
-  | Parametric_type.Unit | Bool | Int | Tuple _ | Aggregate _ | Parameter _ ->
+  | Parametric_type.Unit | Bool | Int | Mathematical_int | Tuple _
+  | Aggregate _ | Parameter _ ->
       None
 
 let exec_scalar_equality descriptors typ =

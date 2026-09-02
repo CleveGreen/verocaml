@@ -234,6 +234,7 @@ let analyze validated =
 
 let expression_children (expression : Sst.expression) =
   match expression.expression_desc with
+  | Sst.Lift_runtime_int operand -> [ operand ]
   | Sst.Tuple_value values -> List.map snd values
   | Sst.Record_value { fields; _ } -> List.map snd fields
   | Sst.Constructor_value { arguments; _ } -> arguments

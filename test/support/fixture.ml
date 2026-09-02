@@ -1,5 +1,7 @@
 type file = { path : string; contents : string }
 
+let ( let* ) = Result.bind
+
 type dune_project = {
   files : file list;
   libraries : string list;
@@ -149,12 +151,12 @@ let read_file path =
 let run_process ~environment ~root targets =
   let log = Filename.concat root "dune-build.log" in
   let fd = Unix.openfile log [ O_WRONLY; O_CREAT; O_TRUNC ] 0o600 in
-  let package_root = Project_environment.package_root environment in
+  let ocaml_path = Project_environment.ocaml_path environment in
   let path = Project_environment.tool_path environment in
   let variables =
     [|
       "PATH=" ^ path;
-      "OCAMLPATH=" ^ package_root;
+      "OCAMLPATH=" ^ ocaml_path;
       "DUNE_CACHE=disabled";
       "DUNE_CONFIG__DISPLAY=quiet";
       "DELATOR_LOG=trace";
@@ -195,16 +197,26 @@ let run_process ~environment ~root targets =
            (Printf.sprintf "nested Dune stopped %d" signal))
 
 let rec files_below root =
-  Sys.readdir root |> Array.to_list
-  |> List.concat_map (fun name ->
-         let path = Filename.concat root name in
-         if Sys.is_directory path then files_below path else [ path ])
+  try
+    Sys.readdir root |> Array.to_list
+    |> List.concat_map (fun name ->
+           let path = Filename.concat root name in
+           try if Sys.is_directory path then files_below path else [ path ]
+           with Sys_error _ -> [])
+  with Sys_error _ -> []
 
 let discover_cmt root unit_name =
   let expected = String.uncapitalize_ascii unit_name ^ ".cmt" in
+  let rec installed_copy = function
+    | "_build" :: "install" :: _ -> true
+    | _ :: rest -> installed_copy rest
+    | [] -> false
+  in
   let matches =
     files_below (Filename.concat root "_build")
-    |> List.filter (fun path -> Filename.basename path = expected)
+    |> List.filter (fun path ->
+           Filename.basename path = expected
+           && not (installed_copy (String.split_on_char '/' path)))
   in
   match matches with
   | [ path ] -> Ok path
@@ -217,21 +229,74 @@ let discover_cmt root unit_name =
         (Failure.make Failure.Selected_cmt_discovery
            ("ambiguous selected CMT for unit " ^ unit_name))
 
-let load_cmt path =
+let load_cmt ?(artifact_directories = []) path =
+  let path =
+    try Unix.realpath path
+    with Unix.Unix_error _ ->
+      if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path else path
+  in
   let cmi = Filename.remove_extension path ^ ".cmi" in
   let loaded =
-    if Sys.file_exists cmi then Cmt_input.load_with_interface ~cmt:path ~cmi ()
+    if Sys.file_exists cmi then
+      let rec before_build current =
+        if Filename.basename current = "_build" then Filename.dirname current
+        else
+          let parent = Filename.dirname current in
+          if String.equal parent current then current else before_build parent
+      in
+      let root = before_build (Filename.dirname path) in
+      let default_build = Filename.concat root "_build/default" in
+      let information = Cmt_format.read_cmt path in
+      let unit_name =
+        Compilation_unit.name_as_string information.Cmt_format.cmt_modname
+      in
+      let authority =
+        let expected = String.uncapitalize_ascii unit_name ^ ".vri" in
+        files_below default_build
+        |> List.filter (fun candidate ->
+               Filename.basename candidate = expected
+               && String.starts_with ~prefix:(default_build ^ "/") candidate)
+        |> function [ filename ] -> Some filename | [] | _ :: _ :: _ -> None
+      in
+      let local_artifact_directories =
+        files_below default_build
+        |> List.filter (fun filename ->
+               String.starts_with ~prefix:(default_build ^ "/") filename
+               && List.mem (Filename.extension filename) [ ".cmi"; ".cmti"; ".vri" ])
+        |> List.map Filename.dirname |> List.sort_uniq String.compare
+      in
+      let artifact_directories =
+        List.sort_uniq String.compare
+          (artifact_directories @ local_artifact_directories)
+      in
+      Cmt_input.load_with_interface ~cmt:path ~cmi ?vri:authority ~artifact_directories
+        ()
     else Cmt_input.load path
   in
   match loaded with
   | Ok implementation -> Ok (`Implementation implementation)
   | Error diagnostic -> (
       match diagnostic.Diagnostic.classification with
+      | Unsupported_target _
+      | Unsupported_input _
+      | Unsupported_construct _
+      | Invalid_recursive_rank _
+      | Invalid_broadcast _
+      | Invalid_broadcast_dependency _
+      | Invalid_symbolic_declaration _
+      | Invalid_symbolic_application _
+      | Invalid_symbolic_authentication _
+      | Invalid_symbolic_dependency _
+      | Executable_function_in_specification _
+      | Unannotated_erased_call _
+      | Invalid_verification_call _
+      | Invalid_imported_specification _
+      | Invalid_semantic_program _ ->
+          Ok (`Frontend diagnostic.code)
       | Malformed_input | Incompatible_magic | Input_io_error ->
           Error
             (Failure.make Failure.Selected_cmt_load
-               (Printf.sprintf "%s: %s" diagnostic.code diagnostic.message))
-      | _ -> Ok (`Frontend diagnostic.code))
+               (Printf.sprintf "%s: %s" diagnostic.code diagnostic.message)))
 
 let disposition projection =
   match Outcome.status projection with
@@ -241,7 +306,7 @@ let disposition projection =
   | Incomplete_source -> Unit_incomplete_source
   | Frontend_rejected -> Unit_frontend_rejected
 
-let verify_loaded loaded =
+let verify_loaded ~providers loaded =
   let configuration =
     Verifier_service.configuration ~threads:1 ~timeout_ms:60_000 ~rlimit:None
   in
@@ -252,11 +317,18 @@ let verify_loaded loaded =
            (Verifier_service.configuration_error_message error))
   | Ok configuration ->
       let implementations =
-        loaded
-        |> List.filter_map (function
+        let selected =
+          loaded
+          |> List.filter_map (function
              | unit_name, `Implementation implementation ->
                  Some (unit_name, implementation)
              | _, `Frontend _ -> None)
+        in
+        selected
+        @ List.map
+            (fun (implementation : Cmt_input.implementation) ->
+              (implementation.unit_name, implementation))
+            providers
       in
       loaded
       |> List.map (function
@@ -302,6 +374,35 @@ let verify_loaded loaded =
            (Ok [])
       |> Result.map Outcome.merge
 
+let library_provider_directories environment libraries =
+  libraries
+  |> List.map (fun library ->
+         Filename.concat (Project_environment.package_root environment)
+           (String.concat "/" (String.split_on_char '.' library)))
+  |> List.filter Sys.file_exists
+  |> List.sort_uniq String.compare
+
+let retained_providers ~environment ~libraries =
+  let provider_directories =
+    library_provider_directories environment libraries
+  in
+  provider_directories
+  |> List.concat_map (fun directory ->
+         files_below directory
+         |> List.filter (fun path -> Filename.extension path = ".cmt"))
+  |> List.sort_uniq String.compare
+  |> List.fold_left
+       (fun result path ->
+         let* providers = result in
+         match load_cmt ~artifact_directories:provider_directories path with
+         | Ok (`Implementation implementation)
+           when Cmt_input.retained_ppx_artifact implementation ->
+             Ok (implementation :: providers)
+         | Ok _ -> Ok providers
+         | Error failure -> Error failure)
+       (Ok [])
+  |> Result.map List.rev
+
 let run_project ~environment ~workspace project =
   let workspace =
     if Filename.is_relative workspace then Filename.concat (Sys.getcwd ()) workspace
@@ -311,6 +412,9 @@ let run_project ~environment ~workspace project =
   let ( let* ) result next = Result.bind result next in
   let* () = materialize root project in
   let* () = run_process ~environment ~root project.targets in
+  let provider_directories =
+    library_provider_directories environment project.libraries
+  in
   let* selected =
     project.selected_units
     |> List.map (fun unit_name ->
@@ -325,7 +429,9 @@ let run_project ~environment ~workspace project =
   let* loaded =
     selected
     |> List.map (fun (unit_name, path) ->
-           Result.map (fun loaded -> (unit_name, loaded)) (load_cmt path))
+           Result.map
+             (fun loaded -> (unit_name, loaded))
+             (load_cmt ~artifact_directories:provider_directories path))
     |> List.fold_left
          (fun result item ->
            let* items = result in
@@ -333,7 +439,21 @@ let run_project ~environment ~workspace project =
            Ok (item :: items))
          (Ok [])
   in
-  verify_loaded loaded
+  let* providers = retained_providers ~environment ~libraries:project.libraries in
+  let providers =
+    providers
+    |> List.filter (fun implementation ->
+           not
+             (List.exists
+                (fun (_, loaded) ->
+                  match loaded with
+                  | `Implementation selected ->
+                      String.equal selected.Cmt_input.unit_name
+                        implementation.Cmt_input.unit_name
+                  | `Frontend _ -> false)
+                loaded))
+  in
+  verify_loaded ~providers loaded
 
 let run ~environment ~workspace = function
   | Single_source { module_name; source; libraries } ->
@@ -358,4 +478,4 @@ let run ~environment ~workspace = function
               | `Implementation implementation -> implementation.Cmt_input.unit_name
               | `Frontend _ -> Filename.basename artifact
             in
-            verify_loaded [ (unit_name, loaded) ])
+            verify_loaded ~providers:[] [ (unit_name, loaded) ])

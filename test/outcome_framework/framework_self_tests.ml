@@ -243,7 +243,7 @@ let process_self_test () =
           [
             "-c";
             Printf.sprintf
-              "printf 'before %%s VERO_PROCESS_OK after %s\\n' \"$FORWARDED_TOKEN\""
+              "printf 'verocaml: error[VERO_PROCESS_OK]\\nbefore %%s after %s\\n' \"$FORWARDED_TOKEN\""
               noise;
           ];
         forwarded = [ ("FORWARDED_TOKEN", "registered") ];
@@ -282,11 +282,43 @@ let process_self_test () =
                |> String.concat ","
              in
              fail "process %s expectation: %s observed=%s" label message observed);
+  let trace_spoof =
+    Process_adapter.run ~cwd:workspace
+      {
+        program = "/bin/sh";
+        arguments =
+          [
+            "-c";
+            "printf 'INFO Diagnostic event diagnostic created code=VERO_TRACE_ONLY\\nTRACE Probe event content=\\\"[VERO_TRACE_BRACKET]\\\"\\n'";
+          ];
+        forwarded = [];
+        cleanup_paths = [];
+        adjacency = [];
+      }
+    |> require_ok "trace code spoof"
+  in
+  [ "VERO_TRACE_ONLY"; "VERO_TRACE_BRACKET" ]
+  |> List.iter (fun code ->
+         require
+           (not (List.mem (Outcome.Stable_code code) (Outcome.process_facts trace_spoof)))
+           "Delator trace code became a stable process fact: %s" code);
+  let missing_process =
+    Expectation.empty
+    |> Expectation.require_process_fact (Outcome.Stable_code "VERO_MISSING_ONE")
+    |> Expectation.require_process_fact (Outcome.Cleaned "missing-two")
+  in
+  (match Expectation.check missing_process trace_spoof with
+  | Error message ->
+      require
+        (String.equal message
+           "missing selected process facts: cleaned(missing-two), stable-code(VERO_MISSING_ONE)")
+        "process mismatch did not enumerate missing facts: %s" message
+  | Ok () -> fail "missing process facts passed");
   let tool_directory = Filename.concat workspace "forwarded-path" in
   Unix.mkdir tool_directory 0o755;
   let tool = Filename.concat tool_directory "path-probe" in
   let channel = open_out_bin tool in
-  output_string channel "#!/bin/sh\nprintf 'VERO_PATH_OK\\n'\n";
+  output_string channel "#!/bin/sh\nprintf 'verocaml: error[VERO_PATH_OK]\\n'\n";
   close_out channel;
   Unix.chmod tool 0o755;
   let path_projection =

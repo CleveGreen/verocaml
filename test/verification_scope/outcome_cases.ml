@@ -69,6 +69,13 @@ let project =
  (modules Unmarked_client)
  (libraries verocaml.ghost scope_ordinary)
  (flags (:standard -ppx "verocaml-ppx --keep-ghost")))
+
+(library
+ (name scope_unsafe_skipped)
+ (wrapped false)
+ (modules Unsafe_skipped)
+ (libraries verocaml.ghost)
+ (flags (:standard -unsafe -ppx "verocaml-ppx --keep-ghost")))
 |};
           };
           { path = "pass_root.ml"; contents = fixture "pass_root.ml" };
@@ -85,6 +92,10 @@ let project =
           {
             path = "unmarked_client.ml";
             contents = fixture "unmarked_client.ml";
+          };
+          {
+            path = "unsafe_skipped.ml";
+            contents = "let retained_but_unselected value = value\n";
           };
         ];
       libraries = [ "verocaml.ghost" ];
@@ -510,6 +521,43 @@ let unmarked_provider_rejection =
       let* scoped = run_scope ~threads:1 inventory in
       scope_projection names scoped)
 
+let strict_invalid_retained_skipped_rejection =
+  Suite.case ~name:"strict-invalid-retained-skipped-target-rejects-pre-provider"
+    ~expectation:(Expectation.empty |> Expectation.status Outcome.Verified)
+    (fun ~environment ~workspace ->
+      let* project_root = prepare_project ~environment ~workspace in
+      let* artifacts = load_artifacts project_root [ "Legacy"; "Unsafe_skipped" ] in
+      let* legacy = artifact "Legacy" artifacts in
+      let* unsafe = artifact "Unsafe_skipped" artifacts in
+      Interface_specification_candidate_private.For_testing.reset_strict_candidate_entries ();
+      Interface_specification_loaded_private.For_testing.reset_provider_verification_entries ();
+      Solver_backend_counter_private.reset_solver_creation_count ();
+      let* configuration = configuration 1 in
+      let request =
+        Verifier_service.scoped_request ~configuration
+          ~inventory:
+            [
+              inventory_entry Verifier_service.Scope_root legacy;
+              inventory_entry Verifier_service.Scope_dependency unsafe;
+            ]
+      in
+      let* () =
+        match request with
+        | Error _ -> Ok ()
+        | Ok _ -> mismatch "strict-invalid retained skipped target was accepted"
+      in
+      let* () =
+        if
+          Interface_specification_candidate_private.For_testing.strict_candidate_entries ()
+          > 0
+          && Interface_specification_loaded_private.For_testing.provider_verification_entries ()
+             = 0
+          && Solver_backend_counter_private.solver_creation_count () = 0
+        then Ok ()
+        else mismatch "strict-invalid skipped target crossed provider or solver preflight"
+      in
+      Ok (Outcome.observation ~status:Outcome.Verified () |> Outcome.project))
+
 let () =
   Suite.run_cli ~suite_path ~manifest:Integration_environment.manifest
     ~expected_environment:Integration_environment.expected
@@ -521,4 +569,5 @@ let () =
       copied_artifact_parity;
       partial_failure_partition;
       unmarked_provider_rejection;
+      strict_invalid_retained_skipped_rejection;
     ]

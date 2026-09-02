@@ -72,6 +72,7 @@ type detached_term : value mod contended portable =
   | Detached_add_term of detached_term * detached_term
   | Detached_subtract_term of detached_term * detached_term
   | Detached_negate_term of detached_term
+  | Detached_multiply_term of detached_term * detached_term
   | Detached_scale_term of string * detached_term
   | Detached_less_than_term of detached_term * detached_term
   | Detached_less_or_equal_term of detached_term * detached_term
@@ -202,7 +203,11 @@ let contexts_live = ref 0
 let maximum_contexts_live = ref 0
 let selected_logics_reversed = ref []
 
-let solver_logic = "AUFLIA"
+let solver_logic requirements =
+  if List.mem Logic_ir.Nonlinear_integer_arithmetic requirements then "AUFNIA"
+  else "AUFLIA"
+
+let nonlinear_reasoning_enabled = false
 
 type local_counters = {
   mutable local_capability_resolutions : int;
@@ -289,9 +294,9 @@ let is_supported = function
   | Quantifiers
   | Explicit_patterns
   | Quantifier_ids
-  | Models ->
+  | Models
+  | Nonlinear_integer_arithmetic ->
       true
-  | Nonlinear_integer_arithmetic -> false
 
 let note_capability_resolution = function
   | Global -> incr capability_resolutions
@@ -428,6 +433,8 @@ let rec translate_term environment term =
       Z3.Arithmetic.mk_sub environment.context [ recurse left; recurse right ]
   | Negate value ->
       Z3.Arithmetic.mk_unary_minus environment.context (recurse value)
+  | Multiply (left, right) ->
+      Z3.Arithmetic.mk_mul environment.context [ recurse left; recurse right ]
   | Scale (coefficient, value) ->
       Z3.Arithmetic.mk_mul environment.context
         [
@@ -688,6 +695,8 @@ let rec detach_term term =
   | Subtract (left, right) ->
       Detached_subtract_term (recurse left, recurse right)
   | Negate value -> Detached_negate_term (recurse value)
+  | Multiply (left, right) ->
+      Detached_multiply_term (recurse left, recurse right)
   | Scale (coefficient, value) ->
       Detached_scale_term (Z.to_string coefficient, recurse value)
   | Less_than (left, right) ->
@@ -898,6 +907,12 @@ let rec translate_detached_term environment = function
   | Detached_negate_term value ->
       Z3.Arithmetic.mk_unary_minus environment.detached_context
         (translate_detached_term environment value)
+  | Detached_multiply_term (left, right) ->
+      Z3.Arithmetic.mk_mul environment.detached_context
+        [
+          translate_detached_term environment left;
+          translate_detached_term environment right;
+        ]
   | Detached_scale_term (coefficient, value) ->
       Z3.Arithmetic.mk_mul environment.detached_context
         [
@@ -1116,6 +1131,8 @@ let parameters ?policy context config =
     policy;
   Z3.Params.add_bool parameters (Z3.Symbol.mk_string context "model")
     config.model;
+  Z3.Params.add_bool parameters (Z3.Symbol.mk_string context "arith.nl")
+    nonlinear_reasoning_enabled;
   parameters
 
 let note_context_created = function
@@ -1132,27 +1149,39 @@ let note_context_created = function
 let note_context_cleaned = function
   | Global ->
       decr contexts_live;
-      incr contexts_cleaned
+      incr contexts_cleaned;
+      [%log.trace "completed solver resource cleanup"
+        ~stage:(Delator.Field.string "resource-cleanup")
+        ~resource:(Delator.Field.string "solver-context")
+        ~route:(Delator.Field.string "direct-global")
+        ~decision:(Delator.Field.string "released")
+        ~contexts_live:(Delator.Field.int !contexts_live)]
   | Local local ->
       local.local_contexts_live <- local.local_contexts_live - 1;
-      local.local_contexts_cleaned <- local.local_contexts_cleaned + 1
+      local.local_contexts_cleaned <- local.local_contexts_cleaned + 1;
+      [%log.trace "completed solver resource cleanup"
+        ~stage:(Delator.Field.string "resource-cleanup")
+        ~resource:(Delator.Field.string "solver-context")
+        ~route:(Delator.Field.string "query-local")
+        ~decision:(Delator.Field.string "released")
+        ~contexts_live:(Delator.Field.int local.local_contexts_live)]
 
-let note_solver_created accounting =
+let note_solver_created accounting logic =
   match accounting with
   | Global ->
       incr solvers_created;
-      selected_logics_reversed :=
-        solver_logic :: !selected_logics_reversed
+      selected_logics_reversed := logic :: !selected_logics_reversed
   | Local local ->
       local.local_solvers_created <- local.local_solvers_created + 1;
       local.local_selected_logics_reversed <-
-        solver_logic :: local.local_selected_logics_reversed
+        logic :: local.local_selected_logics_reversed
 
 let note_solver_reset = function
   | Global -> incr solver_resets
   | Local local -> local.local_solver_resets <- local.local_solver_resets + 1
 
-let with_solver accounting ?policy config translate use =
+let with_solver accounting ?policy ~requirements config translate use =
+  let logic = solver_logic requirements in
   let context =
     Z3.mk_context
       [
@@ -1175,11 +1204,20 @@ let with_solver accounting ?policy config translate use =
             !solver))
     (fun () ->
       let translated = translate context in
-      let created = Z3.Solver.mk_solver_s context solver_logic in
+      let created = Z3.Solver.mk_solver_s context logic in
       solver := Some created;
-      note_solver_created accounting;
+      note_solver_created accounting logic;
       Z3.Solver.set_parameters created (parameters ?policy context config);
       Z3.Solver.add created translated.assertions;
+      [%log.trace "initialized direct Z3 solver"
+        ~logic:(Delator.Field.string logic)
+        ~nonlinear_terms:(Delator.Field.string "admitted")
+        ~nonlinear_reasoning:
+          (Delator.Field.string
+             (if nonlinear_reasoning_enabled then "enabled" else "disabled"))
+        ~assertion_count:
+          (Delator.Field.int (List.length translated.assertions))
+        ~decision:(Delator.Field.string "initialized")];
       use created translated)
 [@@delator.instrument] [@@delator.level trace]
 
@@ -1232,7 +1270,8 @@ let solve_query ?(controlled = Real) ?rlimit config query =
       | Ok () ->
           note_translation Global;
           protect (fun () ->
-              with_solver Global ~policy config
+              with_solver Global ~policy
+                ~requirements:(Logic_ir.requirements query) config
                 (fun context -> translate_logic_query context query)
                 (fun solver _ -> solve_translated controlled solver)))
 [@@delator.instrument] [@@delator.level trace]
@@ -1246,7 +1285,8 @@ let solve_query_with accounting ~controlled ~rlimit config query =
       | Ok () ->
           note_translation accounting;
           protect (fun () ->
-              with_solver accounting ~policy config
+              with_solver accounting ~policy
+                ~requirements:(Logic_ir.requirements query) config
                 (fun context -> translate_logic_query context query)
                 (fun solver _ -> solve_translated controlled solver)))
 
@@ -1264,6 +1304,8 @@ let detached_parameters context ~timeout_ms ~rlimit ~model =
     timeout_ms;
   Z3.Params.add_int parameters (Z3.Symbol.mk_string context "rlimit") rlimit;
   Z3.Params.add_bool parameters (Z3.Symbol.mk_string context "model") model;
+  Z3.Params.add_bool parameters (Z3.Symbol.mk_string context "arith.nl")
+    nonlinear_reasoning_enabled;
   parameters
 
 let detached_model_value sort expression =
@@ -1295,12 +1337,18 @@ let detached_note_context_created local =
 
 let detached_note_context_cleaned local =
   local.local_contexts_live <- local.local_contexts_live - 1;
-  local.local_contexts_cleaned <- local.local_contexts_cleaned + 1
+  local.local_contexts_cleaned <- local.local_contexts_cleaned + 1;
+  [%log.trace "completed solver resource cleanup"
+    ~stage:(Delator.Field.string "resource-cleanup")
+    ~resource:(Delator.Field.string "solver-context")
+    ~route:(Delator.Field.string "detached-query-local")
+    ~decision:(Delator.Field.string "released")
+    ~contexts_live:(Delator.Field.int local.local_contexts_live)]
 
-let detached_note_solver_created local =
+let detached_note_solver_created local logic =
   local.local_solvers_created <- local.local_solvers_created + 1;
   local.local_selected_logics_reversed <-
-    solver_logic :: local.local_selected_logics_reversed
+    logic :: local.local_selected_logics_reversed
 
 let detached_note_solver_reset local =
   local.local_solver_resets <- local.local_solver_resets + 1
@@ -1317,10 +1365,9 @@ let detached_feature_to_string @ portable = function
   | Algebraic_datatypes -> "algebraic-datatypes"
 
 let detached_feature_supported @ portable = function
-  | Logic_ir.Nonlinear_integer_arithmetic -> false
-  | Named_sorts | Uninterpreted_functions | Linear_integer_arithmetic
+  | Logic_ir.Named_sorts | Uninterpreted_functions | Linear_integer_arithmetic
   | Quantifiers | Explicit_patterns | Quantifier_ids | Models
-  | Algebraic_datatypes ->
+  | Algebraic_datatypes | Nonlinear_integer_arithmetic ->
       true
 
 let solve_detached_query_local ~controlled ~timeout_ms ~rlimit ~model
@@ -1352,6 +1399,7 @@ let solve_detached_query_local ~controlled ~timeout_ms ~rlimit ~model
              (String.concat ", "
                 (List.map detached_feature_to_string unsupported)))
       else
+      let logic = solver_logic plan.detached_requirements in
       let context =
         Z3.mk_context
           [ ("model", string_of_bool model); ("auto_config", "false") ]
@@ -1371,14 +1419,18 @@ let solve_detached_query_local ~controlled ~timeout_ms ~rlimit ~model
                 !solver))
         (fun () ->
           let translated = translate_detached_plan context plan in
-          let created = Z3.Solver.mk_solver_s context solver_logic in
+          let created = Z3.Solver.mk_solver_s context logic in
           solver := Some created;
-          detached_note_solver_created local;
+          detached_note_solver_created local logic;
           Z3.Solver.set_parameters created
             (detached_parameters context ~timeout_ms ~rlimit ~model);
           Z3.Solver.add created translated.detached_assertions_backend;
           [%log.trace "initialized detached Z3 solver"
-            ~logic:(Delator.Field.string solver_logic)
+            ~logic:(Delator.Field.string logic)
+            ~nonlinear_terms:(Delator.Field.string "admitted")
+            ~nonlinear_reasoning:
+              (Delator.Field.string
+                 (if nonlinear_reasoning_enabled then "enabled" else "disabled"))
             ~assertions:
               (Delator.Field.int
                  (List.length translated.detached_assertions_backend))
@@ -1440,7 +1492,7 @@ let render_query config query =
   | Ok () ->
       note_translation Global;
       protect (fun () ->
-          with_solver Global config
+          with_solver Global ~requirements:(Logic_ir.requirements query) config
             (fun context -> translate_logic_query context query)
             (fun solver translated ->
               Ok
@@ -1504,12 +1556,15 @@ let solve_vir ?(controlled = Real) ?rlimit ?(requires = []) config obligation =
           match translated with
           | Error _ as error -> error
           | Ok translated ->
+              let query =
+                Vir_logic_ir_translation_private.query translated
+              in
               protect (fun () ->
-                  with_solver Global ~policy config
+                  with_solver Global ~policy
+                    ~requirements:(Logic_ir.requirements query) config
                     (fun context ->
                       let logic =
-                        translate_logic_query context
-                          (Vir_logic_ir_translation_private.query translated)
+                        translate_logic_query context query
                       in
                       let projected =
                         translate_projected context logic.functions
@@ -1581,12 +1636,15 @@ let solve_vir_with accounting ~controlled ~rlimit ?(requires = []) config
           match translated with
           | Error _ as error -> error
           | Ok translated ->
+              let query =
+                Vir_logic_ir_translation_private.query translated
+              in
               protect (fun () ->
-                  with_solver accounting ~policy config
+                  with_solver accounting ~policy
+                    ~requirements:(Logic_ir.requirements query) config
                     (fun context ->
                       let logic =
-                        translate_logic_query context
-                          (Vir_logic_ir_translation_private.query translated)
+                        translate_logic_query context query
                       in
                       let projected =
                         translate_projected context logic.functions
@@ -1648,7 +1706,7 @@ let render_vir ?(requires = []) config obligation =
 
 let diagnostic_snapshot config query =
   Printf.sprintf "logic=%s timeout-ms=%d model=%b requirements=%s"
-    solver_logic config.timeout_ms config.model
+    (solver_logic (Logic_ir.requirements query)) config.timeout_ms config.model
     (Logic_ir.requirements query
     |> List.map Logic_ir.feature_to_string
     |> String.concat ",")

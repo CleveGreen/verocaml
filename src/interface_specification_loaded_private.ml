@@ -414,9 +414,130 @@ let verified_snapshot ~unit_name ~candidate validated =
                         models,
                         invariants ))
                     (snapshot_invariants ~unit_name surface validated))))
+
+type safe_verification_failure = {
+  failure_class : string;
+  remedy_class : string;
+  message : string;
+}
+
+type verification_failure_classification =
+  | Frontend_failure of Diagnostic.t
+  | Dependency_failure of safe_verification_failure
+  | Authenticated_internal_failure of safe_verification_failure
+
+let safe_failure ~failure_class ~remedy_class message =
+  { failure_class; remedy_class; message }
+
+let classify_verification_failure ~authenticated_candidate = function
+  | Verification_driver_private.Frontend_error diagnostic ->
+      Frontend_failure diagnostic
+  | Validation_error validation_error ->
+      let[@log_value.debug] validation_detail =
+        Sst_validation.error_to_string validation_error
+      in
+      [%log.debug "classified semantic SST validation failure"
+        ~stage:(Delator.Field.string "verification-failure-classification")
+        ~detail:
+          (Delator.Field.string
+             (validation_detail [@log_value.debug]))
+        ~decision:(Delator.Field.string "frontend-diagnostic")];
+      Frontend_failure (Sst_validation.to_diagnostic validation_error)
+  | Invariant_error _ ->
+      Dependency_failure
+        (safe_failure ~failure_class:"invariant-authentication"
+           ~remedy_class:"rebuild-with-current-toolchain"
+           "verification metadata failed an integrity check. Remedy: rebuild the unit with the current VeroCaml toolchain and retry verification.")
+  | Pipeline_error pipeline_error
+    when authenticated_candidate
+         && Option.is_some
+              (Verification_pipeline.post_validation_invariant_breach
+                 pipeline_error) ->
+      Authenticated_internal_failure
+        (safe_failure ~failure_class:"post-validation-invariant"
+           ~remedy_class:"report-verifier-defect"
+           "authenticated post-validation invariant breach")
+  | Pipeline_error pipeline_error
+    when Option.is_some
+           (Verification_pipeline.post_validation_invariant_breach
+              pipeline_error) ->
+      Dependency_failure
+        (safe_failure
+           ~failure_class:"unauthenticated-post-validation-invariant"
+           ~remedy_class:"rebuild-with-current-toolchain"
+           "verification metadata failed an integrity check. Remedy: rebuild the unit with the current VeroCaml toolchain and retry verification.")
+  | Pipeline_error (Verification_pipeline.Engine_error _engine_error) ->
+      [%log.debug "captured symbolic engine failure"
+        ~stage:(Delator.Field.string "verification-failure-classification")
+        ~failure_class:(Delator.Field.string "symbolic-engine")
+        ~technical_detail:
+          (Delator.Field.string
+             (Symbolic_executor_private.error_to_string _engine_error))];
+      Dependency_failure
+        (safe_failure ~failure_class:"symbolic-engine"
+           ~remedy_class:"rebuild-and-retry"
+           "the verifier rejected the derived verification artifact. Remedy: rebuild the unit and retry verification.")
+  | Pipeline_error
+      (Verification_pipeline.Setup_error
+        (Verification_pipeline.Internal_setup_error _)) ->
+      Dependency_failure
+        (safe_failure ~failure_class:"verification-setup"
+           ~remedy_class:"retry-then-rebuild"
+           "verification setup could not be completed. Remedy: retry verification; rebuild the unit if the failure persists.")
+  | Pipeline_error (Verification_pipeline.Solve_error _solve_error) ->
+      [%log.debug "captured verification pipeline failure"
+        ~stage:(Delator.Field.string "verification-failure-classification")
+        ~failure_class:(Delator.Field.string "verification-pipeline")
+        ~technical_detail:(Delator.Field.string _solve_error)];
+      Dependency_failure
+        (safe_failure ~failure_class:"verification-pipeline"
+           ~remedy_class:"rebuild-and-retry"
+           "verification of the derived artifact could not be completed. Remedy: rebuild the unit and retry verification.")
+  | Pipeline_error
+      (Verification_pipeline.Setup_error
+        (Verification_pipeline.Solver_configuration_error _)) ->
+      Dependency_failure
+        (safe_failure ~failure_class:"solver-configuration"
+           ~remedy_class:"fix-solver-settings"
+           "solver settings are invalid. Remedy: fix the verifier solver settings and retry verification.")
+  | Internal_error _internal_error ->
+      [%log.debug "captured verification driver failure"
+        ~stage:(Delator.Field.string "verification-failure-classification")
+        ~failure_class:(Delator.Field.string "verification-driver")
+        ~technical_detail:(Delator.Field.string _internal_error)];
+      Dependency_failure
+        (safe_failure ~failure_class:"verification-driver"
+           ~remedy_class:"rebuild-and-retry"
+           "the verifier could not prepare the loaded unit. Remedy: rebuild the unit and retry verification.")
+
+let route_verification_failure ~unit_name ~authenticated_candidate failure =
+  match classify_verification_failure ~authenticated_candidate failure with
+  | Frontend_failure diagnostic ->
+      error ~unit_name ~diagnostic
+        (Printf.sprintf "frontend verification failed [%s]: %s" diagnostic.code
+           diagnostic.message)
+  | Dependency_failure failure ->
+      [%log.debug "routing non-internal verification failure"
+        ~provider:(Delator.Field.string unit_name)
+        ~stage:(Delator.Field.string "verification-failure-classification")
+        ~failure_class:(Delator.Field.string failure.failure_class)
+        ~candidate_authenticated:(Delator.Field.bool authenticated_candidate)
+        ~decision:(Delator.Field.string "dependency")
+        ~remedy_class:(Delator.Field.string failure.remedy_class)];
+      error ~unit_name failure.message
+  | Authenticated_internal_failure failure ->
+      [%log.error "routing authenticated post-validation failure"
+        ~provider:(Delator.Field.string unit_name)
+        ~stage:(Delator.Field.string "internal-diagnostic")
+        ~failure_class:(Delator.Field.string failure.failure_class)
+        ~candidate_authenticated:(Delator.Field.bool authenticated_candidate)
+        ~remedy_class:(Delator.Field.string failure.remedy_class)];
+      error ~unit_name ~internal:true failure.message
+
 let provider_verification_entries = ref 0
 
-let verify_candidate ?imported ?external_specifications ~solver_policy candidate =
+let verify_candidate_internal ?imported ?external_specifications ~solver_policy
+    candidate =
   incr provider_verification_entries;
   let unit_name = candidate.Cmt_input.unit_name in
   let reject message = error ~unit_name message in
@@ -426,21 +547,60 @@ let verify_candidate ?imported ?external_specifications ~solver_policy candidate
       ~allow_public_parametric_signatures:candidate.explicit_interface
       ?imported ?external_specifications candidate
   with
-  | Error (Verification_driver_private.Frontend_error diagnostic) ->
-      error ~unit_name ~diagnostic
-        (Printf.sprintf "frontend verification failed [%s]: %s" diagnostic.code
-           diagnostic.message)
-  | Error (Validation_error validation_error) ->
-      error ~unit_name
-        ~diagnostic:(Sst_validation.to_diagnostic validation_error)
-        (Sst_validation.error_to_string validation_error)
-  | Error (Invariant_error invariant_error) ->
-      reject (Type_invariant.error_to_string invariant_error)
-  | Error (Pipeline_error _) -> reject "private verification pipeline rejected provider"
-  | Error (Internal_error message) -> reject message
+  | Error failure ->
+      route_verification_failure ~unit_name ~authenticated_candidate:true failure
   | Ok report ->
       let validated = Verification_driver_private.validated report in
-      match Verification_driver_private.verified_completion report with
+      let program = Sst_validation.program validated in
+      let unsupported_external_specification_trust =
+        List.exists
+          (fun definition ->
+            match definition.Sst.body with
+            | Sst.External_specification
+                (Sst.Imported_unverified_target _) ->
+                false
+            | Sst.External_specification _
+            | Sst.Trusted_external_spec_target _ ->
+                true
+            | Sst.Trusted_external_body _ | Sst.Checked_exec _
+            | Sst.Spec_definition _ | Sst.Proof_body _
+            | Sst.Recursive_spec_definition _ | Sst.Symbolic_declaration _ ->
+                false)
+          program.functions
+      in
+      let trusted_broadcasts =
+        candidate.Cmt_input.interface_broadcasts
+        |> List.filter_map (fun member ->
+               let identity = member.Retained_broadcast_private.identity in
+               if identity.kind = Retained_broadcast_private.Declaration then
+                 let prefix = candidate.unit_name ^ "." in
+                 if String.starts_with ~prefix identity.canonical_path then
+                   Some
+                     (String.sub identity.canonical_path (String.length prefix)
+                        (String.length identity.canonical_path
+                        - String.length prefix))
+                 else None
+               else None)
+      in
+      let unselected_trusted_body =
+        List.exists
+          (fun definition ->
+            match definition.Sst.body with
+            | Sst.Trusted_external_body _ ->
+                not
+                  (List.mem definition.function_id.function_name
+                     trusted_broadcasts)
+            | Sst.Checked_exec _ | Sst.Spec_definition _ | Sst.Proof_body _
+            | Sst.Recursive_spec_definition _ | Sst.External_specification _
+            | Sst.Trusted_external_spec_target _ | Sst.Symbolic_declaration _ ->
+                false)
+          program.functions
+      in
+      if unsupported_external_specification_trust || unselected_trusted_body then
+        reject
+          "axiomatic trusted declarations are not exportable under the selected interface policy"
+      else
+        match Verification_driver_private.verified_completion report with
         | None -> reject "retained provider lacks private-driver completion"
         | Some completion -> (
             match verified_snapshot ~unit_name ~candidate validated with
@@ -464,8 +624,55 @@ let verify_candidate ?imported ?external_specifications ~solver_policy candidate
                     completion ))
 [@@delator.instrument] [@@delator.level debug]
 
+let verify_candidate ?imported ?external_specifications
+    ~solver_policy:(solver_policy [@delator.skip])
+    (candidate [@delator.skip]) =
+  let result =
+    verify_candidate_internal ?imported ?external_specifications ~solver_policy
+      candidate
+  in
+  (match result with
+  | Ok (_validated, _, _, _, _, _, _) ->
+      let[@log_value.info] program = Sst_validation.program _validated in
+      let[@log_value.info] _trusted_count =
+        List.fold_left
+          (fun count definition ->
+            match definition.Sst.body with
+            | Sst.Trusted_external_body _ -> count + 1
+            | Sst.Checked_exec _ | Sst.Spec_definition _ | Sst.Proof_body _
+            | Sst.Recursive_spec_definition _ | Sst.External_specification _
+            | Sst.Trusted_external_spec_target _ | Sst.Symbolic_declaration _ ->
+                count)
+          0 (program [@log_value.info]).functions
+      in
+      [%log.info "completed retained provider verification"
+        ~provider:(Delator.Field.string candidate.Cmt_input.unit_name)
+        ~stage:(Delator.Field.string "loaded-provider-verification")
+        ~function_count:
+          (Delator.Field.int
+             (List.length (program [@log_value.info]).functions))
+        ~broadcast_count:
+          (Delator.Field.int (List.length candidate.interface_broadcasts))
+        ~trusted_count:
+          (Delator.Field.int (_trusted_count [@log_value.info]))
+        ~decision:(Delator.Field.string "accepted")]
+  | Error _ ->
+      [%log.debug "rejected retained provider verification"
+        ~provider:(Delator.Field.string candidate.Cmt_input.unit_name)
+        ~stage:(Delator.Field.string "loaded-provider-verification")
+        ~decision:(Delator.Field.string "rejected")
+        ~reason_class:(Delator.Field.string "loaded-diagnostic")]);
+  result
+[@@delator.instrument]
+[@@delator.level debug]
+[@@delator.no_exn_log]
+
 let authenticate_loaded_with_policy ~external_targets ~solver_policy
     ~dependencies:candidates ~consumer =
+  let import_matches owner (staged : staged_dependency)
+      (import : Cmt_input.import) =
+    exact_import ~owner ~dependency:staged.candidate import
+  in
   let graph_candidates =
     List.fold_left
       (fun candidates target ->
@@ -506,18 +713,21 @@ let authenticate_loaded_with_policy ~external_targets ~solver_policy
             | Error _ as error -> error
             | Ok _ -> strict rest)
       in
-      (match strict candidates with
+      (match strict order with
       | Error _ as error -> error
-      | Ok _ ->
+      | Ok _ -> (
+          match
+            preflight_broadcast_implementations ~dependencies:order ~consumer
+          with
+          | Error _ as error -> error
+          | Ok () ->
           let rec verify (verified : staged_dependency list) = function
             | [] ->
                 if
                   List.for_all
                     (fun (staged : staged_dependency) ->
                       Array.exists
-                        (fun (import : Cmt_input.import) ->
-                          String.equal import.unit_name staged.candidate.unit_name
-                          && import.crc = Some staged.interface_digest)
+                        (import_matches consumer staged)
                         consumer.imports)
                     (List.filter
                        (fun (staged : staged_dependency) ->
@@ -537,10 +747,9 @@ let authenticate_loaded_with_policy ~external_targets ~solver_policy
                                 handle.types
                               || Array.exists
                                    (fun (import : Cmt_input.import) ->
-                                     String.equal import.unit_name
-                                       handle.unit_name
-                                     && import.crc
-                                        = Some handle.interface_digest)
+                                     exact_import ~owner:consumer
+                                       ~dependency:handle.private_implementation
+                                       import)
                                    consumer.imports)
                             issued
                         in
@@ -605,7 +814,7 @@ let authenticate_loaded_with_policy ~external_targets ~solver_policy
                     "consumer import slot does not match a verified dependency \
                      interface"
             | (candidate : Cmt_input.implementation) :: rest ->
-                if not (Cmt_input.retained_preprocessing candidate) then
+                if not (Cmt_input.retained_ppx_artifact candidate) then
                   verify verified rest
                 else
                 let direct_dependencies =
@@ -623,18 +832,18 @@ let authenticate_loaded_with_policy ~external_targets ~solver_policy
                     (List.for_all
                        (fun (staged : staged_dependency) ->
                          Array.exists
-                           (fun (import : Cmt_input.import) ->
-                             String.equal import.unit_name
-                               staged.candidate.unit_name
-                             && import.crc = Some staged.interface_digest)
+                           (import_matches candidate staged)
                            candidate.imports)
                        direct_dependencies)
                 then
                   error ~unit_name:candidate.unit_name
                     "dependency import CRC does not match the verified interface"
                 else
-                  match imported_environment_of_staged direct_dependencies with
-                  | Error message -> error ~unit_name:candidate.unit_name message
+                  match
+                    imported_environment_of_staged_authenticated
+                      direct_dependencies
+                  with
+                  | Error _ as error -> error
                   | Ok imported -> (
                   let external_specifications =
                     External_target_specification_private.environment
@@ -683,7 +892,7 @@ let authenticate_loaded_with_policy ~external_targets ~solver_policy
                           in
                           verify (verified @ [ staged ]) rest))
           in
-          verify [] order)
+          verify [] order))
 [@@delator.instrument] [@@delator.level debug]
 
 type loaded_verification = {
@@ -691,8 +900,8 @@ type loaded_verification = {
   loaded_driver : Verification_driver_private.report;
 }
 
-let run_loaded_consumer ~threads ~solver_policy ?external_specifications environment
-    (consumer : Cmt_input.implementation) =
+let run_loaded_consumer ~threads ~solver_policy ~authenticated_candidate
+    ?external_specifications environment (consumer : Cmt_input.implementation) =
   let exports_external_type_specification (handle : handle) =
     public_types_export_external_type_specification handle.types
   in
@@ -705,14 +914,14 @@ let run_loaded_consumer ~threads ~solver_policy ?external_specifications environ
             exports_external_type_specification handle
             || Array.exists
                  (fun (import : Cmt_input.import) ->
-                   String.equal import.unit_name handle.unit_name
-                   && import.crc = Some handle.interface_digest)
+                   exact_import ~owner:consumer
+                     ~dependency:handle.private_implementation import)
                  consumer.imports)
           environment.handles;
     }
   in
-  match imported_environment direct_environment with
-  | Error message -> error ~unit_name:consumer.unit_name message
+  match imported_environment_authenticated direct_environment with
+  | Error _ as error -> error
   | Ok imported -> (
       let adopt_external_specifications =
         match external_specifications with
@@ -825,53 +1034,35 @@ let run_loaded_consumer ~threads ~solver_policy ?external_specifications environ
               loaded_environment = environment;
               loaded_driver = report;
             }
-      | Error (Verification_driver_private.Frontend_error diagnostic) ->
-          error ~unit_name:consumer.unit_name ~diagnostic
-            (Printf.sprintf "frontend verification failed [%s]: %s"
-               diagnostic.code diagnostic.message)
-      | Error (Validation_error validation_error) ->
-          error ~unit_name:consumer.unit_name
-            ~diagnostic:(Sst_validation.to_diagnostic validation_error)
-            (Sst_validation.error_to_string validation_error)
-      | Error (Invariant_error invariant_error) ->
-          internal_error ~unit_name:consumer.unit_name
-            (Type_invariant.error_to_string invariant_error)
-      | Error
-          (Pipeline_error (Verification_pipeline.Engine_error engine_error)) ->
-          internal_error ~unit_name:consumer.unit_name
-            (Symbolic_executor_private.error_to_string engine_error)
-      | Error
-          (Pipeline_error
-            (Verification_pipeline.Setup_error
-              (Verification_pipeline.Internal_setup_error message)))
-      | Error (Pipeline_error (Verification_pipeline.Solve_error message)) ->
-          internal_error ~unit_name:consumer.unit_name message
-      | Error
-          (Pipeline_error
-            (Verification_pipeline.Setup_error
-              (Verification_pipeline.Solver_configuration_error solver_error)))
-        ->
-          error ~unit_name:consumer.unit_name
-            (Solver_backend.error_to_string solver_error)
-      | Error (Internal_error message) ->
-          internal_error ~unit_name:consumer.unit_name message)
-[@@delator.instrument] [@@delator.level debug]
+      | Error failure ->
+          route_verification_failure ~unit_name:consumer.unit_name
+            ~authenticated_candidate failure)
 
 let verify_loaded_with_policy ~threads ~solver_policy ~external_specifications
     ~external_targets ~dependencies ~consumer =
   match dependencies with
-  | [] ->
+  | [] -> (
+      match
+        preflight_broadcast_implementations ~dependencies:[] ~consumer
+      with
+      | Error _ as error -> error
+      | Ok () ->
       if Finite_formal_requirement.requires_authentication consumer then
         match strict_candidate ~require_public_interface:false consumer with
         | Error _ as error -> error
         | Ok _ ->
-            run_loaded_consumer ~threads ~solver_policy ?external_specifications
+            run_loaded_consumer ~threads ~solver_policy
+              ~authenticated_candidate:true ?external_specifications
               { issuer = process_issuer; handles = [] }
               consumer
       else
-        run_loaded_consumer ~threads ~solver_policy ?external_specifications
-          { issuer = process_issuer; handles = [] }
-          consumer
+        let authenticated_candidate =
+          Result.is_ok
+            (strict_candidate ~require_public_interface:false consumer)
+        in
+        run_loaded_consumer ~threads ~solver_policy ~authenticated_candidate
+          ?external_specifications { issuer = process_issuer; handles = [] }
+          consumer)
   | _ -> (
       match
         authenticate_loaded_with_policy ~external_targets ~solver_policy
@@ -879,7 +1070,8 @@ let verify_loaded_with_policy ~threads ~solver_policy ~external_specifications
       with
       | Error _ as error -> error
       | Ok (environment, consumer) ->
-          run_loaded_consumer ~threads ~solver_policy ?external_specifications environment
+          run_loaded_consumer ~threads ~solver_policy
+            ~authenticated_candidate:true ?external_specifications environment
             consumer)
 [@@delator.instrument] [@@delator.level debug]
 

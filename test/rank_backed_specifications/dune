@@ -63,17 +63,6 @@
  (action
   (run %{validator} %{report} %{archive})))
 
-(cram
- (deps
-  (glob_files fixtures/*.ml)
-  (glob_files manifests/*)
-  rank_backed_specifications_tool.exe
-  ../../verocaml.install
-  ../../src/verocaml.exe
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
-
 (alias
  (name rank-backed-specifications-check)
  (deps

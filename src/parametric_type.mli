@@ -7,6 +7,7 @@ type t =
   | Unit
   | Bool
   | Int
+  | Mathematical_int
   | Tuple of (string option * t) list
   | Aggregate of type_id
   | Parameter of binder
@@ -20,6 +21,8 @@ val spec_function :
   label:string option -> domain:t -> range:t -> t
 val spec_function_view : t -> (string option * t * t) option
 val is_spec_function : t -> bool
+val is_integer : t -> bool
+val contains_mathematical_int : t -> bool
 val application : constructor -> t list -> (t, string) result
 val validate_application : constructor -> t list -> (unit, string) result
 val compare_owner : owner -> owner -> int
@@ -27,6 +30,10 @@ val compare_binder : binder -> binder -> int
 val compare_constructor : constructor -> constructor -> int
 val compare : t -> t -> int
 val equal : t -> t -> bool
+
+(** Whether a logical value may inhabit a compiler-declared shape after
+    runtime integer leaves have been lifted to mathematical integers. *)
+val compiler_erasure_compatible : compiler:t -> semantic:t -> bool
 val alpha_equal : t -> t -> bool
 val substitute : (binder * t) list -> t -> t
 val instantiate : binder list -> t list -> t -> (t, string) result

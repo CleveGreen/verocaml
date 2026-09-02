@@ -12,7 +12,7 @@ let same_function_id (left : Sst.function_id) (right : Sst.function_id) =
   && String.equal left.function_name right.function_name
 
 let scalar_type = function
-  | Sst.Int | Sst.Bool | Sst.Parameter _ -> true
+  | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Parameter _ -> true
   | Sst.Unit | Sst.Tuple _ | Sst.Aggregate _
   | Sst.Application _ -> false
 
@@ -26,7 +26,8 @@ let validate ~admitted_type ~admit_tuple_match ~malformed definition expression 
         ||
         (match pattern.typ with
         | Sst.Parameter _ -> true
-        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Aggregate _
+        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+        | Sst.Aggregate _
         | Sst.Application _ ->
             false)
     | Sst.Bind binding ->
@@ -34,7 +35,7 @@ let validate ~admitted_type ~admit_tuple_match ~malformed definition expression 
         && (scalar_type pattern.typ
            || (binding.uniqueness = Sst.Definitely_aliased
               && admitted_type pattern.typ))
-    | Sst.Int_pattern _ -> pattern.typ = Sst.Int
+    | Sst.Int_pattern _ -> Parametric_type.is_integer pattern.typ
     | Sst.Bool_pattern _ -> pattern.typ = Sst.Bool
     | Sst.Record_pattern fields ->
         admitted_type pattern.typ
@@ -53,6 +54,9 @@ let validate ~admitted_type ~admit_tuple_match ~malformed definition expression 
     | Sst.Variable _
       when scalar_type expression.typ || admitted_type expression.typ ->
         Ok ()
+    | Sst.Lift_runtime_int operand
+      when expression.typ = Sst.Mathematical_int && operand.typ = Sst.Int ->
+        loop scoped operand
     | Sst.Forall quantifier | Sst.Exists quantifier ->
         let kind =
           match expression.expression_desc with
@@ -126,7 +130,7 @@ let validate ~admitted_type ~admit_tuple_match ~malformed definition expression 
               || admitted_type left.typ
           | Sst.Less_than | Sst.Less_or_equal | Sst.Greater_than
           | Sst.Greater_or_equal ->
-              left.typ = Sst.Int
+              left.typ = Sst.Int || left.typ = Sst.Mathematical_int
         in
         if not supported then reject expression
         else
@@ -212,6 +216,31 @@ let validate ~admitted_type ~admit_tuple_match ~malformed definition expression 
               in
               loop scoped case.case_body)
             cases
+    | Sst.Symbolic_application application ->
+        if
+          not
+            (Parametric_type.equal expression.typ
+               (Symbolic_application_private.result_type application))
+          || not (scalar_type expression.typ || admitted_type expression.typ)
+        then reject expression
+        else (
+          [%log.trace
+            "admitting authenticated symbolic application in recursive specification"
+            ~stage:(Delator.Field.string "recursive-body-validation")
+            ~decision:(Delator.Field.string "accepted")
+            ~correlation:
+              (Delator.Field.string
+                 (Symbolic_application_private.identity_digest application))
+            ~type_arity:
+              (Delator.Field.int
+                 (List.length
+                    (Symbolic_application_private.type_arguments application)))
+            ~term_arity:
+              (Delator.Field.int
+                 (List.length
+                    (Symbolic_application_private.arguments application)))];
+          iter_result (loop scoped)
+            (Symbolic_application_private.arguments application))
     | Sst.Direct_call
         {
           call_form = Sst.Specification_call;

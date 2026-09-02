@@ -38,6 +38,7 @@ let operation_id (operation : Sst.abstract_public_operation) =
 
 let expression_children (expression : Sst.expression) =
   match expression.expression_desc with
+  | Sst.Lift_runtime_int operand -> [ operand ]
   | Sst.Tuple_value values -> List.map snd values
   | Sst.Record_value { fields; _ } -> List.map snd fields
   | Sst.Constructor_value { arguments; _ } -> arguments
@@ -279,7 +280,8 @@ let authenticate_handle validated type_descriptor evidence invariant_operation =
                           match transition.root.typ with
                           | Sst.Aggregate root_type ->
                               not (same_type_id root_type type_id)
-                          | Sst.Unit | Sst.Int | Sst.Bool | Sst.Tuple _
+                          | Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Bool
+                          | Sst.Tuple _
                           | Sst.Parameter _ | Sst.Application _ -> true)
                         transitions
                     then

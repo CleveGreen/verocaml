@@ -1,3 +1,5 @@
+[@@@verocaml.verify]
+
 [@@@verocaml.activate [Vstd.Seq.group_seq_axioms]]
 
 let constant_sequence (size : int) (value : 'a) : 'a Vstd.Seq.t =

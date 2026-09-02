@@ -1,7 +1,7 @@
 type seed = Zero | Succ of seed
 type 'a seq = Nil | Cons of 'a * 'a seq
 
-let rec length (xs : 'a seq) : int =
+let rec length (xs : 'a seq) : Vstd.Int.t =
   [%verocaml.decreases xs];
   match xs with Nil -> 0 | Cons (_, tail) -> 1 + length tail
 [@@verocaml.spec] [@@verocaml.revealed]

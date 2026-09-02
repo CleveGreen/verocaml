@@ -59,7 +59,7 @@ let authenticate_logical_builtin_artifact artifact ~source_file =
   and source = String.equal implementation.Cmt_input.source_file source_file
   and metadata = implementation.implementation_metadata_valid
   and shape = implementation.has_implementation_shape
-  and retained = Cmt_input.retained_preprocessing implementation
+  and retained = Cmt_input.retained_ppx_artifact implementation
   and family =
     List.exists
       (String.equal "retained-v1")

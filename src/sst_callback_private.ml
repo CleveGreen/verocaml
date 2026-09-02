@@ -161,6 +161,7 @@ let expression_children expression =
            (fun case ->
              Option.to_list case.Sst.case_guard @ [ case.case_body ])
            cases
+  | Sst.Lift_runtime_int operand -> [ operand ]
   | Sst.Checked_arithmetic (_, operands) -> operands
   | Sst.Boolean_not operand | Sst.Old operand -> [ operand ]
   | Sst.Direct_call { arguments; _ } ->
@@ -247,7 +248,8 @@ let callback_bindings roots =
       | Sst.Owned_tree_rebase _ | Sst.Let_mutable _ | Sst.Let _
       | Sst.Sequence _ | Sst.Compare _ | Sst.Boolean_binary _
       | Sst.Boolean_not _ | Sst.If _ | Sst.Match _
-      | Sst.Checked_arithmetic _ | Sst.Use_type_invariant _
+      | Sst.Lift_runtime_int _ | Sst.Checked_arithmetic _
+      | Sst.Use_type_invariant _
       | Sst.Local_assert _ | Sst.Proof_region _ | Sst.Reveal _
       | Sst.Reveal_with_fuel _ | Sst.Old _ | Sst.Optional_absent
       | Sst.Optional_present _ | Sst.Optional_forward _ ->
@@ -329,7 +331,8 @@ let authenticate_program ~compilation_identity ~session program =
       | Sst.Owned_tree_rebase _ | Sst.Let_mutable _ | Sst.Let _
       | Sst.Sequence _ | Sst.Compare _ | Sst.Boolean_binary _
       | Sst.Boolean_not _ | Sst.If _ | Sst.Match _
-      | Sst.Checked_arithmetic _ | Sst.Use_type_invariant _
+      | Sst.Lift_runtime_int _ | Sst.Checked_arithmetic _
+      | Sst.Use_type_invariant _
       | Sst.Local_assert _ | Sst.Proof_region _ | Sst.Reveal _
       | Sst.Reveal_with_fuel _ | Sst.Old _ | Sst.Optional_absent
       | Sst.Optional_present _ | Sst.Optional_forward _ ->
@@ -377,7 +380,8 @@ let find_binding capture roots =
         | Sst.Owned_tree_rebase _ | Sst.Let_mutable _ | Sst.Let _
         | Sst.Sequence _ | Sst.Compare _ | Sst.Boolean_binary _
         | Sst.Boolean_not _ | Sst.If _ | Sst.Match _
-        | Sst.Checked_arithmetic _ | Sst.Direct_call _
+        | Sst.Lift_runtime_int _ | Sst.Checked_arithmetic _
+        | Sst.Direct_call _
         | Sst.Callback_call _ | Sst.Callback_requires _
         | Sst.Callback_ensures _ | Sst.Use_type_invariant _
         | Sst.Forall _ | Sst.Exists _ | Sst.Symbolic_application _
@@ -632,6 +636,8 @@ type top_function = {
     parametric_type_binders : (int * Parametric_type.binder) list;
   proof_capture_hints : (Location.t * Types.type_expr) list;
   builtin_assertions : planned_builtin_assertion list;
+  mutable semantic_parameters : (Sst.typ * string option) list option;
+  mutable semantic_result_type : Sst.typ option;
 }
 
 let source_definition_body function_ =

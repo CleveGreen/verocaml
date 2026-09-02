@@ -42,6 +42,7 @@ and integer_term =
   | Integer_add of integer_term * integer_term
   | Integer_subtract of integer_term * integer_term
   | Integer_negate of integer_term
+  | Integer_multiply of integer_term * integer_term
   | Integer_multiply_constant of Z.t * integer_term
   | Integer_absolute_value of integer_term
   | Integer_conditional of boolean_term * integer_term * integer_term
@@ -212,6 +213,7 @@ type checked_operation =
   | Add
   | Subtract
   | Negate
+  | Multiply
   | Multiply_constant of Z.t
   | Successor
   | Predecessor
@@ -445,6 +447,8 @@ val rank_term_to_string : rank_term -> string
 
 val integer_range : integer_term -> boolean_term list
 val obligation_has_recursive_specification : obligation -> bool
+val recursive_spec_argument_has_recursive_specification :
+  recursive_spec_argument -> bool
 val obligation_aggregate_recursive_specifications :
   obligation ->
   ((Sst.function_id * span * Recursive_spec_application_identity.t) list,
@@ -456,6 +460,7 @@ val obligation_has_logical_aggregate_construction : obligation -> bool
 val obligation_rank_domains : obligation -> rank_domain list
 val integer_term_to_string : integer_term -> string
 val boolean_term_to_string : boolean_term -> string
+val aggregate_term_to_string : aggregate_term -> string
 val specification_application_name :
   Sst.function_id ->
   Parametric_type.t list ->

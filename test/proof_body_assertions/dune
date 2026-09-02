@@ -24,17 +24,6 @@
    %{targets}
    (echo "let ready = ()"))))
 
-(cram
- (deps
-  (glob_files fixtures/*.ml)
-  ../../src/verocaml.exe
-  ../../verocaml.install
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi
-  proof_body_assertions_tool.exe
-  mutate_local_carrier.exe))
-
 (alias
  (name proof-body-assertions-check)
  (deps
@@ -55,6 +44,7 @@
 (executable
  (name outcome_cases)
  (modules outcome_cases integration_environment)
+ (flags (:standard -opaque))
  (libraries outcome_test_support))
 
 (rule
@@ -65,7 +55,8 @@
   (sandbox always)
   (:suite outcome_cases.exe)
   integration-library-environment.manifest
-  (glob_files fixtures/*.ml))
+  (glob_files fixtures/*.ml)
+  (glob_files fixtures/*.mli))
  (action
   (run
    %{suite}

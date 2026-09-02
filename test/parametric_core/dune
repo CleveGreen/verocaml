@@ -60,16 +60,6 @@
  (action
   (run %{validator} %{report} %{archive})))
 
-(cram
- (alias parametric-core-specialist-check)
- (deps
-  (glob_files fixtures/*.ml)
-  parametric_core_tool.exe
-  ../../src/verocaml.exe
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
-
 (alias
  (name parametric-core-check)
  (deps

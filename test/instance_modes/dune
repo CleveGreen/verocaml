@@ -71,21 +71,6 @@
  (action
   (run %{validator} %{report} %{archive})))
 
-(cram
- (applies_to instance_modes)
- (alias instance-modes-specialist-check)
- (runtest_alias false)
- (deps
-  (glob_files fixtures/*)
-  generate_authority_matrix.exe
-  generate_negative_matrix.exe
-  generate_unannotated_authority_matrix.exe
-  instance_modes_tool.exe
-  ../../src/verocaml.exe
-  ../../verocaml.install
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
 (alias
  (name instance-mode-erasure-check)
  (deps

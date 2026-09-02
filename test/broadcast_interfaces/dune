@@ -1,0 +1,106 @@
+(rule
+ (targets
+  integration_environment.ml
+  static_elision_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{environment_module} static_elision_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries
+  outcome_test_support
+  verocaml_core
+  vero_ppx_rewriter
+  compiler-libs.common
+  delator
+  unix))
+
+(rule
+ (targets
+  broadcast-interfaces-outcome-cases.result-report
+  broadcast-interfaces-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   broadcast-interfaces-outcome-cases.result-report
+   broadcast-interfaces-outcome-cases.failure-archive)))
+
+(rule
+ (alias broadcast-interfaces-outcome-check)
+ (deps
+  (:report broadcast-interfaces-outcome-cases.result-report)
+  (:archive broadcast-interfaces-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
+(alias
+ (name runtest)
+ (deps (alias broadcast-interfaces-outcome-check)))
+
+(executable
+ (name static_elision_cases)
+ (modules static_elision_cases static_elision_environment)
+ (enabled_if (= %{env:DELATOR_STATIC_LEVEL=trace} error))
+ (libraries outcome_test_support compiler-libs.common unix))
+
+(rule
+ (enabled_if (= %{env:DELATOR_STATIC_LEVEL=trace} error))
+ (targets
+  broadcast-interfaces-static-elision.result-report
+  broadcast-interfaces-static-elision.failure-archive)
+ (deps
+  (sandbox none)
+  (:suite static_elision_cases.exe)
+  integration-library-environment.manifest
+  ../../ppx/.vero_ppx_rewriter.objs/byte/vero_ppx_rewriter__Vero_ppx_broadcast_private.cmt
+  ../../ppx/.vero_ppx_rewriter.objs/byte/vero_ppx_rewriter.cmt
+  ../../src/.verocaml_core.objs/byte/retained_broadcast_private.cmt
+  ../../src/.verocaml_core.objs/byte/retained_interface_authority_private.cmt
+  ../../src/.verocaml_core.objs/byte/cmt_input.cmt
+  ../../src/.verocaml_core.objs/byte/broadcast_declaration_private.cmt
+  ../../src/.verocaml_core.objs/byte/broadcast_scope_private.cmt
+  ../../src/.verocaml_core.objs/byte/broadcast_vc_private.cmt
+  ../../src/.verocaml_core.objs/byte/interface_specification_candidate_private.cmt
+  ../../src/.verocaml_core.objs/byte/interface_specification_environment_private.cmt
+  ../../src/.verocaml_core.objs/byte/interface_specification_loaded_private.cmt
+  ../../src/.verocaml_core.objs/byte/imported_callable.cmt
+  ../../src/.verocaml_core.objs/byte/typedtree_adapter_private.cmt
+  ../../src/.verocaml_core.objs/byte/typedtree_broadcast_private.cmt
+  ../../src/.verocaml_core.objs/byte/typedtree_lowering_private.cmt
+  ../../src/.verocaml_core.objs/byte/verification_scope_private.cmt
+  ../../src/.verocaml_core.objs/byte/external_target_specification_private.cmt
+  ../../src/.verocaml_bin_private.objs/byte/verocaml_bin.cmt
+  ../../src/.verocaml_bin_private.objs/byte/verocaml_bin_dune_private.cmt
+  ../../src/.verocaml_bin_private.objs/byte/verocaml_bin_inventory_private.cmt
+  ../../src/.verocaml_bin_private.objs/byte/verocaml_bin_project_private.cmt)
+ (action
+  (run
+   %{suite}
+   --produce
+   broadcast-interfaces-static-elision.result-report
+   broadcast-interfaces-static-elision.failure-archive)))
+
+(rule
+ (enabled_if (= %{env:DELATOR_STATIC_LEVEL=trace} error))
+ (alias broadcast-interfaces-static-elision-check)
+ (deps
+  (:report broadcast-interfaces-static-elision.result-report)
+  (:archive broadcast-interfaces-static-elision.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))

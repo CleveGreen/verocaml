@@ -180,7 +180,7 @@ let external_source ~paths ~type_id ~load_path_visible ~load_path_hidden _env
                 provenance =
                   Parametric_adt.External
                     { compiler_uid = target_uid; proxy_uid };
-                optional_carrier = Path.same canonical_path Predef.path_option;
+                optional_carrier = false;
               }
         | Ok (_, target, _)
           when target.Types.type_private <> Asttypes.Public ->
@@ -213,7 +213,7 @@ let parameter_binders source =
       (Types.get_id parameter, Parametric_type.binder owner ~ordinal))
     source.declaration.type_params
 
-let lower_type sources aggregate binders typ =
+let lower_type sources aggregate logical_sort binders typ =
   let rec lower seen typ =
     let id = Types.get_id typ in
     if List.mem id seen then Error "cyclic compiler type expression"
@@ -228,6 +228,13 @@ let lower_type sources aggregate binders typ =
       | Types.Tconstr (path, [], _) when Path.same path Predef.path_unit -> Ok Parametric_type.Unit
       | Types.Tconstr (path, [], _) when Path.same path Predef.path_bool -> Ok Parametric_type.Bool
       | Types.Tconstr (path, [], _) when Path.same path Predef.path_int -> Ok Parametric_type.Int
+      | Types.Tconstr (path, [], _) when logical_sort path ->
+          [%log.trace "lowered descriptor-backed logical sort in parametric aggregate"
+            ~stage:(Delator.Field.string "parametric-field-type-lowering")
+            ~type_path:(Delator.Field.string (Path.name path))
+            ~result_sort:(Delator.Field.string "mathematical-int")
+            ~decision:(Delator.Field.string "accepted")];
+          Ok Parametric_type.Mathematical_int
       | Types.Ttuple components ->
           let rec components_of acc = function
             | [] -> Ok (Parametric_type.Tuple (List.rev acc))
@@ -269,12 +276,12 @@ let diagnostic span location message =
 let descriptor_error span location error =
   diagnostic span location (error.Parametric_adt.descriptor ^ ": " ^ error.message)
 
-let lower_source ~span ~aggregate ~modalities sources source =
+let lower_source ~span ~aggregate ~logical_sort ~modalities sources source =
   let binders = parameter_binders source in
   let descriptor_binders = List.map snd binders in
   let constructor = type_constructor source in
   let lower_field owner index name uid mutability modality typ location =
-    match lower_type sources aggregate binders typ with
+    match lower_type sources aggregate logical_sort binders typ with
     | Error message -> Error (diagnostic span location message)
     | Ok field_type ->
         let* field_modalities = modalities location modality in
@@ -408,7 +415,7 @@ let lower_source ~span ~aggregate ~modalities sources source =
       Error (diagnostic span source.declaration.type_loc "unsupported parameterized ADT representation")
 
 
-let lower ~span ~aggregate ~modalities sources =
+let lower ~span ~aggregate ~logical_sort ~modalities sources =
   let rec loop acc = function
     | [] ->
         let lowered = List.rev acc in
@@ -417,7 +424,9 @@ let lower ~span ~aggregate ~modalities sources =
         | Ok () -> Ok lowered
         | Error error -> Error (descriptor_error span Location.none error))
     | source :: rest ->
-        let* lowered = lower_source ~span ~aggregate ~modalities sources source in
+        let* lowered =
+          lower_source ~span ~aggregate ~logical_sort ~modalities sources source
+        in
         loop (lowered :: acc) rest
   in
   loop [] sources
@@ -439,7 +448,7 @@ let application_type_id lowered typ =
       Option.map (fun item -> Parametric_adt.type_id item.descriptor)
         (find_by_constructor lowered constructor)
   | Sst.Aggregate type_id -> Some type_id
-  | Unit | Bool | Int | Tuple _ | Parameter _ -> None
+  | Unit | Bool | Int | Mathematical_int | Tuple _ | Parameter _ -> None
 
 let instantiate_field_type lowered ~application field =
   match application with
@@ -473,6 +482,7 @@ let instantiate_field_type lowered ~application field =
 
 let expression_children (expression : Sst.expression) =
   match expression.expression_desc with
+  | Sst.Lift_runtime_int operand -> [ operand ]
   | Sst.Tuple_value values -> List.map snd values
   | Sst.Record_value { fields; _ } -> List.map snd fields
   | Sst.Constructor_value { arguments; _ }

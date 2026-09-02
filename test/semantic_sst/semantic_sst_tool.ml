@@ -1228,7 +1228,8 @@ let raw_application_matrix filename =
   let constructor =
     match measured_type with
     | Sst.Application (constructor, _) -> constructor
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Aggregate _
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+    | Sst.Aggregate _
     | Sst.Parameter _ ->
         fail "application matrix target is not an exact application"
   in

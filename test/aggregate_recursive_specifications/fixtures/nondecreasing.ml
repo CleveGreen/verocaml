@@ -1,9 +1,9 @@
 type 'a node = Empty | Node of 'a * 'a node
-type stack = { top : int node; length : int }
+type stack = { top : int node; length : Vstd.Int.t }
 
 let rec spec_push_n_bad
     (value : int)
-    (n : int)
+    (n : Vstd.Int.t)
     (stack : stack) : stack =
   [%verocaml.decreases n];
   if n <= 0 then stack

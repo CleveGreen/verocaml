@@ -6,7 +6,7 @@ let spec_node_value (nodes : int node) : int option =
   match nodes with Empty -> None | Node (value, _) -> Some value
 [@@verocaml.spec]
 
-let rec spec_index (idx : int) (nodes : int node) : int option =
+let rec spec_index (idx : Vstd.Int.t) (nodes : int node) : int option =
   [%verocaml.decreases idx];
   if idx <= 0 then spec_node_value nodes
   else

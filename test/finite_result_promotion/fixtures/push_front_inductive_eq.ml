@@ -5,9 +5,8 @@ type stack = {
   length : int;
 }
 
-let spec_push_front (value : int) (stack : stack) : stack =
-  let { top; length } = stack in
-  { top = Node (value, top); length = length + 1 }
+let spec_push_front (value : int) (stack : stack) : int node =
+  Node (value, stack.top)
 [@@verocaml.spec]
 
 let rec spec_node_eq (a : int node) (b : int node) : bool =
@@ -49,8 +48,8 @@ let rec node_eq_trans
 [@@verocaml.proof]
 
 let did_push_front (value : int) (old : stack) (cur : stack) : bool =
-  let expected = spec_push_front value old in
-  cur.length = expected.length && spec_node_eq cur.top expected.top
+  cur.length = old.length + 1
+  && spec_node_eq cur.top (spec_push_front value old)
 [@@verocaml.spec]
 
 let push_front (value : int) (stack : stack [@finite]) : stack =
@@ -62,7 +61,8 @@ let push_front (value : int) (stack : stack [@finite]) : stack =
   result
 
 let did_push_front_twice (a : int) (b : int) (old : stack) (cur : stack) : bool =
-  did_push_front b (spec_push_front a old) cur
+  cur.length = old.length + 2
+  && spec_node_eq cur.top (Node (b, spec_push_front a old))
 [@@verocaml.spec]
 
 let push_two_to_front (a : int) (b : int) (stack : stack [@finite]) : stack =

@@ -126,6 +126,9 @@ and observe_integer observation = function
   | Vir.Integer_subtract (left, right) ->
       observe_integer observation left;
       observe_integer observation right
+  | Vir.Integer_multiply (left, right) ->
+      observe_integer observation left;
+      observe_integer observation right
   | Vir.Integer_negate term
   | Vir.Integer_multiply_constant (_, term)
   | Vir.Integer_absolute_value term ->
@@ -312,6 +315,7 @@ let rec observe_sst_expression observation (expression : Sst.expression) =
       List.iter observe
         (Option.get (Sst.symbolic_application_arguments application))
   | Sst.Callback_call _ | Sst.Callback_requires _ | Sst.Callback_ensures _ -> ()
+  | Sst.Lift_runtime_int operand -> observe operand
   | Sst.Reveal _ ->
       observation.reveals <- observation.reveals + 1
   | Sst.Reveal_with_fuel _ ->

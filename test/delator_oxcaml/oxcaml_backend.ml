@@ -8,10 +8,11 @@ let portable_instrumented @ portable = fun value ->
     ~name:"portable-action" (fun () -> instrumented value)
 [@@delator.instrument] [@@delator.level trace]
 
-let () =
+let run () =
   assert (String.ends_with ~suffix:"+ox" Sys.ocaml_version);
   let result =
     Delator.in_span ~level:Delator.Trace ~target:"delator-oxcaml-test"
       ~name:"local-action" (stack_ fun () -> portable_instrumented 41)
   in
-  assert (result = 42)
+  assert (result = 42);
+  result

@@ -5,6 +5,15 @@ let ( let* ) = Result.bind
 
 let provider_interface =
   {|
+type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
+type 'a list_specification = 'a list
+[@@verocaml.external_type_specification]
+
+type ('a, 'error) result_specification = ('a, 'error) result
+[@@verocaml.external_type_specification]
+
 type record_result = { value : int; unstated : int }
 type 'a box = { box_value : 'a }
 type 'a tree = Leaf | Node of 'a * 'a tree * 'a tree
@@ -26,6 +35,15 @@ val make_unique_record : int -> record_result @ unique
 let provider_source =
   {|
 [@@@verocaml.verify]
+
+type 'a option_specification = 'a option
+[@@verocaml.external_type_specification]
+
+type 'a list_specification = 'a list
+[@@verocaml.external_type_specification]
+
+type ('a, 'error) result_specification = ('a, 'error) result
+[@@verocaml.external_type_specification]
 
 type record_result = { value : int; unstated : int }
 type 'a box = { box_value : 'a }
@@ -161,7 +179,7 @@ val promised : int -> int
 val reordered : bool -> bool
 val omitted : int -> int
 val supplied : int -> int
-val forwarded : int -> int option -> int
+val forwarded : int -> int Provider.option_specification -> int
 |}
 
 let external_client_source =
@@ -189,7 +207,9 @@ let reordered (value : bool) = Legacy.select () ~first:value ~value:false
 let omitted (value : int) = Legacy.select ~first:value ()
 let supplied (value : int) = Legacy.select ~value ~first:value ()
 
-let forwarded (value : int) (option_value : int option) =
+let forwarded
+    (value : int)
+    (option_value : int Provider.option_specification) =
   Legacy.select ~first:value ?value:option_value ()
 |}
 

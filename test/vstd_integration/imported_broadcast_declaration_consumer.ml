@@ -1,3 +1,5 @@
+[@@@verocaml.verify]
+
 [@@@verocaml.activate [Vstd.Seq.axiom_init_get]]
 
 let constant_sequence (size : int) (value : 'a) : 'a Vstd.Seq.t =

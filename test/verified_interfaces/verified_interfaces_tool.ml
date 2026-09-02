@@ -48,6 +48,7 @@ let public_identity_checks types callables models =
   let callable_names = List.map callable_name callables in
   let rec public_typ = function
     | Sst.Unit | Bool | Int -> true
+    | Mathematical_int -> false
     | Tuple components ->
         List.for_all (fun (_, typ) -> public_typ typ) components
     | Aggregate type_id -> List.mem (type_id_name type_id) type_names
@@ -202,6 +203,7 @@ let public_identity_checks types callables models =
     | Reveal _ | Reveal_with_fuel _ | Use_type_invariant _
     | Local_assert _ ->
         false
+    | Lift_runtime_int operand -> public_expression operand
   in
   let public_field_definition field =
     public_field field.Sst.field_id && public_typ field.field_type

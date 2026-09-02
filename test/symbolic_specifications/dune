@@ -42,6 +42,7 @@
 (executable
  (name outcome_cases)
  (modules outcome_cases integration_environment)
+ (flags (:standard -opaque))
  (libraries outcome_test_support verocaml_core))
 
 (rule
@@ -68,20 +69,6 @@
   (:validator ../support/report_validator.exe))
  (action
   (run %{validator} %{report} %{archive})))
-
-(cram
- (alias symbolic-specifications-specialist-check)
- (runtest_alias false)
- (deps
-  generate_declaration_negatives.exe
-  mutate_symbolic_carrier.exe
-  (glob_files fixtures/*.ml)
-  symbolic_specifications_tool.exe
-  ../../verocaml.install
-  ../../src/verocaml.exe
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
 
 (alias
  (name symbolic-specifications-check)

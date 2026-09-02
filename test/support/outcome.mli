@@ -9,6 +9,7 @@ type operation =
   | Add
   | Subtract
   | Negate
+  | Multiply
   | Multiply_constant
   | Successor
   | Predecessor

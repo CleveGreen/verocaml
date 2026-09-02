@@ -64,7 +64,7 @@ module Finite_domain = struct
 
   let deeply_immutable_type definitions typ =
     let rec classify visited = function
-      | Sst.Unit | Sst.Bool | Sst.Int -> true
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> true
       | Sst.Parameter _ | Sst.Application _ -> false
       | Sst.Tuple components ->
           List.for_all (fun (_, component) -> classify visited component) components
@@ -706,7 +706,7 @@ let exact_aggregate_type rank typ aggregate =
   | Sst.Application (_, arguments) ->
       arguments = aggregate.aggregate_type.aggregate_type_arguments
       && component_aggregate rank aggregate
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
   | Sst.Parameter _ -> false
 
 let root_symbol value =
@@ -853,6 +853,76 @@ let authenticate registry ~facts ~callable ~value ~mode ~typ ~rank =
     with
     | Some receipt -> Ok receipt
     | None ->
+        let[@log_value.trace] count predicate =
+          List.fold_left
+            (fun count receipt -> if predicate receipt then count + 1 else count)
+            0 facts
+        in
+        let[@log_value.trace] valid receipt =
+          valid_receipt registry receipt
+          && List.exists (( == ) receipt) facts
+        in
+        let[@log_value.trace] callable_match receipt =
+          (valid [@log_value.trace]) receipt
+          && String.equal receipt.identity.callable callable
+        in
+        let[@log_value.trace] value_match receipt =
+          (callable_match [@log_value.trace]) receipt
+          && receipt.identity.value = value
+        in
+        let[@log_value.trace] mode_match receipt =
+          (value_match [@log_value.trace]) receipt
+          && receipt.identity.mode = mode
+        in
+        let[@log_value.trace] type_match receipt =
+          (mode_match [@log_value.trace]) receipt
+          && same_type receipt.identity.typ typ
+        in
+        let[@log_value.trace] shown_receipts =
+          List.filteri (fun index _ -> index < 16) facts
+        in
+        let[@log_value.trace] dropped_receipts =
+          Int.max 0 (List.length facts - 16)
+        in
+        [%log.trace "diagnosed finite receipt authentication miss"
+          ~stage:(Delator.Field.string "finite-receipt-authentication")
+          ~requested_value:
+            (Delator.Field.string (Vir.aggregate_term_to_string value))
+          ~available_values:
+            (Delator.Field.seq
+               ~dropped:(dropped_receipts [@log_value.trace])
+               (List.map
+                  (fun receipt ->
+                    Delator.Field.string
+                      (Vir.aggregate_term_to_string receipt.identity.value))
+                  (shown_receipts [@log_value.trace])))
+          ~available_receipts:(Delator.Field.int (List.length facts))
+          ~raw_value_matches:
+            (Delator.Field.int
+               ((count [@log_value.trace]) (fun receipt ->
+                    receipt.identity.value = value)))
+          ~valid_receipts:
+            (Delator.Field.int
+               ((count [@log_value.trace]) (valid [@log_value.trace])))
+          ~callable_matches:
+            (Delator.Field.int
+               ((count [@log_value.trace])
+                  (callable_match [@log_value.trace])))
+          ~value_matches:
+            (Delator.Field.int
+               ((count [@log_value.trace]) (value_match [@log_value.trace])))
+          ~mode_matches:
+            (Delator.Field.int
+               ((count [@log_value.trace]) (mode_match [@log_value.trace])))
+          ~type_matches:
+            (Delator.Field.int
+               ((count [@log_value.trace]) (type_match [@log_value.trace])))
+          ~rank_matches:
+            (Delator.Field.int
+               ((count [@log_value.trace]) (fun receipt ->
+                    (type_match [@log_value.trace]) receipt
+                    && same_rank receipt.rank rank)))
+          ~decision:(Delator.Field.string "rejected")];
         Error "exact persistent finite fact is unavailable for this session/program/callable/value/path/mode/type/rank/profile"
 
 let authenticate_fact registry fact =
@@ -901,7 +971,7 @@ let component_type rank type_id =
 
 let rec ranked_types registry rank visited typ =
   match typ with
-  | Sst.Unit | Sst.Bool | Sst.Int
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
   | Sst.Parameter _ -> []
   | Sst.Application _ ->
       if rank.component_snapshot <> [] && rank.profile_actual_snapshot <> []
@@ -935,6 +1005,7 @@ let rec typ_key = function
   | Sst.Unit -> "unit"
   | Sst.Bool -> "bool"
   | Sst.Int -> "int"
+  | Sst.Mathematical_int -> "Int"
   | Sst.Tuple components ->
       "tuple:" ^ String.concat "," (List.map (fun (_, typ) -> typ_key typ) components)
   | Sst.Aggregate id -> Printf.sprintf "aggregate:%s#%d" id.type_name id.type_index
@@ -1069,11 +1140,11 @@ let rec type_at_path typ = function
           match List.nth_opt components index with
           | Some (_, component) -> type_at_path component rest
           | None -> None)
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Aggregate _
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Aggregate _
       | Sst.Parameter _ | Sst.Application _ -> None)
 
 let vir_type = function
-  | Sst.Int -> Some Vir.Integer
+  | Sst.Int | Sst.Mathematical_int -> Some Vir.Integer
   | Sst.Bool -> Some Vir.Boolean
   | Sst.Aggregate id ->
       Some (Vir.Aggregate { Vir.aggregate_type_index = id.type_index;
@@ -1579,13 +1650,15 @@ let assume_formal registry ~slot ~callable ~value ~mode ~typ ~rank =
             match typ with
             | Sst.Aggregate _ | Sst.Application _ ->
                 rank.component_snapshot <> []
-            | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _
+            | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+            | Sst.Tuple _
             | Sst.Parameter _ ->
                 false)
          ||
          match typ with
          | Sst.Application _ -> exact_aggregate_type rank typ value
-         | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Aggregate _
+         | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+         | Sst.Aggregate _
          | Sst.Parameter _ ->
              false)
   then Error "finite formal requires a deeply immutable aggregate type"
@@ -1641,11 +1714,12 @@ let compatible_formal_type ~formal ~actual =
         (fun formal actual ->
           match formal with
           | Parametric_type.Parameter _ -> true
-          | Unit | Bool | Int | Tuple _ | Aggregate _ | Application _ ->
+          | Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _
+          | Application _ ->
               Parametric_type.equal formal actual)
         formal_arguments actual_arguments
-  | ( (Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Aggregate _
-      | Sst.Parameter _),
+  | ( (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Aggregate _ | Sst.Parameter _),
       _ )
   | Sst.Application _, _ ->
       false

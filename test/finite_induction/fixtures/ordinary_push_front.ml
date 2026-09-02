@@ -7,7 +7,7 @@ type stack = {
   length : int;
 }
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -15,9 +15,8 @@ let rec spec_node_len (node : int node) : int =
 [@@verocaml.spec]
 [@@verocaml.opaque]
 
-let spec_push_front (value : int) (stack : stack) : stack =
-  let { top; length } = stack in
-  { top = Node (value, top); length = length + 1 }
+let spec_push_front (value : int) (stack : stack) : int node =
+  Node (value, stack.top)
 [@@verocaml.spec]
 
 let rec spec_node_eq (a : int node) (b : int node) : bool =
@@ -43,8 +42,8 @@ let did_push_front
     (value : int)
     (old : stack [@finite])
     (cur : stack [@finite]) : bool =
-  let expected = spec_push_front value old in
-  cur.length = expected.length && spec_node_eq cur.top expected.top
+  cur.length = old.length + 1
+  && spec_node_eq cur.top (spec_push_front value old)
 [@@verocaml.spec]
 
 let stack_wf (stack : stack) : bool =

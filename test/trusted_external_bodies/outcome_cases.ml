@@ -1,6 +1,14 @@
 open Outcome_test_support
 
 let suite_path = "test/trusted_external_bodies/outcome_cases.ml"
+let ( let* ) = Result.bind
+
+let mismatch format =
+  Printf.ksprintf
+    (fun message -> Error (Failure.make Failure.Expectation_mismatch message))
+    format
+
+let require condition message = if condition then Ok () else mismatch "%s" message
 
 let absolute path =
   if Filename.is_relative path then Filename.concat (Sys.getcwd ()) path else path
@@ -161,6 +169,82 @@ let discover_cmt project_root unit_name =
         (Failure.make Failure.Selected_cmt_discovery
            ("ambiguous selected CMT for unit " ^ unit_name))
 
+let generic_trusted_proof =
+  let fixture = "proof_generic.ml" in
+  let unit_name = module_name fixture in
+  let expectation =
+    Expectation.empty |> Expectation.status Outcome.Verified
+    |> Expectation.require_unit unit_name Outcome.Unit_verified
+    |> require_functions [ "instantiate_integer"; "instantiate_boolean" ]
+  in
+  Suite.case ~name:"generic-proof-body-is-trusted-axiom" ~expectation
+    (fun ~environment ~workspace ->
+      let* outcome =
+        run_project ~name:"trusted_generic_proof" [ fixture ] ~environment
+          ~workspace
+      in
+      let root = Filename.concat workspace "project" in
+      let* cmt = discover_cmt root unit_name in
+      let cmi = Filename.remove_extension cmt ^ ".cmi" in
+      let* implementation =
+        match Cmt_input.load_with_interface ~cmt ~cmi () with
+        | Ok implementation -> Ok implementation
+        | Error diagnostic ->
+            mismatch "generic trusted proof load failed [%s]: %s"
+              diagnostic.Diagnostic.code diagnostic.message
+      in
+      let* configuration =
+        Verifier_service.configuration ~threads:2 ~timeout_ms:60_000 ~rlimit:None
+        |> Result.map_error (fun error ->
+               Failure.make Failure.Runner_internal
+                 (Verifier_service.configuration_error_message error))
+      in
+      let* result =
+        match
+          Verifier_service.verify
+            (Verifier_service.request ~configuration ~consumer:implementation
+               ~dependencies:[])
+        with
+        | Ok result -> Ok result
+        | Error error -> mismatch "%s" (Verifier_service.error_message error)
+      in
+      let views =
+        Verifier_service.trusted_external_observations result
+        |> List.map Verifier_service.trusted_external_view
+      in
+      let declaration_present =
+        List.exists
+          (function
+            | Verifier_service.Trusted_external_body_declaration
+                { proof_mode; function_; _ } ->
+                proof_mode
+                && String.equal (Verifier_service.function_name function_) "trusted"
+            | Trusted_external_specification_use _
+            | Trusted_external_target_specification_use _
+            | Trusted_external_body_use _ -> false)
+          views
+      in
+      let proof_uses =
+        views
+        |> List.filter (function
+             | Verifier_service.Trusted_external_body_use
+                 { proof_call; broadcast_use; function_; _ } ->
+                 proof_call && not broadcast_use
+                 && String.equal (Verifier_service.function_name function_) "trusted"
+             | Trusted_external_specification_use _
+             | Trusted_external_target_specification_use _
+             | Trusted_external_body_declaration _ -> false)
+      in
+      let* () =
+        require declaration_present
+          "generic trusted proof lost proof-mode declaration provenance"
+      in
+      let* () =
+        require (List.length proof_uses >= 2)
+          "generic trusted proof did not survive distinct binder instantiations"
+      in
+      Ok outcome)
+
 let tolerate_expected_verifier_rejection = function
   | Ok _ -> Ok ()
   | Error failure when Failure.category failure = Failure.Verifier_outcome -> Ok ()
@@ -309,8 +393,7 @@ let () =
       counterexample_matrix;
       retained_rejection_case ~name:"reject-unmarked-nested-mutation"
         ~fixture:"unmarked_nested.ml" ~code:"VERO_UNSUPPORTED_TYPE";
-      retained_rejection_case ~name:"reject-generic-proof-body"
-        ~fixture:"proof_generic.ml" ~code:"VERO_UNSUPPORTED_POLYMORPHISM";
+      generic_trusted_proof;
       retained_rejection_case ~name:"reject-nonunit-proof-body"
         ~fixture:"proof_nonunit.ml" ~code:"VERO_MALFORMED_GHOST_CALL";
       retained_rejection_case ~name:"reject-proof-call-from-exec"

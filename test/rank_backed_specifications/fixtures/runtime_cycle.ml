@@ -3,7 +3,7 @@ type node = Empty | Node of int * node
 let identity (node : node) : node = node
 [@@verocaml.spec]
 
-let rec spec_node_len (node : node) : int =
+let rec spec_node_len (node : node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0

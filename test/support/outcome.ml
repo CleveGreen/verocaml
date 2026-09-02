@@ -9,6 +9,7 @@ type operation =
   | Add
   | Subtract
   | Negate
+  | Multiply
   | Multiply_constant
   | Successor
   | Predecessor
@@ -121,6 +122,7 @@ let operation_of_service = function
   | Verifier_service.Add -> Add
   | Subtract -> Subtract
   | Negate -> Negate
+  | Multiply -> Multiply
   | Multiply_constant _ -> Multiply_constant
   | Successor -> Successor
   | Predecessor -> Predecessor
@@ -175,6 +177,7 @@ let obligation_named_fact (obligation : Vir.obligation) =
           | Vir.Add -> Add
           | Subtract -> Subtract
           | Negate -> Negate
+          | Multiply -> Multiply
           | Multiply_constant _ -> Multiply_constant
           | Successor -> Successor
           | Predecessor -> Predecessor
@@ -323,6 +326,7 @@ let operation_name = function
   | Add -> "add"
   | Subtract -> "subtract"
   | Negate -> "negate"
+  | Multiply -> "multiply"
   | Multiply_constant -> "multiply-constant"
   | Successor -> "successor"
   | Predecessor -> "predecessor"

@@ -1,17 +1,19 @@
+open Vstd
+
 type 'a list_specification = 'a list
 [@@verocaml.external_type_specification]
 
 type 'a option = None | Some of 'a
 
-type token = Stop | Amount of int
+type token = Stop | Amount of Int.t
 
 type holder = { token : token }
 
-let spec_is_none (value : int option) : bool =
+let spec_is_none (value : Int.t option) : bool =
   match value with None -> true | Some _ -> false
 [@@verocaml.spec]
 
-let spec_opt_eq (left : int option) (right : int option) : bool =
+let spec_opt_eq (left : Int.t option) (right : Int.t option) : bool =
   match left with
   | None -> spec_is_none right
   | Some left_value ->
@@ -20,14 +22,14 @@ let spec_opt_eq (left : int option) (right : int option) : bool =
        | Some right_value -> left_value = right_value)
 [@@verocaml.spec]
 
-let spec_index (_idx : int) (_nodes : int list) : int option = None
+let spec_index (_idx : Int.t) (_nodes : Int.t list) : Int.t option = None
 [@@verocaml.spec]
 
-let token_value (value : token) : int =
+let token_value (value : token) : Int.t =
   match value with Stop -> 0 | Amount amount -> amount
 [@@verocaml.spec]
 
-let rec lemma_index_oob (idx : int) (nodes : int list) : unit =
+let rec lemma_index_oob (idx : Int.t) (nodes : Int.t list) : unit =
   [%verocaml.decreases nodes];
   match nodes with
   | [] -> ()

@@ -257,7 +257,7 @@ let validate_vector_identity schema =
   else Ok ()
 
 let first_order_binder = function
-  | Parametric_type.Int -> Ok Integer_binder
+  | Parametric_type.Int | Parametric_type.Mathematical_int -> Ok Integer_binder
   | Parametric_type.Bool -> Ok Boolean_binder
   | Parametric_type.Parameter binder -> Ok (Parameter_binder binder)
   | Parametric_type.Application _ as typ -> Ok (Application_binder typ)

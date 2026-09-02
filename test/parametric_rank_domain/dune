@@ -47,24 +47,6 @@
  (action
   (run %{validator} %{report} %{archive})))
 
-(cram
- (deps
-  (glob_files fixtures/*.ml)
-  ../../src/parametric_rank_domain_private.ml
-  ../../src/parametric_rank_domain_private.mli
-  ../../src/typedtree_adapter_issuance_private.ml
-  ../../src/finite_value_registry.mli
-  ../../src/rank_encoding.mli
-  ../../src/recursive_spec_preservation.mli
-  ../../src/sst_rank_domain_validation_private.mli
-  ../../src/sst_validation.mli
-  ../../src/termination.mli
-  parametric_rank_domain_tool.exe
-  ../../src/verocaml.exe
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
-
 (alias
  (name parametric-rank-domain-check)
  (deps

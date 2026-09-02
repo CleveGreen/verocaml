@@ -14,7 +14,8 @@ let aggregate_type descriptors typ =
 
 let is_application = function
   | Sst.Application _ -> true
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Aggregate _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Aggregate _
   | Sst.Parameter _ -> false
 
 let selected_field descriptors aggregate field typ =

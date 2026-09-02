@@ -114,7 +114,10 @@ type ('bindings, 'error) parameter_services = {
   normalized_type :
     Location.t -> Types.type_expr -> (Parametric_type.t, 'error) result;
   optional_carrier :
-    Location.t -> Parametric_type.t -> (Parametric_type.t, 'error) result;
+    Location.t ->
+    Parametric_type.t ->
+    Parametric_type.t ->
+    (Parametric_type.t, 'error) result;
   lower_expression :
     'bindings -> Typedtree.expression -> (Sst.expression, 'error) result;
   lower_pattern :
@@ -130,10 +133,12 @@ type ('bindings, 'error) parameter_services = {
   span : Location.t -> Sst.span;
   partial_error : Location.t -> 'error;
   parameter_pattern_error : Location.t -> 'error;
+  parameter_type_error : Location.t -> string -> 'error;
 }
 
 val lower_parameters :
   ('bindings, 'error) parameter_services ->
+  function_type:Types.type_expr ->
   'bindings ->
   Typedtree.function_param list ->
   ((Sst.parameter list * 'bindings), 'error) result

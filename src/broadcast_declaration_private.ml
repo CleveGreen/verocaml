@@ -19,92 +19,107 @@ type binding = {
 }
 
 type imported_declaration = {
-  imported_path : string;
+  imported_identity : Retained_broadcast_private.identity;
   imported_definition : Sst.function_definition;
   imported_trigger_span : Diagnostic.span;
+  imported_kind : theorem_kind;
 }
 
 type imported_group = {
-  imported_group_path : string;
-  imported_target_paths : string list;
+  imported_group_identity : Retained_broadcast_private.identity;
+  imported_members : Retained_broadcast_private.identity list;
 }
 
 type entry = { program : Sst.program Weak.t; theorems : theorem list }
 
 type imported_identity_resolution =
   | Missing_identity
-  | Unique_identity of string
-  | Ambiguous_identity of string list
+  | Unique_identity of Retained_broadcast_private.identity
+  | Ambiguous_identity of Retained_broadcast_private.identity list
 
 let entries : entry list ref = ref []
 
 let ( let* ) result continuation =
   match result with Ok value -> continuation value | Error _ as error -> error
 
-let authenticate_typedtree ?(imported_declarations = [])
+let authenticate_typedtree_internal ?(imported_declarations = [])
     ?(imported_groups = []) ~source_file ~imports ~artifact structure =
-  let resolve_imported_target _path uid =
-    let _source_path = Path.name _path in
+  let resolve_imported_target path uid =
+    let canonical_path = Path.name path in
     let resolve candidates =
       let canonical_paths =
         List.filter
-          (fun (_, candidate_uid) -> String.equal uid candidate_uid)
+          (fun (candidate : Retained_broadcast_private.identity) ->
+            String.equal uid candidate.compiler_uid
+            && String.equal canonical_path candidate.canonical_path)
           candidates
-        |> List.map fst |> List.sort_uniq String.compare
+        |> List.sort_uniq Retained_broadcast_private.compare_identity
       in
       match canonical_paths with
       | [] -> Missing_identity
-      | [ canonical_path ] -> Unique_identity canonical_path
-      | paths -> Ambiguous_identity paths
+      | [ identity ] -> Unique_identity identity
+      | identities -> Ambiguous_identity identities
     in
-    let target target_group canonical_path =
+    let target (identity : Retained_broadcast_private.identity) =
+      let target_group =
+        identity.Retained_broadcast_private.kind
+        = Retained_broadcast_private.Group
+      in
       [%log.trace "resolved imported broadcast value identity"
-        ~source_path:(Delator.Field.string _source_path)
-        ~canonical_path:(Delator.Field.string canonical_path)
-        ~value_uid:(Delator.Field.string uid)
-        ~group:(Delator.Field.bool target_group)];
+        ~route:(Delator.Field.string "typed-import")
+        ~member_kind:
+          (Delator.Field.string
+             (Retained_broadcast_private.kind_name identity.kind))
+        ~correlation:
+          (Delator.Field.string
+             (Retained_broadcast_private.correlation identity))
+        ~decision:(Delator.Field.string "accepted")];
       Some
         {
           Broadcast_scope_private.target_id =
             (if target_group then "broadcast-group:" else "broadcast:")
-            ^ canonical_path;
+            ^ identity.canonical_path;
           target_group;
+          target_path = identity.canonical_path;
+          target_uid = identity.compiler_uid;
+          target_interface_uid = Some identity.compiler_uid;
         }
     in
     match (resolve imported_declarations, resolve imported_groups) with
-    | Unique_identity path, Missing_identity -> target false path
-    | Missing_identity, Unique_identity path -> target true path
+    | Unique_identity identity, Missing_identity
+    | Missing_identity, Unique_identity identity ->
+        target identity
     | Missing_identity, Missing_identity ->
         [%log.debug "imported broadcast value identity did not resolve"
-          ~source_path:(Delator.Field.string _source_path)
-          ~value_uid:(Delator.Field.string uid)
+          ~route:(Delator.Field.string "typed-import")
+          ~member_kind:(Delator.Field.string "unresolved")
           ~declarations:
             (Delator.Field.int (List.length imported_declarations))
           ~groups:(Delator.Field.int (List.length imported_groups))];
         None
-    | declaration_resolution, group_resolution ->
+    | _declaration_resolution, _group_resolution ->
         let _resolution = function
           | Missing_identity -> "missing"
-          | Unique_identity path -> "unique:" ^ path
-          | Ambiguous_identity paths ->
-              "ambiguous:" ^ String.concat "," paths
+          | Unique_identity _ -> "unique"
+          | Ambiguous_identity identities ->
+              "ambiguous:" ^ string_of_int (List.length identities)
         in
-        [%log.warn "conflicting imported broadcast value identity"
-          ~source_path:(Delator.Field.string _source_path)
-          ~value_uid:(Delator.Field.string uid)
+        [%log.debug "conflicting imported broadcast value identity"
+          ~route:(Delator.Field.string "typed-import")
+          ~member_kind:(Delator.Field.string "conflict")
           ~declaration_resolution:
-            (Delator.Field.string (_resolution declaration_resolution))
+            (Delator.Field.string (_resolution _declaration_resolution))
           ~group_resolution:
-            (Delator.Field.string (_resolution group_resolution))];
+            (Delator.Field.string (_resolution _group_resolution))];
         None
   in
   Typedtree_broadcast_private.authenticate ~source_file ~artifact
     ~resolves_to_marker:(Broadcast_scope_private.canonical_marker_path imports)
     ~resolve_imported_target
     ~imported_declaration_ids:
-      (List.map (fun (path, _) -> "broadcast:" ^ path) imported_declarations)
+      (List.map (fun identity -> "broadcast:" ^ identity.Retained_broadcast_private.canonical_path) imported_declarations)
     ~imported_group_ids:
-      (List.map (fun (path, _) -> "broadcast-group:" ^ path) imported_groups)
+      (List.map (fun identity -> "broadcast-group:" ^ identity.Retained_broadcast_private.canonical_path) imported_groups)
     structure
   |> Result.map_error (fun error ->
          Diagnostic.make
@@ -112,6 +127,31 @@ let authenticate_typedtree ?(imported_declarations = [])
               error.Typedtree_broadcast_private.message)
            (Diagnostic.span_of_location ~fallback_file:source_file
               error.Typedtree_broadcast_private.location))
+
+let authenticate_typedtree
+    ?(imported_declarations = []) ?(imported_groups = [])
+    ~source_file:(source_file [@delator.skip])
+    ~imports:(imports [@delator.skip]) ~artifact:(artifact [@delator.skip])
+    (structure [@delator.skip]) =
+  let result =
+    authenticate_typedtree_internal ~imported_declarations ~imported_groups
+      ~source_file ~imports ~artifact structure
+  in
+  [%log.debug "completed typed broadcast authentication"
+    ~stage:(Delator.Field.string "typed-authentication")
+    ~route:(Delator.Field.string "typedtree")
+    ~declaration_count:(Delator.Field.int (List.length imported_declarations))
+    ~group_count:(Delator.Field.int (List.length imported_groups))
+    ~decision:
+      (Delator.Field.string
+         (if Result.is_ok result then "accepted" else "rejected"))
+    ~reason_class:
+      (Delator.Field.string
+         (if Result.is_ok result then "authenticated" else "source-boundary"))];
+  result
+[@@delator.instrument]
+[@@delator.level debug]
+[@@delator.no_exn_log]
 
 let same_span left right =
   left.Diagnostic.file = right.Diagnostic.file
@@ -200,11 +240,21 @@ let trigger_head expression =
 let find_trigger_spans trigger_spans (definition : Sst.function_definition) =
   let found = ref [] in
   let rec visit (expression : Sst.expression) =
-    if List.exists (same_span expression.Sst.span) trigger_spans then
-      found := expression :: !found;
     match expression.expression_desc with
-    | Sst.Forall _ | Sst.Exists _ -> ()
-    | _ -> List.iter visit (Sst_callback_private.expression_children expression)
+    | Sst.Lift_runtime_int operand ->
+        [%log.trace "treated runtime integer lift as transparent trigger wrapper"
+          ~stage:(Delator.Field.string "trigger-discovery")
+          ~wrapper:(Delator.Field.string "lift-runtime-int")
+          ~decision:(Delator.Field.string "visit-operand-once")];
+        visit operand
+    | _ ->
+        if List.exists (same_span expression.Sst.span) trigger_spans then
+          found := expression :: !found;
+        (match expression.expression_desc with
+        | Sst.Forall _ | Sst.Exists _ -> ()
+        | _ ->
+            List.iter visit
+              (Sst_callback_private.expression_children expression))
   in
   List.iter
     (fun (clause : Sst.predicate_clause) ->
@@ -219,7 +269,8 @@ let find_trigger_spans trigger_spans (definition : Sst.function_definition) =
   | _ -> Error "broadcast declaration has multiple authenticated outer triggers"
 
 let first_order_type = function
-  | Parametric_type.Int | Bool | Parameter _ | Application _ -> true
+  | Parametric_type.Int | Mathematical_int | Bool | Parameter _ | Application _ ->
+      true
   | Unit | Tuple _ | Aggregate _ -> false
 
 let declaration_formals definition =
@@ -280,7 +331,7 @@ let contains_binder binder typ =
     | Application (_, arguments) -> List.exists contains arguments
     | Tuple arguments ->
         List.exists (fun (_, argument) -> contains argument) arguments
-    | Int | Bool | Unit | Aggregate _ -> false
+    | Int | Mathematical_int | Bool | Unit | Aggregate _ -> false
   in
   contains typ
 
@@ -294,7 +345,7 @@ let validate_type_coverage definition type_pattern =
   | Some _ ->
       Error "broadcast trigger does not determine every theorem type binder"
 
-let theorem_of_definition ~theorem_id ~trigger_spans definition =
+let theorem_of_definition_internal ~theorem_id ~trigger_spans definition =
   let* theorem_kind, theorem_witness_span = kind_and_provenance definition in
   let* theorem_formals = declaration_formals definition in
   let* theorem_trigger = find_trigger_spans trigger_spans definition in
@@ -324,10 +375,45 @@ let theorem_of_definition ~theorem_id ~trigger_spans definition =
       theorem_witness_span;
     }
 
+let theorem_of_definition ~theorem_id:(theorem_id [@delator.skip])
+    ~trigger_spans:(trigger_spans [@delator.skip])
+    (definition [@delator.skip]) =
+  let result =
+    theorem_of_definition_internal ~theorem_id ~trigger_spans definition
+  in
+  (match result with
+  | Ok _theorem ->
+      [%log.debug "authenticated broadcast theorem semantics"
+        ~stage:(Delator.Field.string "theorem-authentication")
+        ~provenance:
+          (Delator.Field.string
+             (match _theorem.theorem_kind with
+             | Proved_lemma -> "proved"
+             | Trusted_axiom -> "trusted"))
+        ~formal_count:(Delator.Field.int (List.length _theorem.theorem_formals))
+        ~trigger_type_count:
+          (Delator.Field.int (List.length _theorem.theorem_trigger_type_pattern))
+        ~decision:(Delator.Field.string "accepted")]
+  | Error _ ->
+      [%log.debug "rejected broadcast theorem semantics"
+        ~stage:(Delator.Field.string "theorem-authentication")
+        ~decision:(Delator.Field.string "rejected")
+        ~reason_class:(Delator.Field.string "provenance-formal-trigger-type")]);
+  result
+[@@delator.instrument]
+[@@delator.level debug]
+[@@delator.no_exn_log]
+
+let authenticate_definition ~theorem_id ~trigger_span definition =
+  theorem_of_definition ~theorem_id ~trigger_spans:[ trigger_span ] definition
+  |> Result.map (fun theorem -> theorem.theorem_kind)
+
 let theorem_of_binding scan binding =
-  match Typedtree_broadcast_private.declaration_id scan binding.source_binding with
-  | None -> Ok None
-  | Some theorem_id ->
+  match
+    Typedtree_broadcast_private.declaration_ids scan binding.source_binding
+  with
+  | [] -> Ok []
+  | theorem_ids ->
       let definition = binding.definition in
       let trigger_spans =
         Typedtree_broadcast_private.trigger_locations scan binding.source_binding
@@ -335,8 +421,15 @@ let theorem_of_binding scan binding =
              (Diagnostic.span_of_location
                 ~fallback_file:definition.Sst.span.file)
       in
-      theorem_of_definition ~theorem_id ~trigger_spans definition
-      |> Result.map Option.some
+      List.fold_left
+        (fun result theorem_id ->
+          let* theorems = result in
+          let* theorem =
+            theorem_of_definition ~theorem_id ~trigger_spans definition
+          in
+          Ok (theorem :: theorems))
+        (Ok []) theorem_ids
+      |> Result.map List.rev
 
 let weak_program program =
   let weak = Weak.create 1 in
@@ -366,11 +459,8 @@ let register_bindings ~scan ~program ~bindings ~imported_declarations
     List.fold_left
       (fun result binding ->
         let* theorems = result in
-        let* theorem = theorem_of_binding scan binding in
-        Ok
-          (Option.fold ~none:theorems
-             ~some:(fun theorem -> theorem :: theorems)
-             theorem))
+        let* binding_theorems = theorem_of_binding scan binding in
+        Ok (List.rev_append binding_theorems theorems))
       (Ok []) bindings
     |> Result.map List.rev
   in
@@ -380,11 +470,15 @@ let register_bindings ~scan ~program ~bindings ~imported_declarations
         let* theorems = result in
         let* theorem =
           theorem_of_definition
-            ~theorem_id:("broadcast:" ^ imported.imported_path)
+            ~theorem_id:
+              ("broadcast:"
+              ^ imported.imported_identity.canonical_path)
             ~trigger_spans:[ imported.imported_trigger_span ]
             imported.imported_definition
         in
-        Ok (theorem :: theorems))
+        if theorem.theorem_kind <> imported.imported_kind then
+          Error "imported broadcast trust classification changed after sealing"
+        else Ok (theorem :: theorems))
       (Ok []) imported_declarations
     |> Result.map List.rev
   in
@@ -394,6 +488,22 @@ let register_bindings ~scan ~program ~bindings ~imported_declarations
       (fun theorem ->
         {
           Broadcast_scope_private.declaration_id = theorem.theorem_id;
+          compiler_uid =
+            (match
+               Typedtree_broadcast_private.declaration_identity scan
+                 theorem.theorem_id
+             with
+            | Some (uid, _) -> uid
+            | None ->
+                imported_declarations
+                |> List.find_map (fun imported ->
+                       if
+                         String.equal theorem.theorem_id
+                           ("broadcast:"
+                           ^ imported.imported_identity.canonical_path)
+                       then Some imported.imported_identity.compiler_uid
+                       else None)
+                |> Option.value ~default:"<missing-compiler-identity>");
           function_id = theorem.theorem_definition.function_id;
           kind =
             (match theorem.theorem_kind with
@@ -405,7 +515,8 @@ let register_bindings ~scan ~program ~bindings ~imported_declarations
             List.exists
               (fun imported ->
                 String.equal theorem.theorem_id
-                  ("broadcast:" ^ imported.imported_path))
+                  ("broadcast:"
+                  ^ imported.imported_identity.canonical_path))
               imported_declarations;
         })
       theorems
@@ -415,15 +526,20 @@ let register_bindings ~scan ~program ~bindings ~imported_declarations
     |> List.map (fun (group : Typedtree_broadcast_private.group) ->
         {
           Broadcast_scope_private.group_id = group.group_id;
+          compiler_uid = group.group_uid;
           group_name = group.group_name;
           targets = group.group_targets;
           span = group.group_span;
         })
   in
   let imported_declaration_paths =
-    List.map (fun declaration -> declaration.imported_path) imported_declarations
+    List.map
+      (fun declaration -> declaration.imported_identity.canonical_path)
+      imported_declarations
   and imported_group_paths =
-    List.map (fun group -> group.imported_group_path) imported_groups
+    List.map
+      (fun group -> group.imported_group_identity.canonical_path)
+      imported_groups
   in
   let* imported_groups =
     List.fold_left
@@ -431,37 +547,53 @@ let register_bindings ~scan ~program ~bindings ~imported_declarations
         let* groups = result in
         let* targets =
           List.fold_left
-            (fun result path ->
+            (fun result identity ->
               let* targets = result in
-              if List.mem path imported_declaration_paths then
+              let path = identity.Retained_broadcast_private.canonical_path in
+              if
+                identity.kind = Retained_broadcast_private.Declaration
+                && List.mem path imported_declaration_paths
+              then
                 Ok
                   ({
                      Broadcast_scope_private.target_id = "broadcast:" ^ path;
                      target_group = false;
+                     target_path = path;
+                     target_uid = identity.compiler_uid;
+                     target_interface_uid = Some identity.compiler_uid;
                    }
                   :: targets)
-              else if List.mem path imported_group_paths then
+              else if
+                identity.kind = Retained_broadcast_private.Group
+                && List.mem path imported_group_paths
+              then
                 Ok
                   ({
                      Broadcast_scope_private.target_id =
                        "broadcast-group:" ^ path;
                      target_group = true;
+                     target_path = path;
+                     target_uid = identity.compiler_uid;
+                     target_interface_uid = Some identity.compiler_uid;
                    }
                   :: targets)
               else
                 Error
-                  (Printf.sprintf "imported broadcast group %s lost target %s"
-                     group.imported_group_path path))
-            (Ok []) group.imported_target_paths
+                  "imported broadcast group lost one authenticated member")
+            (Ok []) group.imported_members
           |> Result.map List.rev
         in
         Ok
           ({
              Broadcast_scope_private.group_id =
-               "broadcast-group:" ^ group.imported_group_path;
-             group_name = group.imported_group_path;
+               "broadcast-group:"
+               ^ group.imported_group_identity.canonical_path;
+             compiler_uid = group.imported_group_identity.compiler_uid;
+             group_name = group.imported_group_identity.canonical_path;
              targets;
-             span = Diagnostic.file_span group.imported_group_path;
+             span =
+               Diagnostic.file_span
+                 group.imported_group_identity.provider_origin;
            }
           :: groups))
       (Ok []) imported_groups
@@ -503,8 +635,11 @@ let register_bindings ~scan ~program ~bindings ~imported_declarations
          (live_entries ());
   Ok ()
 
-let register ~source_file ~scan ~program ~sources ~imported_declarations
-    ~imported_groups =
+let register ~source_file:(source_file [@delator.skip])
+    ~scan:(scan [@delator.skip]) ~program:(program [@delator.skip])
+    ~sources:(sources [@delator.skip])
+    ~imported_declarations:(imported_declarations [@delator.skip])
+    ~imported_groups:(imported_groups [@delator.skip]) =
   let bindings =
     List.filter_map
       (fun (source_binding, function_id) ->
@@ -521,13 +656,32 @@ let register ~source_file ~scan ~program ~sources ~imported_declarations
     ~imported_declarations:
       (Delator.Field.int (List.length imported_declarations))
     ~imported_groups:(Delator.Field.int (List.length imported_groups))];
-  register_bindings ~scan ~program ~bindings ~imported_declarations
-    ~imported_groups
-  |> Result.map_error (fun message ->
-         Diagnostic.make (Diagnostic.Invalid_broadcast message)
-           (match program.Sst.functions with
-           | definition :: _ -> definition.span
-           | [] -> Diagnostic.file_span source_file))
+  let result =
+    register_bindings ~scan ~program ~bindings ~imported_declarations
+      ~imported_groups
+    |> Result.map_error (fun message ->
+           Diagnostic.make (Diagnostic.Invalid_broadcast message)
+             (match program.Sst.functions with
+             | definition :: _ -> definition.span
+             | [] -> Diagnostic.file_span source_file))
+  in
+  (match result with
+  | Ok () ->
+      [%log.info "completed broadcast theorem registration"
+        ~stage:(Delator.Field.string "theorem-registration")
+        ~local_count:(Delator.Field.int (List.length bindings))
+        ~imported_count:(Delator.Field.int (List.length imported_declarations))
+        ~group_count:(Delator.Field.int (List.length imported_groups))
+        ~decision:(Delator.Field.string "accepted")]
+  | Error _ ->
+      [%log.debug "rejected broadcast theorem registration"
+        ~stage:(Delator.Field.string "theorem-registration")
+        ~decision:(Delator.Field.string "rejected")
+        ~reason_class:(Delator.Field.string "registration-graph")]);
+  result
+[@@delator.instrument]
+[@@delator.level debug]
+[@@delator.no_exn_log]
 
 let theorems ~program =
   Option.fold ~none:[] ~some:(fun entry -> entry.theorems) (entry program)
@@ -547,7 +701,8 @@ let trigger_type_pattern theorem = theorem.theorem_trigger_type_pattern
 let declaration_span theorem = theorem.theorem_declaration_span
 let witness_span theorem = theorem.theorem_witness_span
 
-let infer_type_vector theorem actual_pattern =
+let infer_type_vector (theorem [@delator.skip])
+    (actual_pattern [@delator.skip]) =
   if
     List.length actual_pattern
     <> List.length theorem.theorem_trigger_type_pattern
@@ -574,7 +729,7 @@ let infer_type_vector theorem actual_pattern =
           | Some _ ->
               Error "broadcast trigger type occurrence has inconsistent actuals"
           )
-      | Int | Bool | Unit | Aggregate _ | Parameter _ ->
+      | Int | Mathematical_int | Bool | Unit | Aggregate _ | Parameter _ ->
           Ok
             (if Parametric_type.equal expected actual then Some substitutions
              else None)
@@ -626,8 +781,12 @@ let infer_type_vector theorem actual_pattern =
         if List.for_all Option.is_some vector then
           Ok (Some (List.map Option.get vector))
         else Ok None
+[@@delator.instrument]
+[@@delator.level trace]
+[@@delator.no_exn_log]
 
-let schema theorem ~actual_types =
+let schema (theorem [@delator.skip])
+    ~actual_types:(actual_types [@delator.skip]) =
   let binders = theorem.theorem_definition.Sst.type_binders in
   if List.length binders <> List.length actual_types then
     Error "broadcast theorem type-vector arity mismatch"
@@ -640,8 +799,12 @@ let schema theorem ~actual_types =
           ~binder_type:(Parametric_type.substitute substitution formal.Sst.typ)
           ~span:theorem.theorem_declaration_span)
     |> Logic_quantifier_private.vector
+[@@delator.instrument]
+[@@delator.level trace]
+[@@delator.no_exn_log]
 
-let destroy program =
+let destroy (program [@delator.skip]) =
+  let[@log_value.trace] _before = List.length (live_entries ()) in
   entries :=
     List.filter
       (fun entry ->
@@ -649,4 +812,12 @@ let destroy program =
           ~some:(fun candidate -> candidate != program)
           (Weak.get entry.program 0))
       (live_entries ());
-  Broadcast_scope_private.destroy program
+  Broadcast_scope_private.destroy program;
+  [%log.trace "pruned broadcast theorem lifecycle entries"
+    ~stage:(Delator.Field.string "theorem-cleanup")
+    ~before_count:(Delator.Field.int (_before [@log_value.trace]))
+    ~after_count:(Delator.Field.int (List.length !entries))
+    ~decision:(Delator.Field.string "released")]
+[@@delator.instrument]
+[@@delator.level trace]
+[@@delator.no_exn_log]

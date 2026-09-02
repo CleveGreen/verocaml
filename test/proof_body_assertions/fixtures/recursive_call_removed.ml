@@ -1,11 +1,11 @@
 type int_list = Nil | Cons of int * int_list
 
-let rec list_len (values : int_list) : int =
+let rec list_len (values : int_list) : Vstd.Int.t =
   [%verocaml.decreases values];
   match values with Nil -> 0 | Cons (_, tail) -> 1 + list_len tail
 [@@verocaml.spec] [@@verocaml.revealed]
 
-let rec twice_len (values : int_list) : int =
+let rec twice_len (values : int_list) : Vstd.Int.t =
   [%verocaml.decreases values];
   match values with Nil -> 0 | Cons (_, tail) -> 2 + twice_len tail
 [@@verocaml.spec] [@@verocaml.revealed]

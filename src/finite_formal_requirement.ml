@@ -178,21 +178,102 @@ let find_registration program =
     (fun (registration : registration) -> registration.program == program)
     !registrations
 
-let seal implementation program =
+let seal
+    (implementation [@delator.skip])
+    (program [@delator.skip]) =
   match find_registration program with
   | None ->
+      [%log.warn "rejected finite-formal authority seal"
+        ~stage:(Delator.Field.string "finite-formal-seal")
+        ~artifact_family:
+          (Delator.Field.string
+             (if Cmt_input.ordinary_ppx_artifact implementation then "ordinary"
+              else if Cmt_input.retained_ppx_artifact implementation then
+                "retained"
+              else if implementation.implementation_family_markers = [] then
+                "unmarked"
+              else "unsupported"))
+        ~request_count:(Delator.Field.int 0)
+        ~family_marker_count:
+          (Delator.Field.int
+             (List.length implementation.implementation_family_markers))
+        ~decision:(Delator.Field.string "rejected")
+        ~reason_class:(Delator.Field.string "missing-registration")];
       Error "finite-formal authority has no exact Typedtree lowering registration"
   | Some registration
     when registration.structure != implementation.Cmt_input.structure ->
+      [%log.warn "rejected finite-formal authority seal"
+        ~stage:(Delator.Field.string "finite-formal-seal")
+        ~artifact_family:
+          (Delator.Field.string
+             (if Cmt_input.ordinary_ppx_artifact implementation then "ordinary"
+              else if Cmt_input.retained_ppx_artifact implementation then
+                "retained"
+              else if implementation.implementation_family_markers = [] then
+                "unmarked"
+              else "unsupported"))
+        ~request_count:(Delator.Field.int (List.length registration.requests))
+        ~family_marker_count:
+          (Delator.Field.int
+             (List.length implementation.implementation_family_markers))
+        ~decision:(Delator.Field.string "rejected")
+        ~reason_class:(Delator.Field.string "typedtree-program-pairing")];
       Error "finite-formal authority rejected a copied Typedtree/program pairing"
   | Some registration
     when not (String.equal registration.raw_snapshot (Sst.to_string program)) ->
+      [%log.warn "rejected finite-formal authority seal"
+        ~stage:(Delator.Field.string "finite-formal-seal")
+        ~artifact_family:
+          (Delator.Field.string
+             (if Cmt_input.ordinary_ppx_artifact implementation then "ordinary"
+              else if Cmt_input.retained_ppx_artifact implementation then
+                "retained"
+              else if implementation.implementation_family_markers = [] then
+                "unmarked"
+              else "unsupported"))
+        ~request_count:(Delator.Field.int (List.length registration.requests))
+        ~family_marker_count:
+          (Delator.Field.int
+             (List.length implementation.implementation_family_markers))
+        ~decision:(Delator.Field.string "rejected")
+        ~reason_class:(Delator.Field.string "sst-snapshot")];
       Error "finite-formal authority rejected a changed SST snapshot"
   | Some registration
-    when registration.requests = []
-         && not (Cmt_input.retained_preprocessing implementation) ->
+    when
+      registration.requests = []
+      &&
+      (Cmt_input.ordinary_ppx_artifact implementation
+      || ((not (Cmt_input.retained_ppx_artifact implementation))
+         && implementation.implementation_family_markers = [])) ->
+      [%log.debug "accepted finite-formal authority seal without requirements"
+        ~stage:(Delator.Field.string "finite-formal-seal")
+        ~artifact_family:
+          (Delator.Field.string
+             (if Cmt_input.ordinary_ppx_artifact implementation then "ordinary"
+              else if Cmt_input.retained_ppx_artifact implementation then
+                "retained"
+              else if implementation.implementation_family_markers = [] then
+                "unmarked"
+              else "unsupported"))
+        ~request_count:(Delator.Field.int 0)
+        ~decision:(Delator.Field.string "accepted")
+        ~reason_class:(Delator.Field.string "no-finite-requirements")];
       Ok ()
-  | Some _ when not (Cmt_input.retained_preprocessing implementation) ->
+  | Some _registration when not (Cmt_input.retained_ppx_artifact implementation) ->
+      [%log.warn "rejected finite-formal authority seal"
+        ~stage:(Delator.Field.string "finite-formal-seal")
+        ~artifact_family:
+          (Delator.Field.string
+             (if Cmt_input.ordinary_ppx_artifact implementation then "ordinary"
+              else if implementation.implementation_family_markers = [] then
+                "unmarked"
+              else "unsupported"))
+        ~request_count:(Delator.Field.int (List.length _registration.requests))
+        ~family_marker_count:
+          (Delator.Field.int
+             (List.length implementation.implementation_family_markers))
+        ~decision:(Delator.Field.string "rejected")
+        ~reason_class:(Delator.Field.string "artifact-family")];
       Error "finite-formal authority requires the retained artifact family"
   | Some registration -> (
       match
@@ -209,10 +290,42 @@ let seal implementation program =
                 interface_finite_signatures =
                   implementation.interface_finite_signatures;
               };
+          [%log.debug "completed finite-formal authority seal"
+            ~stage:(Delator.Field.string "finite-formal-seal")
+            ~artifact_family:
+              (Delator.Field.string
+                 (if Cmt_input.retained_ppx_artifact implementation then
+                    "retained"
+                  else "unsupported"))
+            ~request_count:(Delator.Field.int (List.length registration.requests))
+            ~interface_signature_count:
+              (Delator.Field.int
+                 (List.length implementation.interface_finite_signatures))
+            ~explicit_interface:
+              (Delator.Field.bool implementation.explicit_interface)
+            ~decision:(Delator.Field.string "accepted")
+            ~reason_class:(Delator.Field.string "authenticated-identity")];
           Ok ()
       | None, _ | _, None ->
+          [%log.warn "rejected finite-formal authority seal"
+            ~stage:(Delator.Field.string "finite-formal-seal")
+            ~artifact_family:
+              (Delator.Field.string
+                 (if Cmt_input.retained_ppx_artifact implementation then
+                    "retained"
+                  else "unsupported"))
+            ~request_count:
+              (Delator.Field.int (List.length registration.requests))
+            ~family_marker_count:
+              (Delator.Field.int
+                 (List.length implementation.implementation_family_markers))
+            ~decision:(Delator.Field.string "rejected")
+            ~reason_class:(Delator.Field.string "missing-identity-digest")];
           Error
             "finite-formal authority requires exact interface and source digests")
+[@@delator.instrument]
+[@@delator.level debug]
+[@@delator.no_exn_log]
 
 let position_le (left : Diagnostic.position) (right : Diagnostic.position) =
   left.line < right.line

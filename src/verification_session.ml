@@ -1930,7 +1930,8 @@ let register_frozen_formal_scope (session : t)
           | Some _ | None ->
               Error
                 "frozen-spine conditional formal has no exact same-CMT descriptor")
-      | Sst.Unit | Sst.Int | Sst.Bool | Sst.Tuple _ | Sst.Parameter _
+      | Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Tuple _
+      | Sst.Parameter _
       | Sst.Application _ ->
           Error
             "frozen-spine conditional formal has no exact same-CMT descriptor"
@@ -3797,7 +3798,8 @@ let transition_of_owned_contents_origin_expression expression =
   | Sst.Checked_arithmetic _ | Sst.Sequence _ | Sst.Old _
   | Sst.Let_mutable _ | Sst.Mutable_read _ | Sst.Mutable_write _
   | Sst.Direct_call _ | Sst.Callback_call _ | Sst.Callback_requires _
-  | Sst.Callback_ensures _ | Sst.Reveal _ | Sst.Reveal_with_fuel _
+  | Sst.Lift_runtime_int _ | Sst.Callback_ensures _ | Sst.Reveal _
+  | Sst.Reveal_with_fuel _
   | Sst.Use_type_invariant _ | Sst.Local_assert _ | Sst.Proof_region _
   | Sst.Forall _ | Sst.Exists _ | Sst.Symbolic_application _ ->
       None
@@ -5861,7 +5863,8 @@ let callee_snapshot session ~validated ~invariants
     | Sst.Checked_exec
         { provenance = Sst.Authenticated_typedtree _ as body_provenance; _ } -> (
         match definition.result_type with
-        | (Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
+        | (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+          | Sst.Parameter _
           | Sst.Application _) ->
             Error "callee result is not an invariant-bearing aggregate"
         | Sst.Aggregate result_type -> (
@@ -5946,7 +5949,8 @@ let finite_result_snapshot session ~validated
     | Sst.Checked_exec
         { provenance = Sst.Authenticated_typedtree _ as body_provenance; _ } -> (
         match definition.result_type with
-        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ ->
+        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+        | Sst.Parameter _ ->
             Error "finite result is not an aggregate"
         | Sst.Aggregate _ | Sst.Application _ ->
             let descriptor =
@@ -6035,6 +6039,7 @@ let operation_name = function
   | Vir.Add -> "add"
   | Vir.Subtract -> "sub"
   | Vir.Negate -> "neg"
+  | Vir.Multiply -> "mul"
   | Vir.Multiply_constant value -> "mul:" ^ Z.to_string value
   | Vir.Successor -> "succ"
   | Vir.Predecessor -> "pred"
@@ -8204,7 +8209,9 @@ let consume_transition_predecessors (session : t) ~validated ~invariants ~callee
         | Sst.Aggregate type_id ->
             aggregate_type.aggregate_type_index = type_id.type_index
             && String.equal aggregate_type.aggregate_type_name type_id.type_name
-        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ | Sst.Application _ -> false)
+        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+        | Sst.Parameter _ | Sst.Application _ ->
+            false)
     | _ -> false
   in
   let matches capability =

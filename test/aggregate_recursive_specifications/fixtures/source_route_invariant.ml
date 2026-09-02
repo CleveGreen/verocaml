@@ -4,7 +4,7 @@ let node_invariant (node : node) : bool =
   match node with Empty -> true | Node _ -> true
 [@@verocaml.type_invariant]
 
-let rec spec_repeat (value : int) (n : int) (node : node) : node =
+let rec spec_repeat (value : int) (n : Vstd.Int.t) (node : node) : node =
   [%verocaml.decreases n];
   if n <= 0 then node
   else spec_repeat value (n - 1) (Node (value, node))

@@ -1,16 +1,34 @@
 val lower_arguments :
   lower_expression:
     (Typedtree.expression -> (Sst.expression, 'error) result) ->
+  lower_expression_expected:
+    (expected:Sst.typ ->
+    Typedtree.expression ->
+    (Sst.expression, 'error) result) ->
+  adapt_argument:
+    (Location.t ->
+    expected:Sst.typ ->
+    Sst.expression ->
+    (Sst.expression, 'error) result) ->
   span:(Location.t -> Diagnostic.span) ->
   reject:(Diagnostic.unsupported_construct -> 'error) ->
   application:Typedtree.expression ->
   signature:Parametric_signature_private.t ->
   result_type:Sst.typ ->
   (Typedtree.arg_label * Typedtree.apply_arg) list ->
-  (Sst.typ list * Sst.call_argument list, 'error) result
+  (Sst.typ list * Sst.typ * Sst.call_argument list, 'error) result
 
 val lower_direct_call :
   lower_expression:(Typedtree.expression -> (Sst.expression, 'error) result) ->
+  lower_expression_expected:
+    (expected:Sst.typ ->
+    Typedtree.expression ->
+    (Sst.expression, 'error) result) ->
+  adapt_argument:
+    (Location.t ->
+    expected:Sst.typ ->
+    Sst.expression ->
+    (Sst.expression, 'error) result) ->
   span:(Location.t -> Diagnostic.span) ->
   reject:(Diagnostic.unsupported_construct -> 'error) ->
   application:Typedtree.expression ->

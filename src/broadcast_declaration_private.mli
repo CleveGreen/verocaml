@@ -3,19 +3,20 @@ type source_role = Proved_body | Trusted_proof_body | Other_body
 type theorem
 
 type imported_declaration = {
-  imported_path : string;
+  imported_identity : Retained_broadcast_private.identity;
   imported_definition : Sst.function_definition;
   imported_trigger_span : Diagnostic.span;
+  imported_kind : theorem_kind;
 }
 
 type imported_group = {
-  imported_group_path : string;
-  imported_target_paths : string list;
+  imported_group_identity : Retained_broadcast_private.identity;
+  imported_members : Retained_broadcast_private.identity list;
 }
 
 val authenticate_typedtree :
-  ?imported_declarations:(string * string) list ->
-  ?imported_groups:(string * string) list ->
+  ?imported_declarations:Retained_broadcast_private.identity list ->
+  ?imported_groups:Retained_broadcast_private.identity list ->
   source_file:string ->
   imports:Cmt_input.import array ->
   artifact:Typedtree_adapter_issuance_private.proof_capture_artifact option ->
@@ -29,6 +30,12 @@ val validate_source_role :
   role:source_role ->
   span:Diagnostic.span ->
   (unit, Diagnostic.t) result
+
+val authenticate_definition :
+  theorem_id:string ->
+  trigger_span:Diagnostic.span ->
+  Sst.function_definition ->
+  (theorem_kind, string) result
 
 val is_declaration :
   Typedtree_broadcast_private.t -> Typedtree.value_binding -> bool

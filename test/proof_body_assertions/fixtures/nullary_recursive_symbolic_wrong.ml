@@ -1,6 +1,6 @@
 type 'a node = Empty | Other | Node of 'a * 'a node
 
-let rec spec_index_alt_imp (idx : int) (nodes : int node) : int node =
+let rec spec_index_alt_imp (idx : Vstd.Int.t) (nodes : int node) : int node =
   [%verocaml.decreases nodes];
   match nodes with
   | Empty -> Empty
@@ -10,7 +10,7 @@ let rec spec_index_alt_imp (idx : int) (nodes : int node) : int node =
       else spec_index_alt_imp (idx - 1) rest
 [@@verocaml.spec] [@@verocaml.opaque]
 
-let wrong_result (idx : int) (nodes : int node [@finite]) =
+let wrong_result (idx : Vstd.Int.t) (nodes : int node [@finite]) =
   [%verocaml.reveal_with_fuel (spec_index_alt_imp, 2)];
   match nodes with
   | Empty ->
@@ -19,7 +19,7 @@ let wrong_result (idx : int) (nodes : int node [@finite]) =
   | Node _ -> ()
 [@@verocaml.proof]
 
-let reachable_false (idx : int) (nodes : int node [@finite]) =
+let reachable_false (idx : Vstd.Int.t) (nodes : int node [@finite]) =
   [%verocaml.reveal_with_fuel (spec_index_alt_imp, 2)];
   match nodes with
   | Empty ->
@@ -30,7 +30,7 @@ let reachable_false (idx : int) (nodes : int node [@finite]) =
 [@@verocaml.proof]
 
 let symbolic_expected
-    (idx : int)
+    (idx : Vstd.Int.t)
     (nodes : int node [@finite])
     (expected : int node) =
   [%verocaml.reveal_with_fuel (spec_index_alt_imp, 2)];

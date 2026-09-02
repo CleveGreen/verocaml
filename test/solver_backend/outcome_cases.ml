@@ -71,6 +71,52 @@ let solve ?semantic_kind fixture ~environment:_ ~workspace:_ =
             (Failure.make Failure.Verifier_outcome
                (Solver_backend.error_to_string error)))
 
+let project_direct = function
+  | Z3_bridge.Verified -> Outcome.Verified
+  | Counterexample _ -> Outcome.Counterexample
+  | Inconclusive _ -> Outcome.Inconclusive
+
+let solve_direct ?(requires = []) fixture ~environment:_ ~workspace:_ =
+  match
+    Z3_bridge.solve_vir ~requires { timeout_ms = 10_000; model = true }
+      fixture
+  with
+  | Ok outcome ->
+      Ok
+        (Outcome.observation ~status:(project_direct outcome) ()
+        |> Outcome.project)
+  | Error error ->
+      Error
+        (Failure.make Failure.Verifier_outcome
+           (Z3_bridge.error_to_string error))
+
+let solve_detached ?(requires = []) fixture ~environment:_ ~workspace:_ =
+  match Z3_bridge.detach_vir ~requires fixture with
+  | Error error ->
+      Error
+        (Failure.make Failure.Verifier_outcome
+           (Z3_bridge.error_to_string error))
+  | Ok (query, _) ->
+      let attempt =
+        Z3_bridge.solve_detached_query_local ~controlled:Z3_bridge.Real
+          ~timeout_ms:10_000 ~rlimit:10_000_000 ~model:true query
+      in
+      (match attempt.detached_result with
+      | Ok Z3_bridge.Detached_verified ->
+          Ok
+            (Outcome.observation ~status:Outcome.Verified ()
+            |> Outcome.project)
+      | Ok (Detached_counterexample _) ->
+          Ok
+            (Outcome.observation ~status:Outcome.Counterexample ()
+            |> Outcome.project)
+      | Ok (Detached_inconclusive _) ->
+          Ok
+            (Outcome.observation ~status:Outcome.Inconclusive ()
+            |> Outcome.project)
+      | Error message ->
+          Error (Failure.make Failure.Verifier_outcome message))
+
 let verified_case name fixture =
   Suite.case ~name
     ~expectation:(Expectation.empty |> Expectation.status Outcome.Verified)
@@ -142,6 +188,76 @@ let nonpositive_timeout =
             (Failure.make Failure.Expectation_mismatch
                "nonpositive solver timeout was accepted"))
 
+let nonlinear_terms =
+  let left = integer_symbol (symbol 10 "left" Vir.Integer) in
+  let right = integer_symbol (symbol 11 "right" Vir.Integer) in
+  (left, right, Vir.Integer_multiply (left, right))
+
+let nonlinear_commutativity_direct =
+  let left, right, product = nonlinear_terms in
+  let reverse = Vir.Integer_multiply (right, left) in
+  Suite.case ~name:"nonlinear-commutativity-direct-z3"
+    ~expectation:(Expectation.empty |> Expectation.status Outcome.Verified)
+    (solve_direct ~requires:[ Logic_ir.Nonlinear_integer_arithmetic ]
+       (obligation ~kind:assertion_kind (equal product reverse)))
+
+let nonlinear_commutativity_detached =
+  let left, right, product = nonlinear_terms in
+  let reverse = Vir.Integer_multiply (right, left) in
+  Suite.case ~name:"nonlinear-commutativity-detached-z3"
+    ~expectation:(Expectation.empty |> Expectation.status Outcome.Verified)
+    (solve_detached ~requires:[ Logic_ir.Nonlinear_integer_arithmetic ]
+       (obligation ~kind:assertion_kind (equal product reverse)))
+
+let nonlinear_false_claim =
+  let _, _, product = nonlinear_terms in
+  Suite.case ~name:"nonlinear-false-claim-reaches-counterexample"
+    ~expectation:
+      (Expectation.empty |> Expectation.status Outcome.Counterexample)
+    (solve_direct ~requires:[ Logic_ir.Nonlinear_integer_arithmetic ]
+       (obligation ~kind:assertion_kind (equal product (integer Z.zero))))
+
+let nonlinear_capability_preflight =
+  Suite.case ~name:"nonlinear-capability-is-admitted"
+    ~expectation:(Expectation.empty |> Expectation.status Outcome.Verified)
+    (fun ~environment:_ ~workspace:_ ->
+      match Z3_bridge.preflight [ Logic_ir.Nonlinear_integer_arithmetic ] with
+      | Ok () ->
+          Ok
+            (Outcome.observation ~status:Outcome.Verified ()
+            |> Outcome.project)
+      | Error error ->
+          Error
+            (Failure.make Failure.Verifier_outcome
+               (Z3_bridge.error_to_string error)))
+
+let nonlinear_solver_profile =
+  let left, right, product = nonlinear_terms in
+  let reverse = Vir.Integer_multiply (right, left) in
+  Suite.case ~name:"nonlinear-default-selects-integer-capable-logic"
+    ~expectation:(Expectation.empty |> Expectation.status Outcome.Verified)
+    (fun ~environment:_ ~workspace:_ ->
+      Z3_bridge.reset_counters ();
+      match
+        Z3_bridge.solve_vir
+          ~requires:[ Logic_ir.Nonlinear_integer_arithmetic ]
+          { timeout_ms = 10_000; model = true }
+          (obligation ~kind:assertion_kind (equal product reverse))
+      with
+      | Ok Z3_bridge.Verified
+        when (Z3_bridge.counters ()).selected_logics = [ "AUFNIA" ] ->
+          Ok
+            (Outcome.observation ~status:Outcome.Verified ()
+            |> Outcome.project)
+      | Ok _ ->
+          Error
+            (Failure.make Failure.Expectation_mismatch
+               "nonlinear query did not verify with the expected solver profile")
+      | Error error ->
+          Error
+            (Failure.make Failure.Verifier_outcome
+               (Z3_bridge.error_to_string error)))
+
 let () =
   Suite.run_cli ~suite_path ~manifest:Integration_environment.manifest
     ~expected_environment:Integration_environment.expected
@@ -151,4 +267,9 @@ let () =
       false_goal;
       preceding_safety;
       nonpositive_timeout;
+      nonlinear_commutativity_direct;
+      nonlinear_commutativity_detached;
+      nonlinear_false_claim;
+      nonlinear_capability_preflight;
+      nonlinear_solver_profile;
     ]

@@ -1,6 +1,6 @@
 type 'a seq = Nil | Cons of 'a * 'a seq
 
-let rec spec_length (xs : 'a seq) : int =
+let rec spec_length (xs : 'a seq) : Vstd.Int.t =
   [%verocaml.decreases xs];
   match xs with Nil -> 0 | Cons (_, tail) -> 1 + spec_length tail
 [@@verocaml.spec] [@@verocaml.revealed]
@@ -11,10 +11,10 @@ let rec lemma_equal_refl (xs : 'a seq [@finite]) : unit =
   match xs with Nil -> () | Cons (_, tail) -> lemma_equal_refl tail
 [@@verocaml.proof]
 
-let int_length_control (xs : int seq) : int = spec_length xs
+let int_length_control (xs : int seq) : Vstd.Int.t = spec_length xs
 [@@verocaml.spec]
 
-let bool_length_control (xs : bool seq) : int = spec_length xs
+let bool_length_control (xs : bool seq) : Vstd.Int.t = spec_length xs
 [@@verocaml.spec]
 
 let int_instantiation (xs : int seq [@finite]) : unit = lemma_equal_refl xs

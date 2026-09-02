@@ -356,19 +356,19 @@ let () =
       frontend_case ~name:"nullary-trigger-rejected"
         ~module_name:"Negative_trigger" ~fixture:"negative_trigger.ml"
         ~code:"VERO_QUANTIFIER_TRIGGER";
-      frontend_case ~name:"callback-symbolic-type-rejected"
+      verified_parity_case ~name:"callback-symbolic-parameter-supported"
         ~module_name:"Symbolic_callback_type" ~fixture:"symbolic_callback_type.ml"
-        ~code:"VERO_INVALID_SYMBOLIC";
+        [];
       frontend_case ~name:"reference-symbolic-type-rejected"
         ~module_name:"Symbolic_reference_type"
         ~fixture:"symbolic_reference_type.ml"
-        ~code:"VERO_INVALID_SYMBOLIC";
+        ~code:"VERO_UNSUPPORTED_TYPE";
       frontend_case ~name:"array-symbolic-type-rejected"
         ~module_name:"Symbolic_array_type" ~fixture:"symbolic_array_type.ml"
-        ~code:"VERO_INVALID_SYMBOLIC";
+        ~code:"VERO_UNSUPPORTED_TYPE";
       frontend_case ~name:"float-symbolic-type-rejected"
         ~module_name:"Symbolic_float_type" ~fixture:"symbolic_float_type.ml"
-        ~code:"VERO_INVALID_SYMBOLIC";
+        ~code:"VERO_UNSUPPORTED_TYPE";
       frontend_case ~name:"mutable-cycle-symbolic-type-rejected"
         ~module_name:"Symbolic_mutable_cycle"
         ~fixture:"symbolic_mutable_cycle.ml" ~code:"VERO_INVALID_RECURSIVE_RANK";

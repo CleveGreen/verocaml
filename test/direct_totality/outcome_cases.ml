@@ -80,17 +80,15 @@ let countdown =
        ~source:countdown_source
 
 let overflowing_measure =
-  base "Overflowing_measure" Outcome.Counterexample Outcome.Unit_counterexample
+  base "Overflowing_measure" Outcome.Verified Outcome.Unit_verified
   |> require_functions [ "overflowing_measure" ]
   |> require_kinds "overflowing_measure"
        [ Outcome.Entry_measure_nonnegative;
-         Outcome.Arithmetic_safety (Outcome.Add, Outcome.Lower);
-         Outcome.Arithmetic_safety (Outcome.Add, Outcome.Upper);
          Outcome.Recursive_call_measure_nonnegative
            { callee = "overflowing_measure" };
          Outcome.Recursive_call_strict_descent
            { callee = "overflowing_measure" } ]
-  |> source_case ~name:"overflowing-measure-counterexample"
+  |> source_case ~name:"overflowing-measure-is-logical"
        ~module_name:"Overflowing_measure" ~source:overflowing_measure_source
 
 let harmless_let_rec =

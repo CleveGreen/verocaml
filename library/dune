@@ -1,7 +1,11 @@
 (library
  (name vstd)
  (public_name verocaml.vstd)
- (modules pervasive seq)
+ (modules pervasive int seq)
  (libraries verocaml.ghost)
  (flags (:standard -w -A -alert -all))
- (preprocess (pps vero_ppx_driver)))
+ (preprocess (pps verocaml.ppx -- --verocaml-retained)))
+
+(include vstd__Pervasive.verocaml.inc)
+(include vstd__Int.verocaml.inc)
+(include vstd__Seq.verocaml.inc)

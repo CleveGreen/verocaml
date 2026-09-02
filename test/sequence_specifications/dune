@@ -23,7 +23,11 @@
   (sandbox always)
   (:suite outcome_cases.exe)
   integration-library-environment.manifest
-  ../../library/seq.ml
+  (:vstd_seq_cmi %{lib:verocaml.vstd:vstd__Seq.cmi})
+  (:vstd_seq_cmt %{lib:verocaml.vstd:vstd__Seq.cmt})
+  (:vstd_seq_vri %{lib:verocaml.vstd:vstd__Seq.vri})
+  (:vstd_seq_manifest
+   %{lib:verocaml.vstd:vstd__Seq.verocaml-retained-interface})
   fixtures/positive_client.ml
   fixtures/negative_invalid_client.ml)
  (action
@@ -41,19 +45,6 @@
   (:validator ../support/report_validator.exe))
  (action
   (run %{validator} %{report} %{archive})))
-
-(cram
- (applies_to sequence_specifications)
- (alias sequence-specifications-specialist-check)
- (runtest_alias false)
- (deps
-  (glob_files fixtures/*.ml)
-  ../../library/seq.ml
-  ../../library/seq.mli
-  ../../src/verocaml.exe
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
 
 (alias
  (name sequence-specifications-check)

@@ -27,7 +27,10 @@ let module_name path =
   path |> Filename.remove_extension |> String.capitalize_ascii
 
 let project_input ~name files =
-  let modules = "Bootstrap" :: List.map module_name files in
+  let modules =
+    "Bootstrap" :: List.map module_name files
+    |> List.sort_uniq String.compare
+  in
   Fixture.dune_project
     {
       files =
@@ -161,7 +164,7 @@ let load_artifacts project_root names =
 
 let dependency_project =
   project_input ~name:"verified_interfaces_dependency_graph"
-    [ "base.ml"; "middle.ml"; "consumer.ml" ]
+    [ "base.ml"; "base.mli"; "middle.ml"; "middle.mli"; "consumer.ml" ]
 
 let dependency_graph_parity ~environment ~workspace =
   let* project_root = prepare_project dependency_project ~environment ~workspace in

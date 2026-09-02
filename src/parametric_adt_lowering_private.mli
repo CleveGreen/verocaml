@@ -31,6 +31,7 @@ val covers_path : source -> Path.t -> bool
 val lower :
   span:(Location.t -> Diagnostic.span) ->
   aggregate:(Path.t -> Sst.type_id option) ->
+  logical_sort:(Path.t -> bool) ->
   modalities:
     (Location.t ->
     Mode.Modality.Const.t ->

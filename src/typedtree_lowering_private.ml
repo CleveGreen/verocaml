@@ -8,6 +8,13 @@ type lowered = {
 }
 
 let malformed implementation message =
+  let _ = message in
+  [%log.debug "rejected imported broadcast lowering boundary"
+    ~provider:(Delator.Field.string implementation.Cmt_input.unit_name)
+    ~stage:(Delator.Field.string "activation-lowering")
+    ~route:(Delator.Field.string "typedtree")
+    ~decision:(Delator.Field.string "rejected")
+    ~reason_class:(Delator.Field.string "authenticated-lowering")];
   Error
     (Diagnostic.make
        (Diagnostic.Unsupported_construct Diagnostic.Malformed_ghost_call)
@@ -26,7 +33,7 @@ let imported_specification_error implementation message =
     (Diagnostic.make (Diagnostic.Invalid_imported_specification message)
        (Diagnostic.file_span implementation.Cmt_input.source_file))
 
-let lower ?(allow_public_parametric_signatures = false) ?external_specifications ~imported
+let lower_internal ?(allow_public_parametric_signatures = false) ?external_specifications ~imported
     (implementation : Cmt_input.implementation) =
   incr lowering_entries;
   let proof_capture_artifact =
@@ -86,18 +93,46 @@ let lower ?(allow_public_parametric_signatures = false) ?external_specifications
                 callable.broadcast_trigger_span;
             })
           (Imported_callable.callables imported);
+      imported_broadcast_declarations =
+        List.map
+          (fun (declaration : Imported_callable.broadcast_declaration_snapshot) ->
+            [%log.debug "installed authenticated broadcast declaration snapshot"
+              ~route:(Delator.Field.string "typedtree-lowering")
+              ~stage:(Delator.Field.string "activation-environment")
+              ~member_kind:(Delator.Field.string "declaration")
+              ~trust_class:
+                (Delator.Field.string
+                   (match declaration.Imported_callable.trust with
+                   | Retained_broadcast_private.Proved -> "proved"
+                   | Retained_broadcast_private.Trusted -> "trusted"))
+              ~correlation:
+                (Delator.Field.string
+                   (Retained_broadcast_private.correlation declaration.identity))
+              ~decision:(Delator.Field.string "installed")];
+            {
+              Typedtree_adapter_private.Public.imported_broadcast_identity =
+                declaration.identity;
+              imported_broadcast_definition = declaration.definition;
+              imported_broadcast_trigger_span = declaration.trigger_span;
+              imported_broadcast_trust = declaration.trust;
+            })
+          (Imported_callable.broadcast_declarations imported);
       imported_broadcast_groups =
         List.map
           (fun (group : Imported_callable.broadcast_group_snapshot) ->
-            [%log.trace "installing imported broadcast group identity"
-              ~path:(Delator.Field.string group.path)
-              ~value_uid:(Delator.Field.string group.binding_uid)
-              ~targets:(Delator.Field.int (List.length group.target_paths))];
+            [%log.debug "installed authenticated broadcast group snapshot"
+              ~route:(Delator.Field.string "typedtree-lowering")
+              ~stage:(Delator.Field.string "activation-environment")
+              ~member_kind:(Delator.Field.string "group")
+              ~set_cardinality:(Delator.Field.int (List.length group.members))
+              ~correlation:
+                (Delator.Field.string
+                   (Retained_broadcast_private.correlation group.identity))
+              ~decision:(Delator.Field.string "installed")];
             {
-              Typedtree_adapter_private.Public.imported_broadcast_group_path =
-                group.path;
-              imported_broadcast_group_uid = group.binding_uid;
-              imported_broadcast_target_paths = group.target_paths;
+              Typedtree_adapter_private.Public.imported_broadcast_group_identity =
+                group.identity;
+              imported_broadcast_members = group.members;
             })
           (Imported_callable.broadcast_groups imported);
       imported_types =
@@ -110,6 +145,7 @@ let lower ?(allow_public_parametric_signatures = false) ?external_specifications
               imported_parametric_descriptor = typ.parametric_descriptor;
             })
           imported_types;
+      imported_logical_sorts = Imported_callable.logical_sorts imported;
       imported_rank_domains =
         List.map
           (fun (requirement : Imported_callable.formal_requirement) ->
@@ -237,6 +273,31 @@ let lower ?(allow_public_parametric_signatures = false) ?external_specifications
                                   external_registration;
                                 }))))))
 [@@delator.instrument] [@@delator.level debug]
+
+let lower ?(allow_public_parametric_signatures = false) ?external_specifications
+    ~imported:(imported [@delator.skip])
+    ((implementation : Cmt_input.implementation) [@delator.skip]) =
+  let result =
+    lower_internal ~allow_public_parametric_signatures
+      ?external_specifications ~imported implementation
+  in
+  [%log.debug "completed imported broadcast activation lowering"
+    ~provider:(Delator.Field.string implementation.unit_name)
+    ~stage:(Delator.Field.string "activation-lowering")
+    ~route:(Delator.Field.string "typedtree")
+    ~declaration_count:
+      (Delator.Field.int
+         (List.length (Imported_callable.broadcast_declarations imported)))
+    ~group_count:
+      (Delator.Field.int
+         (List.length (Imported_callable.broadcast_groups imported)))
+    ~decision:
+      (Delator.Field.string
+         (if Result.is_ok result then "accepted" else "rejected"))];
+  result
+[@@delator.instrument]
+[@@delator.level debug]
+[@@delator.no_exn_log]
 
 let program lowered = lowered.program
 let registration lowered = lowered.registration

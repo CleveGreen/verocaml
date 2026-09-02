@@ -43,6 +43,11 @@ type error =
   | Engine_error of Symbolic_executor_private.error
   | Solve_error of string
 
+type post_validation_invariant_breach
+
+val post_validation_invariant_breach :
+  error -> post_validation_invariant_breach option
+
 type report = {
   outcome : (completion, error) result;
   counters : Verification_session.counters;

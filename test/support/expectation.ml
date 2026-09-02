@@ -62,10 +62,13 @@ let add_bound kind ~maximum ~baseline ~rationale expectation =
 let functions_at_most = add_bound Functions
 let obligations_at_most = add_bound Obligations
 
-let missing label values =
+let missing label render values =
   match values with
   | [] -> Ok ()
-  | _ -> Error (Printf.sprintf "missing selected %s fact" label)
+  | _ ->
+      Error
+        (Printf.sprintf "missing selected %s facts: %s" label
+           (values |> List.map render |> String.concat ", "))
 
 let check_bound projection bound =
   Outcome.resource_at_most
@@ -84,27 +87,29 @@ let check expectation projection =
   let* () =
     expectation.frontend_codes
     |> List.filter (fun value -> not (List.mem value (Outcome.frontend_codes projection)))
-    |> missing "frontend-code"
+    |> missing "frontend-code" Fun.id
   in
   let* () =
     expectation.semantic_facts
     |> List.filter (fun value -> not (List.mem value (Outcome.semantic_facts projection)))
-    |> missing "semantic"
+    |> missing "semantic" (fun fact ->
+           fact.Outcome.function_name ^ ":" ^ Outcome.semantic_kind_name fact.kind)
   in
   let* () =
     expectation.units
     |> List.filter (fun value -> not (List.mem value (Outcome.units projection)))
-    |> missing "unit"
+    |> missing "unit" (fun (name, disposition) ->
+           name ^ ":" ^ Outcome.unit_disposition_name disposition)
   in
   let* () =
     expectation.named_facts
     |> List.filter (fun value -> not (List.mem value (Outcome.named_facts projection)))
-    |> missing "named"
+    |> missing "named" (fun (name, fact) -> name ^ ":" ^ Outcome.named_fact_name fact)
   in
   let* () =
     expectation.process_facts
     |> List.filter (fun value -> not (List.mem value (Outcome.process_facts projection)))
-    |> missing "process"
+    |> missing "process" Outcome.process_fact_name
   in
   List.fold_left
     (fun result bound -> Result.bind result (fun () -> check_bound projection bound))

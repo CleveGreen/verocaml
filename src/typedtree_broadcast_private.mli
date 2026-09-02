@@ -1,10 +1,15 @@
 type target = Broadcast_scope_private.target = {
   target_id : string;
   target_group : bool;
+  target_path : string;
+  target_uid : string;
+  target_interface_uid : string option;
 }
 
 type group = {
   group_id : string;
+  group_uid : string;
+  group_interface_uid : string option;
   group_name : string;
   group_path : string;
   group_targets : target list;
@@ -32,6 +37,8 @@ val authenticate :
 
 val carrier_binding : t -> Typedtree.value_binding -> bool
 val declaration_id : t -> Typedtree.value_binding -> string option
+val declaration_ids : t -> Typedtree.value_binding -> string list
+val declaration_identity : t -> string -> (string * string option) option
 val trigger_locations : t -> Typedtree.value_binding -> Location.t list
 val active_targets : t -> Typedtree.value_binding -> target list
 val expression_scopes : t -> Typedtree.value_binding -> expression_scope list

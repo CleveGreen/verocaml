@@ -25,8 +25,83 @@ let duplicate_import imports =
   in
   loop [] (Array.to_list imports)
 
+let argument_after flag arguments =
+  let rec loop = function
+    | [] | [ _ ] -> []
+    | candidate :: value :: rest ->
+        if String.equal candidate flag then value :: loop rest
+        else loop (value :: rest)
+  in
+  loop (Array.to_list arguments)
+
 let has_argument argument arguments =
   Array.exists (String.equal argument) arguments
+
+let supported_ppx command =
+  match String.split_on_char ' ' command |> List.filter (( <> ) "") with
+  | executable :: arguments ->
+      let executable =
+        String.trim executable
+        |> String.map (fun character ->
+               if Char.equal character '\'' || Char.equal character '"' then
+                 ' '
+               else character)
+        |> String.trim
+      in
+      let basename = Filename.basename executable in
+      let standalone =
+        (String.equal basename "vero_ppx.exe"
+        || String.equal basename "verocaml-ppx")
+        && List.exists (String.equal "--keep-ghost") arguments
+      in
+      let ppxlib =
+        List.exists
+          (fun argument ->
+            String.equal argument "-as-ppx"
+            || String.equal argument "--as-ppx")
+          arguments
+        && List.exists (String.equal "--verocaml-retained") arguments
+        && not
+             (List.exists (String.equal "--verocaml-ordinary") arguments)
+      in
+      standalone || ppxlib
+  | [] -> false
+
+let supported_retained_route ~require_public_interface
+    (candidate : Cmt_input.implementation) =
+  let interface_issuer issuer =
+    (not require_public_interface)
+    || candidate.interface_family_issuers = [ issuer ]
+  in
+  let compiler_ppx = argument_after "-ppx" candidate.compiler_arguments in
+  let _route, authenticated =
+    match compiler_ppx with
+    | [ command ] ->
+        ( "standalone-v1",
+          supported_ppx command
+          && Cmt_input.retained_ppx_artifact candidate
+          && candidate.implementation_family_issuers = [ "standalone-v1" ]
+          && interface_issuer "standalone-v1" )
+    | [] ->
+        ( "ppxlib-v1",
+          Cmt_input.retained_ppx_artifact candidate
+          && candidate.implementation_family_issuers = [ "ppxlib-v1" ]
+          && interface_issuer "ppxlib-v1" )
+    | _ -> ("unrecognized", false)
+  in
+  [%log.debug "evaluated retained candidate authentication"
+    ~provider:(Delator.Field.string candidate.unit_name)
+    ~route:(Delator.Field.string _route)
+    ~family:(Delator.Field.string "retained-v1")
+    ~stage:(Delator.Field.string "retained-candidate")
+    ~decision:
+      (Delator.Field.string
+         (if authenticated then "accepted" else "rejected"))
+    ~interface_receipt_count:
+      (Delator.Field.int (List.length candidate.interface_family_markers))
+    ~public_interface_required:
+      (Delator.Field.bool require_public_interface)];
+  authenticated
 
 type canonical_carrier = {
   carrier_unit : string;
@@ -149,7 +224,8 @@ let strict_candidate ~require_public_interface
           else if not (has_argument "-bin-annot" candidate.compiler_arguments)
           then reject "CMT was not produced with binary annotations enabled"
           else
-            if not (Cmt_input.retained_preprocessing candidate) then
+            if not (supported_retained_route ~require_public_interface candidate)
+            then
               reject "unsupported retained VeroCaml PPX identity"
             else if
               List.exists
@@ -203,6 +279,12 @@ let find_candidate (candidates : Cmt_input.implementation list) unit_name =
     (fun candidate -> String.equal candidate.Cmt_input.unit_name unit_name)
     candidates
 
+let retained_authority_identity_is_exact =
+  Interface_specification_environment_private.retained_authority_identity_is_exact
+
+let exact_import = Interface_specification_environment_private.exact_import
+let exact_imports = Interface_specification_environment_private.exact_imports
+
 let graph_order (candidates : Cmt_input.implementation list)
     (consumer : Cmt_input.implementation) =
   let reject ?unit_name message = error ?unit_name message in
@@ -247,7 +329,7 @@ let graph_order (candidates : Cmt_input.implementation list)
                 |> List.find_map (fun (import : Cmt_input.import) ->
                        match find_candidate candidates import.unit_name with
                        | Some dependency
-                         when dependency.interface_digest <> import.crc ->
+                         when not (exact_import ~owner:candidate ~dependency import) ->
                            Some (candidate.unit_name, import.unit_name)
                        | Some _ | None -> None))
               all_nodes
@@ -263,6 +345,7 @@ let graph_order (candidates : Cmt_input.implementation list)
             List.find_map
               (fun (candidate : Cmt_input.implementation) ->
                 custom_imports candidate
+                |> List.filter (Cmt_input.retained_authority_import candidate)
                 |> List.find_map (fun (import : Cmt_input.import) ->
                        if String.equal import.unit_name consumer.unit_name then
                          Some (candidate.unit_name, import.unit_name)
@@ -325,6 +408,7 @@ type public_surface = {
   public_revealed_type_names : string list;
   public_callable_names : string list;
   public_external_type_constructors : Parametric_type.constructor list;
+  public_symbolic_names : string list;
 }
 
 let embedded_public_surface ~unit_name
@@ -409,6 +493,10 @@ let embedded_public_surface ~unit_name
                       collect types revealed_types (name :: callables) rest
                 | Sig_module
                     (ident, _, declaration, _, Types.Exported) -> (
+                    match declaration.Types.md_type with
+                    | Mty_alias _ ->
+                        collect types revealed_types callables rest
+                    | _ ->
                     match
                       module_signature [] module_types
                         declaration.Types.md_type
@@ -446,6 +534,69 @@ let embedded_public_surface ~unit_name
             ( public_type_names,
               public_revealed_type_names,
               public_callable_names ) -> (
+            let prefix = unit_name ^ "." in
+            let broadcast_group_names =
+              candidate.interface_broadcasts
+              |> List.filter_map (fun member ->
+                     let identity =
+                       member.Retained_broadcast_private.identity
+                     in
+                     if identity.kind = Retained_broadcast_private.Group then
+                       if String.starts_with ~prefix identity.canonical_path then
+                         Some
+                           (String.sub identity.canonical_path
+                              (String.length prefix)
+                              (String.length identity.canonical_path
+                              - String.length prefix))
+                       else
+                         raise
+                           (Failure
+                              "broadcast group interface provider path mismatch")
+                     else None)
+            in
+            let public_callable_names =
+              List.filter
+                (fun name -> not (List.mem name broadcast_group_names))
+                public_callable_names
+            in
+            let relative_path path =
+              if String.starts_with ~prefix path then
+                Some
+                  (String.sub path (String.length prefix)
+                     (String.length path - String.length prefix))
+              else None
+            in
+            let logical_type_names =
+              candidate.interface_logical_sorts
+              |> List.filter_map (fun descriptor ->
+                     relative_path descriptor.Logical_sort_private.type_path)
+            and logical_callable_names =
+              candidate.interface_logical_sorts
+              |> List.filter_map (fun descriptor ->
+                     relative_path
+                       descriptor.Logical_sort_private.integer_literal_path)
+            in
+            let public_type_names =
+              List.filter
+                (fun name -> not (List.mem name logical_type_names))
+                public_type_names
+            and public_revealed_type_names =
+              List.filter
+                (fun name -> not (List.mem name logical_type_names))
+                public_revealed_type_names
+            and public_callable_names =
+              List.filter
+                (fun name -> not (List.mem name logical_callable_names))
+                public_callable_names
+            in
+            [%log.debug "partitioned descriptor-backed logical declarations from ordinary provider surface"
+              ~provider:(Delator.Field.string unit_name)
+              ~stage:(Delator.Field.string "embedded-public-surface")
+              ~logical_type_count:
+                (Delator.Field.int (List.length logical_type_names))
+              ~logical_callable_count:
+                (Delator.Field.int (List.length logical_callable_names))
+              ~decision:(Delator.Field.string "descriptor-owned")];
             let duplicate values =
               let rec loop seen = function
                 | [] -> None
@@ -463,12 +614,34 @@ let embedded_public_surface ~unit_name
                   (Printf.sprintf
                      "ambiguous embedded public identity %s" name)
             | None, None ->
+                let public_symbolic_names =
+                  candidate.interface_symbolic_declarations
+                  |> List.map
+                       (fun declaration ->
+                         let path = declaration.Cmt_input.symbolic_path in
+                         if String.starts_with ~prefix path then
+                           String.sub path (String.length prefix)
+                             (String.length path - String.length prefix)
+                         else
+                           raise
+                             (Failure
+                                "symbolic interface provider path mismatch"))
+                in
+                if
+                  List.exists
+                    (fun name -> not (List.mem name public_callable_names))
+                    public_symbolic_names
+                then
+                  raise
+                    (Failure
+                       "symbolic interface marker is not attached to a public value");
                 Ok
                   {
                     public_type_names;
                     public_revealed_type_names;
                     public_callable_names;
                     public_external_type_constructors = [];
+                    public_symbolic_names;
                   })
       with Cmi_format.Error _ | Invalid_argument _ | Failure _ ->
           reject "malformed embedded public signature")
@@ -491,7 +664,7 @@ let public_type_constructor surface constructor =
   not (String.contains path '.') && List.mem path surface.public_type_names
 
 let rec public_typ surface binders = function
-  | Sst.Unit | Bool | Int -> true
+  | Sst.Unit | Bool | Int | Mathematical_int -> true
   | Tuple components ->
       List.for_all (fun (_, typ) -> public_typ surface binders typ) components
   | Aggregate type_id -> surface_has_type surface type_id
@@ -590,11 +763,23 @@ let public_function surface function_id =
   Spec_function_sst_private.is_application_id function_id
   || List.mem (surface_callable_name function_id) surface.public_callable_names
 
+let public_canonical_application_constructor surface = function
+  | Sst.Application (constructor, _) ->
+      public_type_constructor surface constructor
+      && not
+           (List.mem constructor.Parametric_type.constructor_path
+              surface.public_type_names)
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Aggregate _
+  | Sst.Parameter _ ->
+      false
+
 let rec public_expression surface binders (expression : Sst.expression) =
   public_typ surface binders expression.Sst.typ
   &&
   match expression.expression_desc with
   | Sst.Int_constant _ | Bool_constant _ | Unit_constant -> true
+  | Lift_runtime_int operand -> public_expression surface binders operand
   | Variable { binding; _ } | Mutable_read binding ->
       public_binding surface binders binding
   | Tuple_value values ->
@@ -609,7 +794,8 @@ let rec public_expression surface binders (expression : Sst.expression) =
              && public_expression surface binders expression)
            fields
   | Constructor_value { constructor; arguments } ->
-      public_constructor surface constructor
+      (public_constructor surface constructor
+      || public_canonical_application_constructor surface expression.typ)
       && List.for_all (public_expression surface binders) arguments
   | Field_read { record; field } ->
       public_field surface field && public_expression surface binders record
@@ -688,7 +874,7 @@ let rec public_expression surface binders (expression : Sst.expression) =
       in
       List.mem
         (Symbolic_application_private.canonical_path declaration)
-        surface.public_callable_names
+        surface.public_symbolic_names
       && public_typ surface declaration_binders
            (Symbolic_application_private.declaration_result_type declaration)
       && List.for_all

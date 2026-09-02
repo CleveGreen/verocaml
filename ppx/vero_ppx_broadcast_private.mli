@@ -1,6 +1,10 @@
 open Parsetree
 
-val rewrite_structure : keep_ghost:bool -> structure -> structure
+val rewrite_structure :
+  keep_ghost:bool ->
+  family_attribute:(Location.t -> attribute) ->
+  structure ->
+  structure
 val rewrite_signature : keep_ghost:bool -> signature -> signature
 
 val reject_misplaced_attribute : attribute -> unit

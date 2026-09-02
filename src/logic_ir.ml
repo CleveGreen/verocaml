@@ -119,6 +119,7 @@ and term_node =
   | Add of term * term
   | Subtract of term * term
   | Negate of term
+  | Multiply of term * term
   | Scale of Z.t * term
   | Less_than of term * term
   | Less_or_equal of term * term
@@ -699,6 +700,14 @@ let negate ~span value =
         ~features:(Feature_set.singleton Linear_integer_arithmetic)
         [ value ]
 
+let multiply ~span left right =
+  match (expect_sort Int left, expect_sort Int right) with
+  | Error _ as error, _ | _, (Error _ as error) -> error
+  | Ok (), Ok () ->
+      make_term ~sort:Int ~span ~node:(Multiply (left, right))
+        ~features:(Feature_set.singleton Nonlinear_integer_arithmetic)
+        [ left; right ]
+
 let scale ~span coefficient value =
   match expect_sort Int value with
   | Error _ as error -> error
@@ -1133,6 +1142,7 @@ module View = struct
     | Add of term * term
     | Subtract of term * term
     | Negate of term
+    | Multiply of term * term
     | Scale of Z.t * term
     | Less_than of term * term
     | Less_or_equal of term * term

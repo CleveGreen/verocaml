@@ -1,1 +1,0 @@
-let countdown n = n[@@verocaml.internal.artifact_family.ordinary-v1 ]

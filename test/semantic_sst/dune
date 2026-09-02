@@ -44,12 +44,6 @@
  (action
   (run %{validator} %{report} %{archive})))
 
-(cram
- (deps
-  (glob_files fixtures/*.ml)
-  ../../verocaml.install
-  semantic_sst_tool.exe))
-
 (alias
  (name semantic-sst-check)
  (deps

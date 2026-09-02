@@ -20,13 +20,17 @@ let require_kinds function_name kinds expectation =
         (Outcome.Obligation_kind_exists { function_name; kind }) expectation)
     expectation kinds
 
-let source_input module_name source =
-  Fixture.single_source ~module_name ~source ~libraries:[ "verocaml.ghost" ]
+let source_input
+    ?(libraries = [ "verocaml.vstd"; "verocaml.ghost" ]) module_name source =
+  Fixture.single_source ~module_name ~source ~libraries
 
-let source_case ~name ~module_name ~source expectation =
+let source_case
+    ?(libraries = [ "verocaml.vstd"; "verocaml.ghost" ]) ~name ~module_name ~source
+    expectation =
   Suite.case ~name ~expectation
     (fun ~environment ~workspace ->
-      Fixture.run ~environment ~workspace (source_input module_name source))
+      Fixture.run ~environment ~workspace
+        (source_input ~libraries module_name source))
 
 let tagged key value outcome =
   Outcome.merge
@@ -136,7 +140,7 @@ let assumed_branch_assert (nodes : int node) =
 let positive_matrix_source =
   {vero|type node = Empty | Node of int * node
 
-let rec spec_node_len (node : node) : int =
+let rec spec_node_len (node : node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -190,7 +194,7 @@ type stack = {
   length : int;
 }
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -259,7 +263,7 @@ type stack = {
   length : int;
 }
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -292,7 +296,7 @@ type stack = {
   length : int;
 }
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -328,7 +332,7 @@ type stack = {
   length : int;
 }
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -365,7 +369,7 @@ type stack = {
   length : int;
 }
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -402,7 +406,7 @@ type stack = {
   length : int;
 }
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -441,7 +445,7 @@ type stack = {
   length : int;
 }
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -480,7 +484,7 @@ type stack = {
   length : int;
 }
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -512,7 +516,7 @@ let one_branch_export (choose : bool) (value : int) : stack =
 let empty_node_len_source =
   {vero|type 'a node = Empty | Node of 'a * 'a node
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -536,7 +540,7 @@ let lemma_empty_node_len (node : int node [@finite]) =
 let empty_node_wrong_source =
   {vero|type 'a node = Empty | Node of 'a * 'a node
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -560,7 +564,7 @@ let lemma_empty_node_len (node : int node [@finite]) =
 let empty_node_false_source =
   {vero|type 'a node = Empty | Node of 'a * 'a node
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -584,7 +588,7 @@ let lemma_empty_node_len (node : int node [@finite]) =
 let non_nullary_ground_abstains_source =
   {vero|type 'a node = Empty | Node of 'a * 'a node
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -613,7 +617,7 @@ let rec spec_index_alt_imp (idx : int) (nodes : int node) : int node =
   | Empty -> Empty
   | Node (value, rest) ->
       if idx <= 0 then Node (value, Empty)
-      else spec_index_alt_imp (idx - 1) rest
+      else spec_index_alt_imp idx rest
 [@@verocaml.spec] [@@verocaml.revealed]
 
 let lemma_index_empty (idx : int) (nodes : int node [@finite]) =
@@ -629,7 +633,7 @@ let lemma_index_empty (idx : int) (nodes : int node [@finite]) =
 let nullary_wrong_result_source =
   {vero|type 'a node = Empty | Other | Node of 'a * 'a node
 
-let rec spec_index_alt_imp (idx : int) (nodes : int node) : int node =
+let rec spec_index_alt_imp (idx : Vstd.Int.t) (nodes : int node) : int node =
   [%verocaml.decreases nodes];
   match nodes with
   | Empty -> Empty
@@ -639,7 +643,7 @@ let rec spec_index_alt_imp (idx : int) (nodes : int node) : int node =
       else spec_index_alt_imp (idx - 1) rest
 [@@verocaml.spec] [@@verocaml.opaque]
 
-let wrong_result (idx : int) (nodes : int node [@finite]) =
+let wrong_result (idx : Vstd.Int.t) (nodes : int node [@finite]) =
   [%verocaml.reveal_with_fuel (spec_index_alt_imp, 2)];
   match nodes with
   | Empty ->
@@ -653,7 +657,7 @@ let wrong_result (idx : int) (nodes : int node [@finite]) =
 let nullary_reachable_false_source =
   {vero|type 'a node = Empty | Other | Node of 'a * 'a node
 
-let rec spec_index_alt_imp (idx : int) (nodes : int node) : int node =
+let rec spec_index_alt_imp (idx : Vstd.Int.t) (nodes : int node) : int node =
   [%verocaml.decreases nodes];
   match nodes with
   | Empty -> Empty
@@ -663,7 +667,7 @@ let rec spec_index_alt_imp (idx : int) (nodes : int node) : int node =
       else spec_index_alt_imp (idx - 1) rest
 [@@verocaml.spec] [@@verocaml.opaque]
 
-let reachable_false (idx : int) (nodes : int node [@finite]) =
+let reachable_false (idx : Vstd.Int.t) (nodes : int node [@finite]) =
   [%verocaml.reveal_with_fuel (spec_index_alt_imp, 2)];
   match nodes with
   | Empty ->
@@ -678,7 +682,7 @@ let reachable_false (idx : int) (nodes : int node [@finite]) =
 let nullary_symbolic_expected_source =
   {vero|type 'a node = Empty | Other | Node of 'a * 'a node
 
-let rec spec_index_alt_imp (idx : int) (nodes : int node) : int node =
+let rec spec_index_alt_imp (idx : Vstd.Int.t) (nodes : int node) : int node =
   [%verocaml.decreases nodes];
   match nodes with
   | Empty -> Empty
@@ -689,7 +693,7 @@ let rec spec_index_alt_imp (idx : int) (nodes : int node) : int node =
 [@@verocaml.spec] [@@verocaml.opaque]
 
 let symbolic_expected
-    (idx : int)
+    (idx : Vstd.Int.t)
     (nodes : int node [@finite])
     (expected : int node) =
   [%verocaml.reveal_with_fuel (spec_index_alt_imp, 2)];
@@ -706,12 +710,12 @@ let region_proof_call_source =
   | Nil
   | Cons of int * int_list
 
-let rec list_len (values : int_list) : int =
+let rec list_len (values : int_list) : Vstd.Int.t =
   [%verocaml.decreases values];
   match values with Nil -> 0 | Cons (_, tail) -> 1 + list_len tail
 [@@verocaml.spec] [@@verocaml.revealed]
 
-let rec twice_len (values : int_list) : int =
+let rec twice_len (values : int_list) : Vstd.Int.t =
   [%verocaml.decreases values];
   match values with Nil -> 0 | Cons (_, tail) -> 2 + twice_len tail
 [@@verocaml.spec] [@@verocaml.revealed]
@@ -777,7 +781,7 @@ let exec_region_inner_branch (take_left : bool) =
 let one_predecessor_negative_source =
   {vero|type node = Empty | Node of int * node
 
-let rec spec_node_len (node : node) : int =
+let rec spec_node_len (node : node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -796,12 +800,12 @@ let one_predecessor (take_left : bool) =
 let recursive_summary_source =
   {vero|type int_list = Nil | Cons of int * int_list
 
-let rec list_len (values : int_list) : int =
+let rec list_len (values : int_list) : Vstd.Int.t =
   [%verocaml.decreases values];
   match values with Nil -> 0 | Cons (_, tail) -> 1 + list_len tail
 [@@verocaml.spec] [@@verocaml.revealed]
 
-let rec twice_len (values : int_list) : int =
+let rec twice_len (values : int_list) : Vstd.Int.t =
   [%verocaml.decreases values];
   match values with Nil -> 0 | Cons (_, tail) -> 2 + twice_len tail
 [@@verocaml.spec] [@@verocaml.revealed]
@@ -821,12 +825,12 @@ let rec prove_twice_len (values : int_list [@finite]) =
 let recursive_call_removed_source =
   {vero|type int_list = Nil | Cons of int * int_list
 
-let rec list_len (values : int_list) : int =
+let rec list_len (values : int_list) : Vstd.Int.t =
   [%verocaml.decreases values];
   match values with Nil -> 0 | Cons (_, tail) -> 1 + list_len tail
 [@@verocaml.spec] [@@verocaml.revealed]
 
-let rec twice_len (values : int_list) : int =
+let rec twice_len (values : int_list) : Vstd.Int.t =
   [%verocaml.decreases values];
   match values with Nil -> 0 | Cons (_, tail) -> 2 + twice_len tail
 [@@verocaml.spec] [@@verocaml.revealed]
@@ -844,7 +848,7 @@ let prove_twice_len (values : int_list [@finite]) =
 let reveal_removed_negative_source =
   {vero|type node = Empty | Node of node
 
-let rec spec_node_len (node : node) : int =
+let rec spec_node_len (node : node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with Empty -> 0 | Node next -> 1 + spec_node_len next
 [@@verocaml.spec] [@@verocaml.opaque]
@@ -858,7 +862,7 @@ let reveal_removed (x : int) =
 let reveal_after_negative_source =
   {vero|type node = Empty | Node of node
 
-let rec spec_node_len (node : node) : int =
+let rec spec_node_len (node : node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with Empty -> 0 | Node next -> 1 + spec_node_len next
 [@@verocaml.spec] [@@verocaml.opaque]
@@ -873,7 +877,7 @@ let reveal_after (x : int) =
 let reveal_sibling_negative_source =
   {vero|type node = Empty | Node of node
 
-let rec spec_node_len (node : node) : int =
+let rec spec_node_len (node : node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with Empty -> 0 | Node next -> 1 + spec_node_len next
 [@@verocaml.spec] [@@verocaml.opaque]
@@ -887,7 +891,7 @@ let reveal_sibling (take_left : bool) =
 let reveal_other_callable_negative_source =
   {vero|type node = Empty | Node of node
 
-let rec spec_node_len (node : node) : int =
+let rec spec_node_len (node : node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with Empty -> 0 | Node next -> 1 + spec_node_len next
 [@@verocaml.spec] [@@verocaml.opaque]
@@ -905,7 +909,7 @@ let no_activation_here (x : int) =
 let revealed_default_negative_source =
   {vero|type node = Empty | Node of node
 
-let rec spec_node_len (node : node) : int =
+let rec spec_node_len (node : node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with Empty -> 0 | Node next -> 1 + spec_node_len next
 [@@verocaml.spec] [@@verocaml.revealed]
@@ -927,6 +931,11 @@ let local_dependency_source =
   {vero|let local_true (x : int) =
   let y = x + 1 in
   [%verocaml.assert y > x]
+[@@verocaml.proof]
+|vero}
+
+let local_dependency_interface =
+  {vero|val local_true : int -> unit
 [@@verocaml.proof]
 |vero}
 
@@ -1465,6 +1474,7 @@ let imported_project =
                verocaml.ghost)\n (flags (:standard -ppx \
                \"verocaml-ppx --keep-ghost\")))\n" };
           { path = "local_dependency.ml"; contents = local_dependency_source };
+          { path = "local_dependency.mli"; contents = local_dependency_interface };
           { path = "imported_local_consumer.ml";
             contents = imported_local_consumer_source } ];
       libraries = [ "verocaml.ghost" ];

@@ -59,17 +59,6 @@
  (action
   (run %{validator} %{report} %{archive})))
 
-(cram
- (deps
-  (glob_files fixtures/*.ml)
-  (glob_files fixtures/*.mli)
-  (glob_files fixtures/*.abi)
-  finite_formal_counter_tool.exe
-  ../../src/verocaml.exe
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
-
 (alias
  (name finite-formal-propagation-check)
  (deps

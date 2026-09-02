@@ -31,7 +31,7 @@ let rec spec_nested_tuple_match
     (a : int node)
     (b : int node)
     (flag : bool)
-    (count : int) : bool =
+    (count : Vstd.Int.t) : bool =
   [%verocaml.decreases a];
   match (~left:(a, flag), ~right:(b, count)) with
   | (~left:(Empty, true), ~right:(Empty, 0)) -> true

@@ -30,8 +30,8 @@ let malformed_ghost_call_cases =
       ~name:"malformed-ghost-call-altered-argument"
       ~module_name:"Altered_argument"
       ~source:
-        {|let target (x : int) = x
-let wrapper (x : int) = target (x + 1)
+        {|let target (value : bool) = value
+let wrapper (value : bool) = target (not value)
 [@@verocaml.external_specification]
 |};
     malformed_ghost_call_case ~name:"malformed-ghost-call-arity"

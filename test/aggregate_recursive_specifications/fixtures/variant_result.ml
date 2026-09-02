@@ -1,13 +1,13 @@
 type tree = Leaf | Branch of int * tree
 
-let rec spec_repeat (value : int) (n : int) (tree : tree) : tree =
+let rec spec_repeat (value : int) (n : Vstd.Int.t) (tree : tree) : tree =
   [%verocaml.decreases n];
   if n <= 0 then tree
   else spec_repeat value (n - 1) (Branch (value, tree))
 [@@verocaml.spec]
 [@@verocaml.opaque]
 
-let rec spec_tree_size (tree : tree) : int =
+let rec spec_tree_size (tree : tree) : Vstd.Int.t =
   [%verocaml.decreases tree];
   match tree with
   | Leaf -> 0

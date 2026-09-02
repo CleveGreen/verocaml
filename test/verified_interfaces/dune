@@ -56,6 +56,7 @@
 (executable
  (name outcome_cases)
  (modules outcome_cases integration_environment)
+ (flags (:standard -opaque))
  (libraries outcome_test_support))
 
 (rule
@@ -83,21 +84,6 @@
   (:validator ../support/report_validator.exe))
  (action
   (run %{validator} %{report} %{archive})))
-
-(cram
- (alias verified-interfaces-specialist-check)
- (runtest_alias false)
- (deps
-  (glob_files fixtures/*.ml)
-  (glob_files fixtures/*.mli)
-  ../../verocaml.install
-  handle_barrier_tool.exe
-  verified_interfaces_tool.exe
-  ../../src/verocaml.exe
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.mli
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
 
 (alias
  (name verified-interfaces-check)

@@ -9,6 +9,7 @@ type typ = Parametric_type.t =
   | Unit
   | Bool
   | Int
+  | Mathematical_int
   | Tuple of (string option * typ) list
   | Aggregate of type_id
   | Parameter of Parametric_type.binder
@@ -283,6 +284,7 @@ type checked_arithmetic =
   | Add
   | Subtract
   | Negate
+  | Multiply
   | Multiply_constant of Z.t
   | Successor
   | Predecessor
@@ -390,6 +392,7 @@ and expression_desc =
   | Sequence of expression * expression
   | If of expression * expression * expression option
   | Match of expression * case list
+  | Lift_runtime_int of expression
   | Checked_arithmetic of checked_arithmetic * expression list
   | Compare of comparison * expression * expression
   | Boolean_not of expression
@@ -626,7 +629,7 @@ let binding_to_string binding =
     (string_of_type binding.typ)
     (match (binding.typ, binding.uniqueness) with
     | ( Aggregate _ | Parameter _ | Application _), Definitely_unique -> " uniqueness=unique"
-    | (Unit | Bool | Int | Tuple _), Definitely_unique
+    | (Unit | Bool | Int | Mathematical_int | Tuple _), Definitely_unique
     | _, Definitely_aliased ->
         "")
 
@@ -689,6 +692,7 @@ let checked_name = function
   | Add -> "add"
   | Subtract -> "subtract"
   | Negate -> "negate"
+  | Multiply -> "multiply"
   | Multiply_constant constant ->
       "multiply-constant " ^ Z.to_string constant
   | Successor -> "successor"
@@ -752,7 +756,7 @@ let rec print_expression buffer indent (expression : expression) =
       line buffer indent "variable %s%s%s" (binding_to_string binding)
         (match (binding.typ, use_uniqueness) with
         | ( Aggregate _ | Parameter _ | Application _), Definitely_unique -> " use=unique"
-        | (Unit | Bool | Int | Tuple _), Definitely_unique
+        | (Unit | Bool | Int | Mathematical_int | Tuple _), Definitely_unique
         | _, Definitely_aliased ->
             "")
         suffix
@@ -952,6 +956,9 @@ let rec print_expression buffer indent (expression : expression) =
           line buffer (indent + 4) "body";
           print_expression buffer (indent + 6) case.case_body)
         cases
+  | Lift_runtime_int operand ->
+      line buffer indent "lift-runtime-int%s" suffix;
+      print_expression buffer (indent + 2) operand
   | Checked_arithmetic (operation, operands) ->
       line buffer indent "checked-%s%s" (checked_name operation) suffix;
       List.iter (print_expression buffer (indent + 2)) operands
@@ -1075,6 +1082,7 @@ let rec shared_scalar_transitions expression =
         :: List.concat_map
              (fun case -> Option.to_list case.case_guard @ [ case.case_body ])
              cases
+    | Lift_runtime_int operand -> [ operand ]
     | Checked_arithmetic (_, operands) -> operands
     | Boolean_not operand | Old operand | Proof_region operand -> [ operand ]
     | Forall quantifier | Exists quantifier ->
@@ -1238,6 +1246,7 @@ let rec map_expression_types substitute expression =
                  case_pattern = map_pattern_types substitute case.case_pattern;
                  case_guard = Option.map recurse case.case_guard;
                  case_body = recurse case.case_body }) cases)
+    | Lift_runtime_int operand -> Lift_runtime_int (recurse operand)
     | Checked_arithmetic (operation, operands) ->
         Checked_arithmetic (operation, List.map recurse operands)
     | Compare (operation, left, right) ->
@@ -1265,13 +1274,13 @@ let rec map_expression_types substitute expression =
         | Field_write _ | Shared_scalar_field_write _
         | Owned_tree_nested_write _ | Owned_tree_rebase _ | Let_mutable _
         | Mutable_read _ | Mutable_write _ | Let _ | Sequence _ | If _
-        | Match _ | Checked_arithmetic _ | Compare _ | Boolean_not _
+        | Match _ | Lift_runtime_int _ | Checked_arithmetic _ | Compare _
         | Boolean_binary _ | Direct_call _ | Callback_call _
         | Symbolic_application _
         | Callback_requires _ | Callback_ensures _ | Optional_absent
         | Optional_present _ | Optional_forward _ | Reveal _
         | Reveal_with_fuel _ | Use_type_invariant _ | Local_assert _
-        | Proof_region _ | Old _ ->
+        | Proof_region _ | Old _ | Boolean_not _ ->
             assert false)
     | Direct_call call ->
         Direct_call

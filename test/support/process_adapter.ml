@@ -12,7 +12,7 @@ let read_file path =
     ~finally:(fun () -> close_in_noerr channel)
     (fun () -> really_input_string channel (in_channel_length channel))
 
-let stable_codes text =
+let codes_in_brackets text =
   let length = String.length text in
   let allowed = function
     | 'A' .. 'Z' | '0' .. '9' | '_' -> true
@@ -20,17 +20,28 @@ let stable_codes text =
   in
   let rec scan index codes =
     if index + 5 > length then List.sort_uniq String.compare codes
-    else if String.sub text index 5 = "VERO_" then
+    else if index > 0 && text.[index - 1] = '[' && String.sub text index 5 = "VERO_" then
       let finish = ref (index + 5) in
       while !finish < length && allowed text.[!finish] do
         incr finish
       done;
-      if !finish = index + 5 then scan (index + 5) codes
+      if !finish = index + 5 || !finish >= length || text.[!finish] <> ']' then
+        scan (index + 5) codes
       else
         scan !finish (String.sub text index (!finish - index) :: codes)
     else scan (index + 1) codes
   in
   scan 0 []
+
+let stable_codes text =
+  text |> String.split_on_char '\n'
+  |> List.filter_map (fun line ->
+         let line = String.trim line in
+         if String.starts_with ~prefix:"verocaml:" line
+            || String.starts_with ~prefix:"Error: [VERO_" line
+         then Some (codes_in_brackets line)
+         else None)
+  |> List.concat |> List.sort_uniq String.compare
 
 let index_of ~from pattern text =
   let pattern_length = String.length pattern in

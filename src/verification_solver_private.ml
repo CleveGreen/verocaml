@@ -34,7 +34,7 @@ let preparation_error_source_ordinal_for_testing = ref None
 let ( let* ) result continuation =
   match result with Ok value -> continuation value | Error _ as error -> error
 
-let preflight ~solver_policy program =
+let preflight_with ~solver_policy ~program prepare =
   Recursive_spec_preservation.clear_pending program;
   let has_recursive_specification =
     List.exists
@@ -51,11 +51,16 @@ let preflight ~solver_policy program =
   if not has_recursive_specification then
     Ok { authority = None; termination_obligations = 0; terminal_result = None }
   else
-  match Recursive_spec_encoding.prepare program with
+  match prepare () with
   | Error error ->
+      let detail = Recursive_spec_encoding.error_to_string error in
+      [%log.debug "recursive specification preflight preparation failed"
+        ~stage:(Delator.Field.string "recursive-specification-preflight")
+        ~operation:(Delator.Field.string "prepare")
+        ~detail:(Delator.Field.string detail)
+        ~decision:(Delator.Field.string "rejected")];
       Error
-        (Verification_pipeline.Internal_setup_error
-           (Recursive_spec_encoding.error_to_string error))
+        (Verification_pipeline.Internal_setup_error detail)
   | Ok prepared when not (Recursive_spec_encoding.has_definitions prepared) ->
       Ok { authority = None; termination_obligations = 0; terminal_result = None }
   | Ok prepared -> (
@@ -66,9 +71,14 @@ let preflight ~solver_policy program =
           prepared
       with
       | Error error ->
+          let detail = Recursive_spec_encoding.error_to_string error in
+          [%log.debug "recursive specification preflight verification failed"
+            ~stage:(Delator.Field.string "recursive-specification-preflight")
+            ~operation:(Delator.Field.string "verify")
+            ~detail:(Delator.Field.string detail)
+            ~decision:(Delator.Field.string "rejected")];
           Error
-            (Verification_pipeline.Internal_setup_error
-               (Recursive_spec_encoding.error_to_string error))
+            (Verification_pipeline.Internal_setup_error detail)
       | Ok (Recursive_spec_encoding.Verification_inconclusive result) ->
           Ok
             {
@@ -93,11 +103,40 @@ let preflight ~solver_policy program =
                 match Recursive_spec_encoding.base_query verified function_id with
                 | Ok _ -> check rest
                 | Error error ->
+                    let detail = Recursive_spec_encoding.error_to_string error in
+                    [%log.debug
+                      "recursive specification preflight base query failed"
+                      ~stage:
+                        (Delator.Field.string
+                           "recursive-specification-preflight")
+                      ~operation:(Delator.Field.string "base-query")
+                      ~function_name:
+                        (Delator.Field.string function_id.function_name)
+                      ~detail:(Delator.Field.string detail)
+                      ~decision:(Delator.Field.string "rejected")];
                     Error
-                      (Verification_pipeline.Internal_setup_error
-                         (Recursive_spec_encoding.error_to_string error)))
+                      (Verification_pipeline.Internal_setup_error detail))
           in
           check (Recursive_spec_encoding.definition_ids verified))
+[@@delator.instrument] [@@delator.level debug]
+
+let preflight ~solver_policy program =
+  [%log.debug "starting recursive preflight from an unvalidated SST program"
+    ~stage:(Delator.Field.string "recursive-specification-preflight")
+    ~validation_authority:(Delator.Field.string "local-validation")
+    ~decision:(Delator.Field.string "started")];
+  preflight_with ~solver_policy ~program (fun () ->
+      Recursive_spec_encoding.prepare program)
+[@@delator.instrument] [@@delator.level debug]
+
+let preflight_validated ~solver_policy validated =
+  let program = Sst_validation.program validated in
+  [%log.debug "starting recursive preflight from retained validation authority"
+    ~stage:(Delator.Field.string "recursive-specification-preflight")
+    ~validation_authority:(Delator.Field.string "retained")
+    ~decision:(Delator.Field.string "started")];
+  preflight_with ~solver_policy ~program (fun () ->
+      Recursive_spec_encoding.prepare_validated validated)
 [@@delator.instrument] [@@delator.level debug]
 
 let termination_obligations preflight = preflight.termination_obligations
@@ -467,9 +506,19 @@ let configure ~solver_policy preflight =
   | Error error ->
       Error (Verification_pipeline.Solver_configuration_error error)
   | Ok config ->
+      let source_ordinal = ref 0 in
       Ok
         (fun (request : Verification_pipeline.solve_request) ->
-          solve_execution ~solver_policy preflight config request)
+          let current_source_ordinal = !source_ordinal in
+          incr source_ordinal;
+          if
+            !preparation_error_source_ordinal_for_testing
+            = Some current_source_ordinal
+          then (
+            [%log.debug "injecting solver preparation dependency failure"
+              ~source_ordinal:(Delator.Field.int current_source_ordinal)];
+            Error "verification preparation could not authenticate its inputs")
+          else solve_execution ~solver_policy preflight config request)
 [@@delator.instrument] [@@delator.level debug]
 
 let add_telemetry (left : Z3_bridge.counters)

@@ -11,12 +11,12 @@ let identity_node (node : int node) : int node = node
 let identity_stack (stack : stack) : stack = stack
 [@@verocaml.spec]
 
-let spec_push_front (value : int) (stack : stack) : stack =
-  { top = Node (value, stack.top); length = stack.length + 1 }
+let spec_push_front (value : int) (stack : stack) : int node =
+  Node (value, stack.top)
 [@@verocaml.spec]
 
 let spec_front (value : int) (stack : stack) : int =
-  match identity_node (spec_push_front value stack).top with
+  match identity_node (spec_push_front value stack) with
   | Empty -> 0
   | Node (head, _) -> head
 [@@verocaml.spec]

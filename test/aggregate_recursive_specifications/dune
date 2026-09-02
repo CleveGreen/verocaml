@@ -33,7 +33,7 @@
 (executable
  (name outcome_cases)
  (modules outcome_cases integration_environment)
- (libraries outcome_test_support))
+ (libraries outcome_test_support verocaml_core verocaml_bin_private unix))
 
 (rule
  (targets
@@ -42,6 +42,13 @@
  (deps
   (sandbox always)
   (:suite outcome_cases.exe)
+  (:vstd_cmi %{lib:verocaml.vstd:vstd.cmi})
+  (:vstd_int_cmt %{lib:verocaml.vstd:vstd__Int.cmt})
+  (:vstd_int_cmi %{lib:verocaml.vstd:vstd__Int.cmi})
+  (:vstd_int_cmti %{lib:verocaml.vstd:vstd__Int.cmti})
+  (:vstd_int_vri %{lib:verocaml.vstd:vstd__Int.vri})
+  (:vstd_int_manifest
+   %{lib:verocaml.vstd:vstd__Int.verocaml-retained-interface})
   (glob_files fixtures/*.ml)
   integration-library-environment.manifest)
  (action
@@ -59,15 +66,6 @@
   (:validator ../support/report_validator.exe))
  (action
   (run %{validator} %{report} %{archive})))
-
-(cram
- (deps
- (glob_files fixtures/*.ml)
-  aggregate_recursive_specifications_tool.exe
-  ../../src/verocaml.exe
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
 
 (alias
  (name aggregate-recursive-specifications-check)

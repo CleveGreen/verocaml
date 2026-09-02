@@ -36,6 +36,7 @@
 (executable
  (name outcome_cases)
  (modules outcome_cases integration_environment)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
  (libraries outcome_test_support verocaml_core compiler-libs.common))
 
 (rule
@@ -62,20 +63,6 @@
   (:validator ../support/report_validator.exe))
  (action
   (run %{validator} %{report} %{archive})))
-
-(cram
- (alias verification-scope-specialist-check)
- (runtest_alias false)
- (deps
-  (glob_files fixtures/*)
-  verification_scope_architecture_tool.exe
-  verification_scope_counter_tool.exe
-  ../../src/verocaml.exe
-  ../../src/verification_scope_private.ml
-  ../../src/verocaml_bin_project_private.ml
-  ../../src/verocaml_bin.ml
-  ../../ppx/vero_ppx.exe
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
 
 (alias
  (name verification-scope-check)

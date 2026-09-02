@@ -175,7 +175,8 @@ let self_application descriptor typ =
       Parametric_type.compare_constructor constructor
         (Parametric_adt.type_constructor descriptor)
       = 0
-  | Unit | Bool | Int | Tuple _ | Aggregate _ | Parameter _ -> false
+  | Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _ | Parameter _ ->
+      false
 let direct_self descriptor typ =
   match typ with
   | Parametric_type.Application (constructor, arguments) ->
@@ -188,10 +189,12 @@ let direct_self descriptor typ =
              match argument with
              | Parametric_type.Parameter candidate ->
                  Parametric_type.compare_binder candidate binder = 0
-             | Unit | Bool | Int | Tuple _ | Aggregate _ | Application _ ->
+             | Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _
+             | Application _ ->
                  false)
            arguments (Parametric_adt.binders descriptor)
-  | Unit | Bool | Int | Tuple _ | Aggregate _ | Parameter _ -> false
+  | Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _ | Parameter _ ->
+      false
 let supported_schema descriptor =
   match Parametric_adt.kind descriptor with
   | Parametric_adt.Record _ -> false
@@ -213,7 +216,9 @@ let supported_schema descriptor =
              (not field.Parametric_adt.field_mutable)
              &&
              match field.field_type with
-             | Parametric_type.Unit | Bool | Int | Parameter _ -> true
+             | Parametric_type.Unit | Bool | Int | Mathematical_int
+             | Parameter _ ->
+                 true
              | Application _ as typ -> direct_self descriptor typ
              | Tuple _ | Aggregate _ -> false)
            descriptor_fields
@@ -370,7 +375,7 @@ let find_capability program constructor =
          = 0)
     !capabilities
 let rec actual_allowed program opaque_binders visiting = function
-  | Parametric_type.Unit | Bool | Int -> true
+  | Parametric_type.Unit | Bool | Int | Mathematical_int -> true
   | Parameter binder ->
       List.exists
         (fun candidate -> Parametric_type.compare_binder candidate binder = 0)
@@ -425,7 +430,7 @@ let application_layout capability span arguments =
                                 Parametric_type.compare_binder parameter binder
                                 = 0)
                               (Parametric_type.parameters field.field_type))
-                    | Unit | Bool | Int | Tuple _ | Aggregate _
+                    | Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _
                     | Application _ ->
                         not
                           (List.exists
@@ -446,7 +451,8 @@ let application_layout capability span arguments =
                  (fun candidate ->
                    Parametric_type.compare_binder candidate binder = 0)
                  opaque_binders
-           | Unit | Bool | Int | Tuple _ | Aggregate _ | Application _ ->
+           | Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _
+           | Application _ ->
                actual_allowed
                  (Option.get (live_program capability.program))
                  [] [] argument)
@@ -538,7 +544,7 @@ let derive_application ~program ~span = function
               Ok
                 (make_domain ~capability ~application ~program ~component
                    ~positive_children ~ground_witnesses ~actual_evidence ())))
-  | Unit | Bool | Int | Tuple _ | Aggregate _ | Parameter _ ->
+  | Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _ | Parameter _ ->
       Error { span; detail = "schema-rank view requires an exact application" }
 let domain_id (domain : validated_rank_domain) = domain.domain_id
 let domain_version (domain : validated_rank_domain) = domain.domain_version
@@ -553,7 +559,10 @@ let application (domain : validated_rank_domain) = domain.application
 let actual_arguments domain =
   match application domain with
   | Some (Parametric_type.Application (_, arguments)) -> arguments
-  | Some (Unit | Bool | Int | Tuple _ | Aggregate _ | Parameter _) | None -> []
+  | Some
+      (Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _ | Parameter _)
+  | None ->
+      []
 let authenticate_profile ~structure profile =
   profile.Issuance.rank_profile_structure == structure
   && !(profile.rank_profile_token) = ()

@@ -96,7 +96,8 @@ let application_term ~error ~span = function
 let value_of_application ~aggregate_type ~error ~span typ application =
   match typ with
   | Sst.Unit -> Ok Unit_value
-  | Sst.Int -> Ok (Integer_value (Vir.Integer_symbolic_application application))
+  | Sst.Int | Sst.Mathematical_int ->
+      Ok (Integer_value (Vir.Integer_symbolic_application application))
   | Sst.Bool ->
       Ok (Boolean_value (Vir.Boolean_symbolic_application application))
   | Sst.Parameter binder ->
@@ -132,7 +133,7 @@ let value_of_application ~aggregate_type ~error ~span typ application =
   | Sst.Tuple _ -> Error (error span "function result escaped first-order logic")
 
 let sort_of_type ~aggregate_type = function
-  | Parametric_type.Int -> Ok Vir.Integer
+  | Parametric_type.Int | Parametric_type.Mathematical_int -> Ok Vir.Integer
   | Bool -> Ok Vir.Boolean
   | Parameter binder -> Ok (Vir.Parametric binder)
   | Application _ as typ when Parametric_type.is_spec_function typ ->
@@ -301,7 +302,7 @@ let application ~arrow ~function_ ~argument ~result_type ~span =
         ~argument_types:[ arrow; view.domain ] ~result_type ~span
   | Some _ -> Error "specification-function value has the wrong arrow sort"
 
-let application_symbol_name ~arrow ~result_type ~span =
+let application_backend_head ~arrow ~result_type ~span =
   let* view = Spec_function_type_private.require arrow in
   let identity = "apply:" ^ arrow_digest arrow in
   let* declaration =
@@ -309,8 +310,16 @@ let application_symbol_name ~arrow ~result_type ~span =
       ~name:("$verocaml.spec-apply:" ^ arrow_digest arrow)
       ~span ~parameter_types:[ arrow; view.domain ] ~result_type
   in
-  Symbolic_application_private.symbol_name_for_application declaration
-    ~type_arguments:[] ~argument_types:[ arrow; view.domain ] ~result_type
+  let* backend_head =
+    Symbolic_application_private.backend_head_for_instantiation declaration
+      ~type_arguments:[] ~argument_types:[ arrow; view.domain ] ~result_type
+  in
+  [%log.trace "correlated specification-function apply backend identity"
+    ~stage:(Delator.Field.string "spec-function-apply-identity")
+    ~route:(Delator.Field.string "recursive")
+    ~correlation:(Delator.Field.string (arrow_digest arrow))
+    ~decision:(Delator.Field.string "correlated")];
+  Ok backend_head
 
 let is_application application =
   let declaration = Symbolic_application_private.declaration application in
@@ -636,7 +645,7 @@ type ('value, 'error) application_value_services = {
 
 let value_of_logic_application services typ application =
   match typ with
-  | Sst.Int -> Ok (services.integer application)
+  | Sst.Int | Sst.Mathematical_int -> Ok (services.integer application)
   | Sst.Bool -> Ok (services.boolean application)
   | Sst.Parameter binder -> Ok (services.parametric binder application)
   | Sst.Application _ when Parametric_type.is_spec_function typ ->

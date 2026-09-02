@@ -1,6 +1,10 @@
 type artifact = {
   source : string;
   cmt : string;
+  cmi : string option;
+  cmti : string option;
+  vri : string option;
+  requested : bool;
 }
 
 type project = {
@@ -9,4 +13,11 @@ type project = {
   artifacts : artifact list;
 }
 
-val build_and_describe : string -> (project, string) result
+type error =
+  | Cli_error of string
+  | Dependency_error of {
+      provider : string option;
+      reason_class : string;
+    }
+
+val build_and_describe : string -> (project, error) result

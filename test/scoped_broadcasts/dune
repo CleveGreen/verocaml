@@ -81,21 +81,6 @@
  (action
   (run %{validator} %{report} %{archive})))
 
-(cram
- (deps
-  mutate_broadcast_carrier.exe
-  (glob_files fixtures/*.ml)
-  (glob_files fixtures/*.mli)
-  generate_negatives.exe
-  instance_cap.exe
-  scoped_broadcasts_tool.exe
-  trust_oracle.exe
-  ../../verocaml.install
-  ../../src/verocaml.exe
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
-
 (alias
  (name scoped-broadcasts-check)
  (deps

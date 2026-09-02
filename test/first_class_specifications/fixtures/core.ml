@@ -1,3 +1,5 @@
+open Vstd
+
 type 'a option_specification = 'a option
 [@@verocaml.external_type_specification]
 
@@ -6,8 +8,9 @@ let apply (f : 'a -> 'b) (x : 'a) : 'b = f x [@@verocaml.spec]
 let compose (f : 'b -> 'c) (g : 'a -> 'b) : 'a -> 'c = fun x -> f (g x)
 [@@verocaml.spec]
 
-let adder (x : int) : int -> int = fun y -> x + y [@@verocaml.spec]
-let increment (x : int) : int = x + 1 [@@verocaml.spec]
+let adder (x : int) : int -> Int.t = fun y -> x + y [@@verocaml.spec]
+let increment (x : int) : Int.t = x + 1 [@@verocaml.spec]
+let increment_int (x : Int.t) : Int.t = x + 1 [@@verocaml.spec]
 let is_positive (x : int) : bool = x > 0 [@@verocaml.spec]
 let some (x : 'a) : 'a option = Some x [@@verocaml.spec]
 
@@ -16,12 +19,12 @@ let option_present (value : 'a option) : bool =
 [@@verocaml.spec]
 
 let negate (value : bool) : bool = not value [@@verocaml.spec]
-let plus (left : int) (right : int) : int = left + right [@@verocaml.spec]
+let plus (left : int) (right : int) : Int.t = left + right [@@verocaml.spec]
 
-let labelled_plus ~(base : int) (value : int) : int = base + value
+let labelled_plus ~(base : int) (value : int) : Int.t = base + value
 [@@verocaml.spec]
 
-let captured_factory (f : int -> int) (offset : int) : int -> int =
+let captured_factory (f : int -> Int.t) (offset : int) : int -> Int.t =
  fun value -> f value + offset
 [@@verocaml.spec]
 
@@ -76,7 +79,7 @@ let verify_core (x : int) : int =
   [%verocaml.assert apply increment x = x + 1];
   [%verocaml.assert adder x 2 = x + 2];
   [%verocaml.assert apply (adder x) 3 = x + 3];
-  [%verocaml.assert compose increment increment x = x + 2];
+  [%verocaml.assert compose increment_int increment x = x + 2];
   [%verocaml.assert captured_factory increment 4 x = x + 5];
   [%verocaml.assert constant_factory x 99 = x];
   [%verocaml.assert

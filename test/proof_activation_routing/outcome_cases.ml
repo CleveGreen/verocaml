@@ -23,7 +23,7 @@ let require_kinds function_name kinds expectation =
 
 let source_case ~name ~module_name ~source expectation =
   let input =
-    Fixture.single_source ~module_name ~source ~libraries:[ "verocaml.ghost" ]
+    Fixture.single_source ~module_name ~source ~libraries:[ "verocaml.vstd"; "verocaml.ghost" ]
   in
   Suite.case ~name ~expectation (run_fixture input)
 
@@ -37,14 +37,14 @@ type stack = {
   length : int;
 }
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
   | Node (_, next) -> 1 + spec_node_len next
 [@@verocaml.spec] [@@verocaml.opaque]
 
-let rec seeded_node_len (node : int node) : int =
+let rec seeded_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -178,7 +178,7 @@ type stack = {
   length : int;
 }
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -206,7 +206,7 @@ let nonleak_negative_source =
   | Empty
   | Node of 'a * 'a node
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -230,7 +230,7 @@ let later_nonleak_negative_source =
   | Empty
   | Node of 'a * 'a node
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -253,7 +253,7 @@ let cross_callable_negative_source =
   | Empty
   | Node of 'a * 'a node
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -280,7 +280,7 @@ let opaque_seed_negative_source =
   | Empty
   | Node of 'a * 'a node
 
-let rec opaque_node_len (node : int node) : int =
+let rec opaque_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0

@@ -57,7 +57,8 @@ let validate (term : Vir.parametric_term) =
               && Spec_function_logic_private.is_binder_for arrow
                    term.parametric_sort ->
               Ok ()
-          | Parameter _ | Int | Bool | Unit | Tuple _ | Aggregate _
+          | Parameter _ | Int | Mathematical_int | Bool | Unit | Tuple _
+          | Aggregate _
           | Application _ ->
               Error "symbolic application changes named parameter sort")
   in

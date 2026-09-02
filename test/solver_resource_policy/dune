@@ -71,12 +71,6 @@
  (action
   (run %{validator} %{report} %{archive})))
 
-(cram
- (alias solver-resource-policy-specialist-check)
- (runtest_alias false)
- (deps
-  solver_resource_policy_tool.exe))
-
 (alias
  (name solver-resource-policy-check)
  (deps

@@ -458,6 +458,8 @@ and integer_descriptors = function
   | Integer_negate value | Integer_multiply_constant (_, value)
   | Integer_absolute_value value ->
       integer_descriptors value
+  | Integer_multiply (left, right) ->
+      integer_descriptors left @ integer_descriptors right
   | Integer_conditional (condition, consequent, alternative) ->
       boolean_descriptors condition
       @ integer_descriptors consequent

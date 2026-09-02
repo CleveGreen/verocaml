@@ -109,7 +109,8 @@ let empty_sst_stats () =
   }
 
 let classify_binder stats = function
-  | Sst.Int -> stats.int_binders <- stats.int_binders + 1
+  | Sst.Int | Sst.Mathematical_int ->
+      stats.int_binders <- stats.int_binders + 1
   | Sst.Bool -> stats.bool_binders <- stats.bool_binders + 1
   | Sst.Parameter _ ->
       stats.parameter_binders <- stats.parameter_binders + 1
@@ -244,6 +245,8 @@ let inspect_logic program =
     | Rank_project (_, _, _, value) | Negate value | Not value
     | Scale (_, value) ->
         visit ancestors value
+    | Multiply (left, right) ->
+        visit ancestors left @ visit ancestors right
     | Add (left, right) | Subtract (left, right) | Less_than (left, right)
     | Less_or_equal (left, right) | Greater_than (left, right)
     | Greater_or_equal (left, right) | Equal (left, right)

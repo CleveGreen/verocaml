@@ -15,7 +15,7 @@ let read_file path =
 let input name =
   Fixture.single_source ~module_name:(String.capitalize_ascii name)
     ~source:(read_file ("fixtures/" ^ name ^ ".ml"))
-    ~libraries:[ "verocaml.ghost" ]
+    ~libraries:[ "verocaml.ghost"; "verocaml.vstd" ]
 
 let case name fixture expectation =
   Suite.case ~name ~expectation (fun ~environment ~workspace ->

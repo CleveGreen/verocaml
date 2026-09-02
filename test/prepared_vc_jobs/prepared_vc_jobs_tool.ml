@@ -51,7 +51,7 @@ let policy rlimit =
 let same_counters left right =
   Marshal.to_string left [] = Marshal.to_string right []
 
-let require_local label before telemetry =
+let require_local ?(logic = "AUFLIA") label before telemetry =
   let after = Z3_bridge.counters () in
   require (label ^ " changed global counters") (same_counters before after);
   require (label ^ " local lifetime")
@@ -63,7 +63,7 @@ let require_local label before telemetry =
     && telemetry.contexts_cleaned = 1
     && telemetry.contexts_live = 0
     && telemetry.maximum_contexts_live = 1
-    && telemetry.selected_logics = [ "AUFLIA" ])
+    && telemetry.selected_logics = [ logic ])
 
 let query ~requires assertion =
   match
@@ -127,19 +127,14 @@ let local_bridge () =
     (malformed_attempt.telemetry.capability_resolutions = 1
     && malformed_attempt.telemetry.translations = 1
     && malformed_attempt.telemetry.contexts_created = 0);
-  let unsupported =
+  let nonlinear =
     Z3_bridge.solve_vir_local ~controlled:Z3_bridge.Real ~rlimit:100_000
       ~requires:[ Logic_ir.Nonlinear_integer_arithmetic ] config
       (obligation (Vir.Boolean_constant true))
   in
-  require "capability result"
-    (match unsupported.result with
-    | Error (Z3_bridge.Unsupported_features _) -> true
-    | _ -> false);
-  require "capability telemetry"
-    (unsupported.telemetry.capability_resolutions = 1
-    && unsupported.telemetry.translations = 0
-    && unsupported.telemetry.contexts_created = 0);
+  require "nonlinear capability result"
+    (match nonlinear.result with Ok Z3_bridge.Verified -> true | _ -> false);
+  require_local ~logic:"AUFNIA" "vir-nonlinear" before nonlinear.telemetry;
   let false_query = query ~requires:[] (Logic_ir.bool ~span false) in
   let true_query = query ~requires:[] (Logic_ir.bool ~span true) in
   let query_cases =
@@ -157,20 +152,19 @@ let local_bridge () =
       in
       require_local ("query-" ^ label) before attempt.telemetry)
     query_cases;
-  let unsupported_query =
+  let nonlinear_query =
     query ~requires:[ Logic_ir.Nonlinear_integer_arithmetic ]
       (Logic_ir.bool ~span true)
   in
-  let unsupported =
+  let nonlinear =
     Z3_bridge.solve_query_local ~controlled:Z3_bridge.Real ~rlimit:100_000
-      config unsupported_query
+      config nonlinear_query
   in
-  require "query capability result"
-    (match unsupported.result with
-    | Error (Z3_bridge.Unsupported_features _) -> true
+  require "nonlinear query capability result"
+    (match nonlinear.result with
+    | Ok (Z3_bridge.Counterexample _) -> true
     | _ -> false);
-  require "query capability global"
-    (same_counters before (Z3_bridge.counters ()));
+  require_local ~logic:"AUFNIA" "query-nonlinear" before nonlinear.telemetry;
   Printf.printf
     "local-bridge vir=verified/counterexample/unknown/error query=verified/counterexample/unknown/error global=unchanged cleanup=balanced\n"
 
@@ -284,7 +278,8 @@ let resource () =
     "resource outcome=resource-exhausted contexts/solvers/resets/cleaned=1/1/1/1 live=0\n"
 
 let load filename =
-  match Cmt_input.load filename with
+  let cmi = Filename.remove_extension filename ^ ".cmi" in
+  match Cmt_input.load_with_interface ~cmt:filename ~cmi () with
   | Ok implementation -> implementation
   | Error diagnostic ->
       fail "%s: %s" diagnostic.Diagnostic.code diagnostic.message
@@ -570,6 +565,11 @@ let recursive_local filename =
         ~allow_imported_opens:false implementation
     with
     | Ok report -> report
+    | Error
+        (Verification_driver_private.Pipeline_error
+          (Verification_pipeline.Setup_error
+            (Verification_pipeline.Internal_setup_error message))) ->
+        fail "recursive fixture failed before report: %s" message
     | Error _ -> fail "recursive fixture failed before report"
   in
   let obligation =

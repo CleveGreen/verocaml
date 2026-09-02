@@ -101,6 +101,7 @@ val rank_project :
 val add : span:span -> term -> term -> (term, error) result
 val subtract : span:span -> term -> term -> (term, error) result
 val negate : span:span -> term -> (term, error) result
+val multiply : span:span -> term -> term -> (term, error) result
 val scale : span:span -> Z.t -> term -> (term, error) result
 val less_than : span:span -> term -> term -> (term, error) result
 val less_or_equal : span:span -> term -> term -> (term, error) result
@@ -175,6 +176,7 @@ module View : sig
     | Add of term * term
     | Subtract of term * term
     | Negate of term
+    | Multiply of term * term
     | Scale of Z.t * term
     | Less_than of term * term
     | Less_or_equal of term * term

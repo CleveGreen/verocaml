@@ -3,6 +3,7 @@ type public_surface = {
   public_revealed_type_names : string list;
   public_callable_names : string list;
   public_external_type_constructors : Parametric_type.constructor list;
+  public_symbolic_names : string list;
 }
 
 val strict_candidate :
@@ -15,6 +16,17 @@ val graph_order :
   Cmt_input.implementation ->
   (Cmt_input.implementation list,
    Interface_specification_environment_private.error) result
+
+val exact_import :
+  owner:Cmt_input.implementation ->
+  dependency:Cmt_input.implementation ->
+  Cmt_input.import ->
+  bool
+
+val exact_imports :
+  Cmt_input.implementation -> Cmt_input.implementation -> bool
+
+val retained_authority_identity_is_exact : Cmt_input.implementation -> bool
 
 val embedded_public_surface :
   unit_name:string ->

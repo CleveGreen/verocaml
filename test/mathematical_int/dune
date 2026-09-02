@@ -1,0 +1,56 @@
+(rule
+ (targets integration_environment.ml integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (flags (:standard -opaque -I src/.verocaml_core.objs/byte))
+ (libraries outcome_test_support verocaml_core unix))
+
+(rule
+ (targets constant_folding_environment.ml)
+ (deps (:environment_module ../outcome_framework/integration_environment.ml))
+ (action (copy %{environment_module} constant_folding_environment.ml)))
+
+(executable
+ (name constant_folding_cases)
+ (modules constant_folding_cases constant_folding_environment)
+ (flags (:standard -opaque -I src/.verocaml_core.objs/byte))
+ (libraries outcome_test_support verocaml_core unix))
+
+(rule
+ (targets mathematical-int-outcome-cases.result-report mathematical-int-outcome-cases.failure-archive)
+ (deps (sandbox always) (:suite outcome_cases.exe) integration-library-environment.manifest)
+ (action (run %{suite} --produce mathematical-int-outcome-cases.result-report mathematical-int-outcome-cases.failure-archive)))
+
+(rule
+ (alias mathematical-int-outcome-check)
+ (deps (:report mathematical-int-outcome-cases.result-report)
+       (:archive mathematical-int-outcome-cases.failure-archive)
+       (:validator ../support/report_validator.exe))
+ (action (run %{validator} %{report} %{archive})))
+
+(rule
+ (targets mathematical-int-constant-folding.result-report mathematical-int-constant-folding.failure-archive)
+ (deps (sandbox always) (:suite constant_folding_cases.exe) integration-library-environment.manifest)
+ (action (run %{suite} --produce mathematical-int-constant-folding.result-report mathematical-int-constant-folding.failure-archive)))
+
+(rule
+ (alias mathematical-int-constant-folding-check)
+ (deps (:report mathematical-int-constant-folding.result-report)
+       (:archive mathematical-int-constant-folding.failure-archive)
+       (:validator ../support/report_validator.exe))
+ (action (run %{validator} %{report} %{archive})))
+
+(alias
+ (name runtest)
+ (deps
+  (alias mathematical-int-outcome-check)
+  (alias mathematical-int-constant-folding-check)))

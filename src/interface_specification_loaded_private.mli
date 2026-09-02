@@ -27,6 +27,7 @@ val error_is_internal : error -> bool
 val error :
   ?unit_name:string ->
   ?diagnostic:Diagnostic.t ->
+  ?internal:bool ->
   string ->
   ('a, error) Stdlib.result
 

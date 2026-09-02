@@ -103,6 +103,7 @@ let logical_application ~allow_unclassified expression =
   | Sst.Sequence _
   | Sst.If _
   | Sst.Match _
+  | Sst.Lift_runtime_int _
   | Sst.Checked_arithmetic _
   | Sst.Compare _
   | Sst.Boolean_not _
@@ -170,7 +171,8 @@ let validate_sst_expression ?(allow_unclassified = false) ?expected_owner
   | Sst.Shared_scalar_field_write _ | Sst.Owned_tree_nested_write _
   | Sst.Owned_tree_rebase _ | Sst.Let_mutable _ | Sst.Mutable_read _
   | Sst.Mutable_write _ | Sst.Let _ | Sst.Sequence _ | Sst.If _ | Sst.Match _
-  | Sst.Checked_arithmetic _ | Sst.Compare _ | Sst.Boolean_not _
+  | Sst.Lift_runtime_int _ | Sst.Checked_arithmetic _ | Sst.Compare _
+  | Sst.Boolean_not _
   | Sst.Boolean_binary _ | Sst.Direct_call _ | Sst.Callback_call _
   | Sst.Callback_requires _ | Sst.Callback_ensures _ | Sst.Optional_absent
   | Sst.Symbolic_application _
@@ -381,7 +383,8 @@ let explicit_trigger services context (expression : Sst.expression) state =
   | Sst.Shared_scalar_field_write _ | Sst.Owned_tree_nested_write _
   | Sst.Owned_tree_rebase _ | Sst.Let_mutable _ | Sst.Mutable_read _
   | Sst.Mutable_write _ | Sst.Let _ | Sst.Sequence _ | Sst.If _ | Sst.Match _
-  | Sst.Checked_arithmetic _ | Sst.Compare _ | Sst.Boolean_not _
+  | Sst.Lift_runtime_int _ | Sst.Checked_arithmetic _ | Sst.Compare _
+  | Sst.Boolean_not _
   | Sst.Boolean_binary _ | Sst.Forall _ | Sst.Exists _ | Sst.Direct_call _
   | Sst.Callback_call _ | Sst.Optional_absent | Sst.Optional_present _
   | Sst.Optional_forward _ | Sst.Reveal _ | Sst.Reveal_with_fuel _
@@ -434,7 +437,7 @@ let validate_scoped_sst services ~function_id ~outer
   let binder = quantifier.Sst.quantifier_binder in
   let admitted_binder =
     match binder.typ with
-    | Sst.Int | Sst.Bool | Sst.Parameter _ -> true
+    | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Parameter _ -> true
     | Sst.Application _ as typ -> services.admit_application typ
     | Sst.Unit | Sst.Tuple _ | Sst.Aggregate _ -> false
   in

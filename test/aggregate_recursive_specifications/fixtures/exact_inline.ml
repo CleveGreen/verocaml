@@ -2,12 +2,12 @@ type 'a node = Empty | Node of 'a * 'a node
 
 type stack = {
   top : int node;
-  length : int;
+  length : Vstd.Int.t;
 }
 
 let rec spec_push_n_inline
     (value : int)
-    (n : int)
+    (n : Vstd.Int.t)
     (stack : stack) : stack =
   [%verocaml.decreases n];
   if n <= 0 then
@@ -19,7 +19,7 @@ let rec spec_push_n_inline
 [@@verocaml.spec]
 [@@verocaml.opaque]
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -29,7 +29,7 @@ let rec spec_node_len (node : int node) : int =
 
 let consume_inline
     (value : int)
-    (n : int)
+    (n : Vstd.Int.t)
     (stack : stack [@finite]) : unit =
   [%verocaml.requires n >= 0];
   [%verocaml.ensures fun _result ->
@@ -37,3 +37,4 @@ let consume_inline
     expected.length = expected.length
     && spec_node_len expected.top = spec_node_len expected.top];
   ()
+[@@verocaml.proof]

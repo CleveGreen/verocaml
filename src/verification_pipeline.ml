@@ -40,6 +40,42 @@ type error =
   | Engine_error of Symbolic_executor_private.error
   | Solve_error of string
 
+type post_validation_invariant_breach = Post_validation_invariant_breach
+
+module Error_identity = struct
+  type t = error
+
+  let equal left right = left == right
+  let hash error = Hashtbl.hash error
+end
+
+module Post_validation_invariant_errors = Ephemeron.K1.Make (Error_identity)
+
+let post_validation_invariant_errors = Post_validation_invariant_errors.create 4
+let post_validation_invariant_errors_lock = Mutex.create ()
+
+let with_post_validation_invariant_errors action =
+  Mutex.lock post_validation_invariant_errors_lock;
+  Fun.protect
+    ~finally:(fun () -> Mutex.unlock post_validation_invariant_errors_lock)
+    action
+
+let mark_post_validation_invariant_breach error =
+  with_post_validation_invariant_errors (fun () ->
+      Post_validation_invariant_errors.replace
+        post_validation_invariant_errors error ())
+
+let post_validation_invariant_breach error =
+  with_post_validation_invariant_errors (fun () ->
+      if Post_validation_invariant_errors.mem post_validation_invariant_errors error
+      then Some Post_validation_invariant_breach
+      else None)
+
+let injected_invariant_breach () =
+  let error = Solve_error "verification pipeline post-validation invariant breach" in
+  mark_post_validation_invariant_breach error;
+  error
+
 type report = {
   outcome : (completion, error) result;
   counters : Verification_session.counters;
@@ -111,6 +147,16 @@ let note_frontier_event event =
   if !capture_frontier_events then
     frontier_events_reversed := event :: !frontier_events_reversed
 
+let note_materialized source_ordinal definition =
+  [%log.trace "observed lowered verification materialization"
+    ~stage:(Delator.Field.string "materialization-frontier")
+    ~source_ordinal:(Delator.Field.int source_ordinal)
+    ~function_index:(Delator.Field.int definition.Sst.function_id.function_index)
+    ~decision:(Delator.Field.string "materialized")];
+  note_frontier_event
+    (Materialized
+       (source_ordinal, definition.Sst.function_id.function_name))
+
 let outcome_flags results =
   let counterexample =
     List.exists
@@ -131,6 +177,7 @@ let outcome_flags results =
   (counterexample, inconclusive)
 
 let run session prepared ~initial_obligations ~solve ~on_result =
+  let serial_source_ordinal = ref (-1) in
   let rec loop executions functions obligations saw_counterexample
       saw_inconclusive saw_incomplete blocked_invariant_callables
       blocked_finite_callables blocked_frozen_callables
@@ -152,6 +199,8 @@ let run session prepared ~initial_obligations ~solve ~on_result =
             obligations;
           }
     | scheduled :: rest ->
+        incr serial_source_ordinal;
+        let source_ordinal = !serial_source_ordinal in
         let definition =
           Symbolic_executor_private.scheduled_definition scheduled
         in
@@ -233,6 +282,8 @@ let run session prepared ~initial_obligations ~solve ~on_result =
              else blocked_frozen_callables)
             frozen_constructor_failed
             rest)
+        else if !injected_materialization_error = Some source_ordinal then
+          Error (injected_invariant_breach ())
         else (
           match
             Symbolic_executor_private.transfer_transition_predecessors prepared
@@ -287,6 +338,7 @@ let run session prepared ~initial_obligations ~solve ~on_result =
                           execution;
                         }
                       in
+                      note_materialized source_ordinal definition;
                       match observe_serial_function solve request with
                       | Error message -> Error (Solve_error message)
                       | Ok results -> (
@@ -605,10 +657,7 @@ let materialize_function session prepared prepare source_ordinal scheduled =
     Symbolic_executor_private.scheduled_definition scheduled
   in
   if !injected_materialization_error = Some source_ordinal then
-    Error
-      (Solve_error
-         (Printf.sprintf "injected materialization error ordinal=%d"
-            source_ordinal))
+    Error (injected_invariant_breach ())
   else
   let source =
     Symbolic_executor_private.scheduled_is_receipt_source scheduled
@@ -674,13 +723,10 @@ let materialize_function session prepared prepare source_ordinal scheduled =
                       execution;
                     }
                   in
+                  note_materialized source_ordinal definition;
                   (match prepare ~source_ordinal request with
                   | Error message -> Error (Solve_error message)
                   | Ok prepared_function ->
-                      note_frontier_event
-                        (Materialized
-                           ( source_ordinal,
-                             definition.function_id.function_name ));
                       Ok
                         {
                           source_ordinal;
@@ -950,7 +996,7 @@ let run_threaded session prepared ~initial_obligations scheduler
   in
   let frontier_prefix ready =
     let scalar = function
-      | Sst.Unit | Bool | Int | Parameter _ -> true
+      | Sst.Unit | Bool | Int | Mathematical_int | Parameter _ -> true
       | Tuple _ | Aggregate _ | Application _ -> false
     in
     match ready with

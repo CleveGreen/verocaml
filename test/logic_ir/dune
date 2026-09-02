@@ -26,7 +26,8 @@
 (executable
  (name outcome_cases)
  (modules outcome_cases integration_environment)
- (libraries outcome_test_support))
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries outcome_test_support verocaml_core))
 
 (rule
  (targets
@@ -52,9 +53,6 @@
  (action
   (run %{validator} %{report} %{archive})))
 
-(cram
- (deps
-  logic_ir_tool.exe))
 (alias
  (name logic-ir-check)
  (deps

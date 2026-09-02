@@ -39,10 +39,25 @@ type provider_callable = {
   model : provider_model option;
 }
 
+type provider_broadcast_declaration = {
+  broadcast_identity : Retained_broadcast_private.identity;
+  broadcast_definition : Sst.function_definition;
+  broadcast_signature : Parametric_signature_private.t;
+  broadcast_trigger_span : Diagnostic.span;
+  broadcast_trust : Retained_broadcast_private.trust;
+}
+
 type provider_broadcast_group = {
-  resolved_path : string;
-  binding_uid : string;
-  target_paths : string list;
+  broadcast_group_identity : Retained_broadcast_private.identity;
+  broadcast_members : Retained_broadcast_private.identity list;
+  broadcast_sources : provider_broadcast_source list;
+}
+
+and provider_broadcast_source = {
+  broadcast_source_reference : Retained_broadcast_private.source_reference;
+  broadcast_source_identity : Retained_broadcast_private.identity;
+  broadcast_source_edge : Retained_interface_authority_private.dependency option;
+  broadcast_source_authority_index : string option;
 }
 
 type provider_type = {
@@ -71,10 +86,22 @@ type provider_description = {
   family_digest : string;
   import_digest : string;
   callables : provider_callable list;
+  broadcast_declarations : provider_broadcast_declaration list;
   broadcast_groups : provider_broadcast_group list;
   types : provider_type list;
+  logical_sorts : Logical_sort_private.t list;
   external_specifications : provider_external_specification list;
 }
+
+type seal_error = {
+  seal_error_message : string;
+  seal_error_diagnostic : Diagnostic.t option;
+  seal_error_internal : bool;
+}
+
+type seal_failure_class =
+  | Artifact_seal_failure of Diagnostic.broadcast_artifact_failure
+  | Internal_seal_failure
 
 type callable_snapshot = {
   path : string;
@@ -90,12 +117,6 @@ type callable_snapshot = {
   provider_import : string;
   summary_digest : string;
   model : provider_model option;
-}
-
-type broadcast_group_snapshot = {
-  path : string;
-  binding_uid : string;
-  target_paths : string list;
 }
 
 type type_snapshot = {
@@ -114,6 +135,19 @@ type external_specification_snapshot = {
   provider_interface : string;
 }
 
+type broadcast_declaration_snapshot = {
+  identity : Retained_broadcast_private.identity;
+  definition : Sst.function_definition;
+  trigger_span : Diagnostic.span;
+  trust : Retained_broadcast_private.trust;
+}
+
+type broadcast_group_snapshot = {
+  identity : Retained_broadcast_private.identity;
+  members : Retained_broadcast_private.identity list;
+  sources : provider_broadcast_source list;
+}
+
 type provider = {
   provider_issuer : unit ref;
   provider_token : unit ref;
@@ -130,8 +164,10 @@ type environment = {
   token : unit ref;
   providers : provider list;
   callables : callable_snapshot list;
+  broadcast_declarations : broadcast_declaration_snapshot list;
   broadcast_groups : broadcast_group_snapshot list;
   types : type_snapshot list;
+  logical_sorts : Logical_sort_private.t list;
   external_specifications : external_specification_snapshot list;
   snapshot : string;
 }
@@ -178,7 +214,10 @@ let digest value = Digest.string value |> Digest.to_hex
 exception Import_mapping_error of string
 
 let mapping_error message =
-  raise (Import_mapping_error ("[VERO_DEPENDENCY] " ^ message))
+  let prefix = "[VERO_DEPENDENCY] " in
+  raise
+    (Import_mapping_error
+       (if String.starts_with ~prefix message then message else prefix ^ message))
 
 let require_provider provider =
   if provider.provider_issuer != issuer || provider.provider_token == issuer
@@ -356,7 +395,9 @@ let classify_result ~parametric_adts (description : provider_description)
     ~provider:(retained_provider_identity description)
     ~types:(List.map retained_provider_type description.types)
     ~parametric_adts ~resolved_path:callable.resolved_path
-    ~binding_uid:callable.binding_uid ~definition:callable.definition ~model
+    ~binding_uid:callable.binding_uid ~definition:callable.definition
+    ~result_mode:(Parametric_signature_private.result_mode callable.signature)
+    ~model
 
 let obligation_description ?(parametric_adts = [])
     (description : provider_description) =
@@ -571,6 +612,7 @@ let rec map_typ type_ids = function
   | Sst.Unit -> Sst.Unit
   | Sst.Bool -> Sst.Bool
   | Sst.Int -> Sst.Int
+  | Sst.Mathematical_int -> Sst.Mathematical_int
   | Sst.Tuple components ->
       Sst.Tuple
         (List.map
@@ -595,54 +637,40 @@ let map_symbolic_declaration type_ids function_ids
         let function_id =
           mapped_function_id function_ids callable.definition.function_id
         in
-        let parameters =
-          List.map
-            (fun parameter ->
-              let parameter = Sst.require_value_parameter parameter in
-              Sst.Value_parameter
-                {
-                  parameter with
-                  Sst.pattern =
-                    {
-                      parameter.pattern with
-                      Sst.typ = map_typ type_ids parameter.pattern.Sst.typ;
-                    };
-                })
-            callable.definition.parameters
+        let owner =
+          Parametric_type.owner ~index:function_id.function_index
+            ~name:function_id.function_name
         in
-        let preliminary =
-          {
-            callable.definition with
-            Sst.function_id;
-            parameters;
-            result_type = map_typ type_ids callable.definition.result_type;
-          }
+        let source_binders =
+          Symbolic_application_private.type_binders source
         in
-        let* rebased, _ =
-          Parametric_signature_private.rebase_definition callable.signature
-            ~source_definition:
-              (Parametric_signature_private.source_definition callable.signature)
-            ~function_id preliminary
+        let type_binders =
+          List.mapi
+            (fun ordinal _ -> Parametric_type.binder owner ~ordinal)
+            source_binders
+        in
+        let substitutions =
+          List.map2
+            (fun old replacement ->
+              (old, Parametric_type.Parameter replacement))
+            source_binders type_binders
+        in
+        let rebase typ =
+          Parametric_type.substitute substitutions typ |> map_typ type_ids
         in
         let* mapped =
-          Symbolic_application_private.declare
-            ~marker_id:(Symbolic_application_private.marker_id source)
+          Symbolic_application_private.rebase_declaration source
             ~declaration_index:function_id.function_index
             ~declaration_name:function_id.function_name
             ~canonical_path:callable.resolved_path
             ~value_uid:callable.binding_uid
-            ~source_file:(Symbolic_application_private.source_file source)
-            ~compilation_identity:
-              (Symbolic_application_private.compilation_identity source)
-            ~declaration_span:
-              (Symbolic_application_private.declaration_span source)
-            ~type_binders:rebased.type_binders
+            ~type_binders
             ~parameter_types:
-              (List.map
-                 (fun parameter ->
-                   (Sst.require_value_parameter parameter).Sst.pattern.typ)
-                 rebased.parameters)
-            ~result_type:rebased.result_type
+              (List.map rebase
+                 (Symbolic_application_private.parameter_types source))
+            ~result_type:
+              (rebase
+                 (Symbolic_application_private.declaration_result_type source))
         in
         Ok (Some (source, mapped))
   | Sst.Checked_exec _ | Sst.Spec_definition _ | Sst.Proof_body _
@@ -943,6 +971,7 @@ let rec map_expression type_ids function_ids symbolic_declarations offset
                   case_body = recurse case.case_body;
                 })
               cases )
+    | Sst.Lift_runtime_int operand -> Sst.Lift_runtime_int (recurse operand)
     | Sst.Checked_arithmetic (operation, operands) ->
         Sst.Checked_arithmetic (operation, List.map recurse operands)
     | Sst.Compare (operation, left, right) ->
@@ -972,7 +1001,8 @@ let rec map_expression type_ids function_ids symbolic_declarations offset
         | Sst.Shared_scalar_field_write _ | Sst.Owned_tree_nested_write _
         | Sst.Owned_tree_rebase _ | Sst.Let_mutable _ | Sst.Mutable_read _
         | Sst.Mutable_write _ | Sst.Let _ | Sst.Sequence _ | Sst.If _
-        | Sst.Match _ | Sst.Checked_arithmetic _ | Sst.Compare _
+        | Sst.Match _ | Sst.Lift_runtime_int _ | Sst.Checked_arithmetic _
+        | Sst.Compare _
         | Sst.Boolean_not _ | Sst.Boolean_binary _ | Sst.Direct_call _
         | Sst.Callback_call _ | Sst.Callback_requires _
         | Sst.Callback_ensures _ | Sst.Optional_absent
@@ -1371,12 +1401,78 @@ let provider_snapshot implementation program description direct_dependencies =
       description.family_digest;
       description.import_digest;
       Sst.to_string program;
-      String.concat ";"
+      String.concat ","
         (List.map
-           (fun (group : provider_broadcast_group) ->
-             group.resolved_path ^ "#" ^ group.binding_uid ^ "="
-             ^ String.concat "," group.target_paths)
+           (fun marker ->
+             String.concat "#"
+               [
+                 marker.Cmt_input.symbolic_path;
+                 marker.symbolic_uid;
+                 marker.symbolic_marker;
+                 marker.symbolic_type_digest;
+                 marker.symbolic_typed_abi;
+               ])
+           implementation.Cmt_input.interface_symbolic_declarations);
+      String.concat ","
+        (List.map
+           (fun (callable : provider_callable) ->
+             callable.resolved_path ^ "#" ^ callable.binding_uid ^ "#"
+             ^ Parametric_signature_private.semantic_fingerprint
+                 callable.signature)
+           description.callables);
+      String.concat ","
+        (List.map
+           (fun (specification : provider_external_specification) ->
+             let target =
+               match specification.target_link with
+               | Sst.Imported_unverified_target link ->
+                   String.concat "#"
+                     [
+                       link.target_unit;
+                       link.target_interface_digest;
+                       link.canonical_path;
+                       link.value_uid;
+                       link.import_crc;
+                     ]
+               | Sst.Same_unit_target _ -> "same-unit"
+               | Sst.Unresolved_target _ -> "unresolved"
+             in
+             Parametric_signature_private.semantic_fingerprint
+               specification.signature
+             ^ "#" ^ target)
+           description.external_specifications);
+      String.concat ","
+        (List.map
+           (fun declaration ->
+             Retained_broadcast_private.identity_key
+               declaration.broadcast_identity
+             ^ "#"
+             ^ Parametric_signature_private.semantic_fingerprint
+                 declaration.broadcast_signature)
+           description.broadcast_declarations);
+      String.concat ","
+        (List.map
+           (fun group ->
+             Retained_broadcast_private.identity_key
+               group.broadcast_group_identity
+             ^ "="
+             ^ String.concat ";"
+                 (List.map Retained_broadcast_private.identity_key
+                    group.broadcast_members)
+             ^ "#"
+             ^ String.concat ";"
+                 (List.map
+                    (fun source ->
+                      Retained_broadcast_private.identity_key
+                        source.broadcast_source_identity
+                      ^ ":"
+                      ^ Option.value ~default:"local"
+                          source.broadcast_source_authority_index)
+                    group.broadcast_sources))
            description.broadcast_groups);
+      String.concat ","
+        (List.map Logical_sort_private.canonical_material
+           (List.sort Logical_sort_private.compare description.logical_sorts));
       String.concat ","
         (List.map
            (fun dependency ->
@@ -1435,18 +1531,115 @@ let validate_description (description : provider_description) =
          description.types
   then Error "[VERO_DEPENDENCY] retained provider compiler UID is incomplete"
   else
-    let invalid_group (group : provider_broadcast_group) =
-      group.resolved_path = ""
-      || group.binding_uid = ""
-      || group.target_paths = []
-      || List.exists (String.equal "") group.target_paths
-      || not
-           (String.starts_with
-              ~prefix:(description.unit_name ^ ".")
-              group.resolved_path)
+    let duplicate values =
+      List.length values <> List.length (List.sort_uniq String.compare values)
     in
-    if List.exists invalid_group description.broadcast_groups then
-      Error "[VERO_DEPENDENCY] retained provider broadcast group is malformed"
+    let logical_sorts =
+      List.sort Logical_sort_private.compare description.logical_sorts
+    in
+    if
+      List.length logical_sorts
+      <> List.length
+           (List.sort_uniq Logical_sort_private.compare logical_sorts)
+      || List.exists
+           (fun sort ->
+             not
+               (String.equal sort.Logical_sort_private.provider_origin
+                  description.unit_name))
+           logical_sorts
+    then
+      Error
+        "[VERO_DEPENDENCY] retained provider logical-sort authority is malformed or conflicting"
+    else
+    if
+      duplicate
+        (List.map
+           (fun (callable : provider_callable) -> callable.resolved_path)
+           description.callables)
+      || duplicate
+           (List.map
+              (fun (callable : provider_callable) -> callable.binding_uid)
+              description.callables)
+    then
+      Error
+        "[VERO_DEPENDENCY] retained provider has conflicting callable identities"
+    else
+    let declarations = description.broadcast_declarations
+    and groups = description.broadcast_groups in
+    let identity_matches_provider identity =
+      String.equal identity.Retained_broadcast_private.provider_origin
+        description.unit_name
+      && String.equal identity.interface_digest description.interface_digest
+      && String.equal identity.dependency_receipt description.import_digest
+      && String.equal identity.artifact_family "retained-v1"
+    in
+    let valid_declaration declaration =
+      let identity = declaration.broadcast_identity
+      and definition = declaration.broadcast_definition in
+      identity.kind = Retained_broadcast_private.Declaration
+      && identity_matches_provider identity
+      && String.equal identity.canonical_path
+           (description.unit_name ^ "."
+          ^ definition.Sst.function_id.function_name)
+      &&
+      match
+        (declaration.broadcast_trust, definition.mode, definition.recursive,
+         definition.body)
+      with
+      | Retained_broadcast_private.Proved, Sst.Proof, false, Sst.Proof_body _
+      | ( Retained_broadcast_private.Trusted,
+          Sst.Proof,
+          false,
+          Sst.Trusted_external_body
+            (Sst.Authenticated_external_body _) ) ->
+          true
+      | _ -> false
+    in
+    let valid_group group =
+      let identity = group.broadcast_group_identity in
+      let source_members =
+        List.map
+          (fun source -> source.broadcast_source_identity)
+          group.broadcast_sources
+      in
+      identity.kind = Retained_broadcast_private.Group
+      && identity_matches_provider identity
+      && group.broadcast_members <> []
+      && Result.is_ok
+           (Retained_broadcast_private.canonical_set group.broadcast_members)
+      && List.compare Retained_broadcast_private.compare_identity
+           (List.sort Retained_broadcast_private.compare_identity source_members)
+           (List.sort Retained_broadcast_private.compare_identity
+              group.broadcast_members)
+         = 0
+    in
+    let broadcast_identities =
+      List.map (fun declaration -> declaration.broadcast_identity) declarations
+      @ List.map (fun group -> group.broadcast_group_identity) groups
+    in
+    let broadcast_paths =
+      List.map
+        (fun (identity : Retained_broadcast_private.identity) ->
+          identity.canonical_path)
+        broadcast_identities
+    in
+    if
+      List.exists (Fun.negate valid_declaration) declarations
+      || List.exists (Fun.negate valid_group) groups
+      || Option.is_some
+           (Retained_broadcast_private.duplicate_identity broadcast_identities)
+      || duplicate broadcast_paths
+      || List.exists
+           (fun (group : provider_broadcast_group) ->
+             List.exists
+               (fun (callable : provider_callable) ->
+                 String.equal group.broadcast_group_identity.canonical_path
+                   callable.resolved_path)
+               description.callables)
+           groups
+    then
+      Error
+        "[VERO_DEPENDENCY] retained provider broadcast authority is malformed or conflicting"
     else
       let invalid_type (typ : provider_type) =
         let type_id = typ.definition.Sst.type_id in
@@ -1515,6 +1708,312 @@ let validate_description (description : provider_description) =
           in
           validate_external description.external_specifications
 
+let symbolic_marker_matches_material marker ~canonical_path ~value_uid
+    ~typed_abi =
+  String.equal canonical_path marker.Cmt_input.symbolic_path
+  && String.equal value_uid marker.symbolic_uid
+  && String.equal typed_abi marker.symbolic_typed_abi
+
+let _symbolic_provider_route (implementation : Cmt_input.implementation) =
+  match implementation.implementation_family_issuers with
+  | [ "standalone-v1" ] -> "standalone-v1"
+  | [ "ppxlib-v1" ] -> "ppxlib-v1"
+  | [] | [ _ ] | _ :: _ :: _ -> "unrecognized"
+
+let symbolic_provider_correlation
+    (implementation : Cmt_input.implementation)
+    (description : provider_description) =
+  Digest.to_hex
+    (Digest.string
+       (String.concat "\000"
+          [
+            description.unit_name;
+            Option.value ~default:"no-interface"
+              implementation.interface_digest;
+            implementation.raw_artifact_digest;
+          ]))
+
+let symbolic_interface_authority ~program
+    (implementation : Cmt_input.implementation)
+    (description : provider_description) =
+  let symbolic_callables =
+    List.filter
+      (fun (callable : provider_callable) ->
+        match callable.definition.Sst.body with
+        | Sst.Symbolic_declaration _ -> true
+        | Sst.Checked_exec _ | Sst.Spec_definition _
+        | Sst.Recursive_spec_definition _ | Sst.Proof_body _
+        | Sst.External_specification _ | Sst.Trusted_external_spec_target _
+        | Sst.Trusted_external_body _ ->
+            false)
+      description.callables
+  in
+  let markers = implementation.interface_symbolic_declarations in
+  let[@log_value.debug] _correlation =
+    symbolic_provider_correlation implementation description
+  in
+  [%log.debug "authenticating symbolic provider receipt"
+    ~provider:(Delator.Field.string description.unit_name)
+    ~route:(Delator.Field.string (_symbolic_provider_route implementation))
+    ~correlation:
+      (Delator.Field.string (_correlation [@log_value.debug]))
+    ~interface_declarations:(Delator.Field.int (List.length markers))
+    ~completed_implementations:
+      (Delator.Field.int (List.length symbolic_callables))
+    ~stage:(Delator.Field.string "provider-seal")];
+  let formal_label (formal : Parametric_signature_private.formal) =
+    match (formal.kind, formal.label) with
+    | Positional_parameter, None -> Ok ""
+    | Labelled_parameter, Some label
+      when String.starts_with ~prefix:"@" label ->
+        Ok label
+    | Labelled_parameter, Some label -> Ok ("~" ^ label)
+    | (Optional_parameter | Default_parameter), Some label
+      when String.starts_with ~prefix:"?" label ->
+        Ok label
+    | (Optional_parameter | Default_parameter), Some label -> Ok ("?" ^ label)
+    | Positional_parameter, Some _
+    | (Labelled_parameter | Optional_parameter | Default_parameter), None ->
+        Error "symbolic completed descriptor has an invalid formal label vector"
+  in
+  let rec canonical_abi_type = function
+    | (Parametric_type.Unit | Bool | Int | Mathematical_int | Parameter _) as typ ->
+        Ok typ
+    | Tuple components ->
+        List.fold_left
+          (fun result (label, component) ->
+            let* components = result in
+            let* component = canonical_abi_type component in
+            Ok ((label, component) :: components))
+          (Ok []) components
+        |> Result.map (fun components ->
+               Parametric_type.Tuple (List.rev components))
+    | Application _ as typ when Parametric_type.is_spec_function typ -> (
+        match Parametric_type.spec_function_view typ with
+        | Some (label, domain, range) ->
+            let* domain = canonical_abi_type domain in
+            let* range = canonical_abi_type range in
+            [%log.trace "canonicalized completed symbolic callback ABI"
+              ~provider:(Delator.Field.string description.unit_name)
+              ~stage:(Delator.Field.string "typed-symbolic-abi")
+              ~route:(Delator.Field.string "canonical-spec-function")
+              ~label_class:
+                (Delator.Field.string
+                   (Option.fold ~none:"unlabelled" ~some:(fun _ -> "labelled")
+                      label))
+              ~decision:(Delator.Field.string "accepted")];
+            Ok (Parametric_type.spec_function ~label ~domain ~range)
+        | None ->
+            [%log.warn "rejected malformed completed symbolic callback ABI"
+              ~provider:(Delator.Field.string description.unit_name)
+              ~stage:(Delator.Field.string "typed-symbolic-abi")
+              ~route:(Delator.Field.string "canonical-spec-function")
+              ~decision:(Delator.Field.string "rejected")
+              ~reason_class:(Delator.Field.string "malformed-spec-function")];
+            Error "symbolic completed descriptor has a malformed callback type")
+    | Application (constructor, arguments) ->
+        let* descriptor =
+          match Parametric_adt.find program.Sst.parametric_adts constructor with
+          | Some descriptor -> Ok descriptor
+          | None ->
+              Error
+                "symbolic completed descriptor has no exact type-constructor receipt"
+        in
+        let* arguments =
+          List.fold_left
+            (fun result argument ->
+              let* arguments = result in
+              let* argument = canonical_abi_type argument in
+              Ok (argument :: arguments))
+            (Ok []) arguments
+          |> Result.map List.rev
+        in
+        Ok
+          (Parametric_type.Application
+             ( {
+                 constructor with
+                 constructor_identity =
+                   "compiler-uid:" ^ Parametric_adt.compiler_uid descriptor;
+               },
+               arguments ))
+    | Aggregate _ ->
+        Error "symbolic completed descriptor contains an aggregate identity"
+  in
+  let callable_abi (callable : provider_callable) =
+    match callable.definition.body with
+    | Sst.Symbolic_declaration declaration ->
+        let rec labels reversed = function
+          | [] -> Ok (List.rev reversed)
+          | formal :: rest ->
+              let* label = formal_label formal in
+              labels (label :: reversed) rest
+        in
+        let* parameter_labels =
+          labels [] (Parametric_signature_private.formals callable.signature)
+        in
+        let* parameter_types =
+          List.fold_left
+            (fun result typ ->
+              let* types = result in
+              let* typ = canonical_abi_type typ in
+              Ok (typ :: types))
+            (Ok [])
+            (Symbolic_application_private.parameter_types declaration)
+          |> Result.map List.rev
+        in
+        let* result_type =
+          canonical_abi_type
+            (Symbolic_application_private.declaration_result_type declaration)
+        in
+        Symbolic_application_private.declaration_abi_material
+          ~canonical_path:callable.resolved_path ~value_uid:callable.binding_uid
+          ~type_binders:
+            (Symbolic_application_private.type_binders declaration)
+          ~parameter_labels
+          ~parameter_types ~result_type
+    | Sst.Checked_exec _ | Sst.Spec_definition _
+    | Sst.Recursive_spec_definition _ | Sst.Proof_body _
+    | Sst.External_specification _ | Sst.Trusted_external_spec_target _
+    | Sst.Trusted_external_body _ ->
+        Error "symbolic completed descriptor has no symbolic declaration"
+  in
+  let callable_origin_matches (callable : provider_callable) =
+    match callable.definition.body with
+    | Sst.Symbolic_declaration declaration ->
+        String.equal callable.resolved_path
+          (description.unit_name ^ "."
+          ^ Symbolic_application_private.canonical_path declaration)
+        && Symbolic_application_private.compilation_identity declaration <> ""
+        && Symbolic_application_private.source_file declaration <> ""
+    | Sst.Checked_exec _ | Sst.Spec_definition _
+    | Sst.Recursive_spec_definition _ | Sst.Proof_body _
+    | Sst.External_specification _ | Sst.Trusted_external_spec_target _
+    | Sst.Trusted_external_body _ ->
+        false
+  in
+  if List.exists (fun callable -> not (callable_origin_matches callable))
+       symbolic_callables
+  then
+    ( [%log.debug "rejected typed symbolic provider authority"
+        ~provider:(Delator.Field.string description.unit_name)
+        ~route:(Delator.Field.string (_symbolic_provider_route implementation))
+        ~correlation:
+          (Delator.Field.string (_correlation [@log_value.debug]))
+        ~stage:(Delator.Field.string "typed-symbolic-abi")
+        ~decision:(Delator.Field.string "rejected")
+        ~failure_class:(Delator.Field.string "provider-origin")];
+      Error
+        "[VERO_DEPENDENCY] provider symbolic origin disagrees with its completed implementation; rebuild provider" )
+  else if List.length markers <> List.length symbolic_callables then
+    ( [%log.debug "rejected typed symbolic provider authority"
+        ~provider:(Delator.Field.string description.unit_name)
+        ~route:(Delator.Field.string (_symbolic_provider_route implementation))
+        ~correlation:
+          (Delator.Field.string (_correlation [@log_value.debug]))
+        ~stage:(Delator.Field.string "typed-symbolic-abi")
+        ~decision:(Delator.Field.string "rejected")
+        ~failure_class:(Delator.Field.string "descriptor-cardinality")];
+      Error
+        "[VERO_DEPENDENCY] provider symbolic interface and completed implementation differ; rebuild provider" )
+  else
+    let completed =
+      List.fold_left
+        (fun result callable ->
+          let* completed = result in
+          let* abi = callable_abi callable in
+          let[@log_value.trace] _declaration =
+            match callable.definition.Sst.body with
+            | Sst.Symbolic_declaration declaration -> declaration
+            | Sst.Checked_exec _ | Sst.Spec_definition _
+            | Sst.Recursive_spec_definition _ | Sst.Proof_body _
+            | Sst.External_specification _
+            | Sst.Trusted_external_spec_target _
+            | Sst.Trusted_external_body _ ->
+                assert false
+          in
+          [%log.trace "computed completed typed symbolic ABI"
+            ~provider:(Delator.Field.string description.unit_name)
+            ~stage:(Delator.Field.string "typed-symbolic-abi")
+            ~canonical_path_class:
+              (Delator.Field.string "resolved-symbolic-declaration")
+            ~compiler_identity_class:
+              (Delator.Field.string "compiler-issued-uid")
+            ~typed_abi_class:
+              (Delator.Field.string "completed-symbolic")
+            ~correlation:
+              (Delator.Field.string
+                 (Digest.to_hex (Digest.string abi)))
+            ~type_arity:
+              (Delator.Field.int
+                 (List.length
+                    (Symbolic_application_private.type_binders
+                       (_declaration [@log_value.trace]))))
+            ~term_arity:
+              (Delator.Field.int
+                 (List.length
+                    (Symbolic_application_private.parameter_types
+                       (_declaration [@log_value.trace]))))
+            ~decision:(Delator.Field.string "computed")];
+          Ok ((callable, abi) :: completed))
+        (Ok []) symbolic_callables
+      |> Result.map List.rev
+    in
+    (match completed with
+    | Error _ ->
+        [%log.debug "rejected typed symbolic provider authority"
+          ~provider:(Delator.Field.string description.unit_name)
+          ~route:(Delator.Field.string (_symbolic_provider_route implementation))
+          ~correlation:
+            (Delator.Field.string (_correlation [@log_value.debug]))
+          ~stage:(Delator.Field.string "typed-symbolic-abi")
+          ~decision:(Delator.Field.string "rejected")
+          ~failure_class:(Delator.Field.string "descriptor-abi")];
+        Error
+          "[VERO_DEPENDENCY] provider symbolic completed descriptor ABI is invalid; rebuild provider"
+    | Ok completed ->
+        let marker_matches ((callable : provider_callable), abi) marker =
+          symbolic_marker_matches_material marker
+            ~canonical_path:callable.resolved_path
+            ~value_uid:callable.binding_uid ~typed_abi:abi
+        in
+        let exact_marker marker =
+          List.length (List.filter (fun item -> marker_matches item marker) completed)
+          = 1
+        in
+        let exact_callable callable =
+          List.length
+            (List.filter (fun marker -> marker_matches callable marker) markers)
+          = 1
+        in
+        if
+          not
+            (List.for_all exact_marker markers
+            && List.for_all exact_callable completed)
+        then
+          ( [%log.debug "rejected typed symbolic provider authority"
+              ~provider:(Delator.Field.string description.unit_name)
+              ~route:
+                (Delator.Field.string
+                   (_symbolic_provider_route implementation))
+              ~correlation:
+                (Delator.Field.string (_correlation [@log_value.debug]))
+              ~stage:(Delator.Field.string "typed-symbolic-abi")
+              ~decision:(Delator.Field.string "rejected")
+              ~failure_class:(Delator.Field.string "typed-abi-mismatch")];
+            Error
+              "[VERO_DEPENDENCY] provider symbolic marker and completed typed ABI differ; rebuild provider and consumer" )
+        else (
+          [%log.debug "authenticated typed symbolic provider authority"
+            ~provider:(Delator.Field.string description.unit_name)
+            ~route:
+              (Delator.Field.string (_symbolic_provider_route implementation))
+            ~correlation:
+              (Delator.Field.string (_correlation [@log_value.debug]))
+            ~stage:(Delator.Field.string "typed-symbolic-abi")
+            ~decision:(Delator.Field.string "accepted")
+            ~descriptor_count:(Delator.Field.int (List.length completed))];
+          Ok ()))
+
 let description_matches_program program (description : provider_description) =
   let callable_matches (callable : provider_callable) =
     let source =
@@ -1532,15 +2031,364 @@ let description_matches_program program (description : provider_description) =
   List.for_all callable_matches description.callables
   && List.for_all external_matches description.external_specifications
 
-let seal_provider ~provider_completion ~implementation ~program
-    ~direct_dependencies description =
+let symbolic_provider implementation (description : provider_description) =
+  implementation.Cmt_input.interface_symbolic_declarations <> []
+  || List.exists
+       (fun (callable : provider_callable) ->
+         match callable.definition.Sst.body with
+         | Sst.Symbolic_declaration _ -> true
+         | Sst.Checked_exec _ | Sst.Spec_definition _
+         | Sst.Recursive_spec_definition _ | Sst.Proof_body _
+         | Sst.External_specification _ | Sst.Trusted_external_spec_target _
+         | Sst.Trusted_external_body _ ->
+             false)
+       description.callables
+
+let broadcast_provider implementation (description : provider_description) =
+  implementation.Cmt_input.interface_broadcasts <> []
+  || description.broadcast_declarations <> []
+  || description.broadcast_groups <> []
+
+let provider_broadcast_identities (description : provider_description) =
+  List.map
+    (fun (declaration : provider_broadcast_declaration) ->
+      declaration.broadcast_identity)
+    description.broadcast_declarations
+  @ List.map
+      (fun (group : provider_broadcast_group) ->
+        group.broadcast_group_identity)
+      description.broadcast_groups
+
+let broadcast_interface_authority_internal ~program implementation description
+    direct_dependencies =
+  let source_matches_identity source identity =
+    String.equal source.Retained_broadcast_private.member_provider_origin
+      identity.Retained_broadcast_private.provider_origin
+    && String.equal source.member_interface_receipt identity.interface_digest
+    && String.equal source.member_dependency_receipt identity.dependency_receipt
+    && source.member_kind = identity.kind
+    && String.equal source.member_compiler_uid identity.compiler_uid
+    && String.equal source.member_canonical_path identity.canonical_path
+  in
+  let source_binding_is_exact source =
+    source_matches_identity source.broadcast_source_reference
+      source.broadcast_source_identity
+    &&
+    match (source.broadcast_source_edge, source.broadcast_source_authority_index) with
+    | None, None ->
+        String.equal source.broadcast_source_identity.provider_origin
+          description.unit_name
+    | Some edge, Some index ->
+        List.exists
+          (fun dependency ->
+            require_provider dependency;
+            let candidate = dependency.implementation in
+            String.equal edge.Retained_interface_authority_private.dependency_unit
+              candidate.Cmt_input.unit_name
+            && edge.dependency_authority_receipt
+               = candidate.retained_authority_receipt
+            && candidate.retained_authority_index = Some index
+            &&
+            match candidate.retained_authority with
+            | None -> false
+            | Some authority ->
+                String.equal edge.dependency_interface_receipt
+                  authority.cmi_receipt
+                && Array.exists
+                     (fun (import : Cmt_input.import) ->
+                       String.equal import.unit_name candidate.unit_name
+                       && import.crc = edge.dependency_compiler_receipt
+                       &&
+                       match import.crc with
+                       | Some receipt ->
+                           candidate.interface_digest = Some receipt
+                           || List.mem receipt candidate.interface_view_receipts
+                       | None -> false)
+                     implementation.Cmt_input.imports)
+          direct_dependencies
+    | (None, Some _) | (Some _, None) -> false
+  in
+  let interface_identities =
+    List.map
+      (fun member -> member.Retained_broadcast_private.identity)
+      implementation.Cmt_input.interface_broadcasts
+  and implementation_identities = provider_broadcast_identities description in
+  let canonical identities =
+    match Retained_broadcast_private.canonical_set identities with
+    | Ok identities -> Ok identities
+    | Error _ -> Error "retained broadcast identity set contains a duplicate"
+  in
+  let rec dependency_identities collected providers =
+    List.fold_left
+      (fun collected provider ->
+        require_provider provider;
+        let identities = provider_broadcast_identities provider.description in
+        dependency_identities (identities @ collected)
+          provider.direct_dependencies)
+      collected providers
+  in
+  let* interface_identities = canonical interface_identities in
+  let* implementation_identities = canonical implementation_identities in
   if
+    List.compare Retained_broadcast_private.compare_identity
+      interface_identities implementation_identities
+    <> 0
+  then
+    Error
+      "retained broadcast interface selection differs from completed implementation authority"
+  else
+    let mismatched_group_source =
+      List.find_opt
+        (fun group ->
+          match
+            List.filter
+              (fun member ->
+                Retained_broadcast_private.equal_identity
+                  member.Retained_broadcast_private.identity
+                  group.broadcast_group_identity)
+              implementation.Cmt_input.interface_broadcasts
+          with
+          | [ member ] ->
+              List.sort compare member.source_members
+              <> List.sort compare
+                   (List.map
+                      (fun source -> source.broadcast_source_reference)
+                      group.broadcast_sources)
+              || not (List.for_all source_binding_is_exact group.broadcast_sources)
+          | [] | _ :: _ :: _ -> true)
+        description.broadcast_groups
+    in
+    match mismatched_group_source with
+    | Some _ ->
+        [%log.warn "rejected provider group source authority binding"
+          ~provider:(Delator.Field.string description.unit_name)
+          ~stage:(Delator.Field.string "provider-group-source-seal")
+          ~route:(Delator.Field.string "exact-authority-closure")
+          ~decision:(Delator.Field.string "rejected")
+          ~reason_class:(Delator.Field.string "source-or-edge-mismatch")];
+        Error
+          "retained broadcast group source bindings differ from the exact CMTI authority"
+    | None ->
+      [%log.debug "sealed provider group source authority bindings"
+        ~provider:(Delator.Field.string description.unit_name)
+        ~stage:(Delator.Field.string "provider-group-source-seal")
+        ~route:(Delator.Field.string "exact-authority-closure")
+        ~group_count:(Delator.Field.int (List.length description.broadcast_groups))
+        ~decision:(Delator.Field.string "accepted")];
+    let available =
+      implementation_identities
+      @ dependency_identities [] direct_dependencies
+    in
+    let missing_member =
+      List.find_map
+        (fun group ->
+          List.find_opt
+            (fun member ->
+              not
+                (List.exists
+                   (Retained_broadcast_private.equal_identity member)
+                   available))
+            group.broadcast_members)
+        description.broadcast_groups
+    in
+    match missing_member with
+    | Some _ ->
+        Error
+          "retained broadcast group has an unknown, conflicting, or incomplete dependency member"
+    | None ->
+        let incomplete =
+          List.find_opt
+            (fun declaration ->
+              let definition = declaration.broadcast_definition in
+              let matches =
+                List.filter
+                  (fun candidate ->
+                    candidate.Sst.function_id = definition.Sst.function_id)
+                  program.Sst.functions
+              in
+              List.length matches <> 1)
+            description.broadcast_declarations
+        in
+        (match incomplete with
+        | Some _ ->
+            Error
+              "retained broadcast export lacks exactly one completed implementation authority"
+        | None -> Ok ())
+
+let broadcast_interface_authority ~program:(program [@delator.skip])
+    (implementation [@delator.skip]) (description [@delator.skip])
+    (direct_dependencies [@delator.skip]) =
+  let result =
+    broadcast_interface_authority_internal ~program implementation description
+      direct_dependencies
+  in
+  (match result with
+  | Ok () ->
+      [%log.debug "validated retained broadcast provider envelope"
+        ~provider:(Delator.Field.string description.unit_name)
+        ~stage:(Delator.Field.string "provider-validation")
+        ~interface_count:
+          (Delator.Field.int (List.length implementation.interface_broadcasts))
+        ~declaration_count:
+          (Delator.Field.int (List.length description.broadcast_declarations))
+        ~group_count:
+          (Delator.Field.int (List.length description.broadcast_groups))
+        ~dependency_count:(Delator.Field.int (List.length direct_dependencies))
+        ~decision:(Delator.Field.string "accepted")]
+  | Error _ ->
+      [%log.debug "rejected retained broadcast provider envelope"
+        ~provider:(Delator.Field.string description.unit_name)
+        ~stage:(Delator.Field.string "provider-validation")
+        ~decision:(Delator.Field.string "rejected")
+        ~reason_class:(Delator.Field.string "identity-completion-dependency")]);
+  result
+[@@delator.instrument]
+[@@delator.level debug]
+[@@delator.no_exn_log]
+
+let logical_sort_interface_authority (implementation [@delator.skip])
+    ((description : provider_description) [@delator.skip]) =
+  let ordered = List.sort Logical_sort_private.compare in
+  let described = ordered description.logical_sorts
+  and interface = ordered implementation.Cmt_input.interface_logical_sorts
+  and retained =
+    implementation.Cmt_input.retained_authority
+    |> Option.fold ~none:[]
+         ~some:Retained_interface_authority_private.logical_sorts
+    |> ordered
+  in
+  let accepted = described = interface && interface = retained in
+  (if accepted then
+     [%log.debug "validated retained logical-sort provider envelope"
+       ~provider:(Delator.Field.string description.unit_name)
+       ~stage:(Delator.Field.string "logical-sort-provider-seal")
+       ~description_count:(Delator.Field.int (List.length described))
+       ~interface_count:(Delator.Field.int (List.length interface))
+       ~authority_count:(Delator.Field.int (List.length retained))
+       ~decision:(Delator.Field.string "accepted")]
+   else
+     [%log.warn "rejected retained logical-sort provider envelope"
+       ~provider:(Delator.Field.string description.unit_name)
+       ~stage:(Delator.Field.string "logical-sort-provider-seal")
+       ~description_count:(Delator.Field.int (List.length described))
+       ~interface_count:(Delator.Field.int (List.length interface))
+       ~authority_count:(Delator.Field.int (List.length retained))
+       ~decision:(Delator.Field.string "rejected")
+       ~reason_class:(Delator.Field.string "authority-set-mismatch")]);
+  if accepted then Ok ()
+  else
+    Error
+      "[VERO_DEPENDENCY] provider logical-sort descriptor differs from its compiler interface or retained authority"
+[@@delator.instrument]
+[@@delator.level debug]
+[@@delator.no_exn_log]
+
+let seal_error ~implementation ~description ~cause_class:_cause_class
+    ~failure_class message =
+  let correlation = symbolic_provider_correlation implementation description in
+  let seal_error_diagnostic =
+    if broadcast_provider implementation description then
+      match failure_class with
+      | Internal_seal_failure -> None
+      | Artifact_seal_failure failure ->
+      ( [%log.debug "routing retained broadcast dependency rejection"
+          ~provider:(Delator.Field.string description.unit_name)
+          ~route:(Delator.Field.string (_symbolic_provider_route implementation))
+          ~stage:(Delator.Field.string "provider-seal-diagnostic")
+          ~failure_class:(Delator.Field.string "artifact")
+          ~cause_class:(Delator.Field.string _cause_class)
+          ~remedy_class:
+            (Delator.Field.string "rebuild-provider-consumer")
+          ~correlation:(Delator.Field.string correlation)];
+        Some
+          (Diagnostic.make
+             (Diagnostic.Invalid_broadcast_dependency
+                {
+                  provider = description.unit_name;
+                  failure;
+                })
+             (Diagnostic.file_span implementation.Cmt_input.source_file)) )
+    else if symbolic_provider implementation description then
+      match failure_class with
+      | Internal_seal_failure -> None
+      | Artifact_seal_failure _ ->
+      ( [%log.debug "routing typed symbolic dependency rejection"
+          ~provider:(Delator.Field.string description.unit_name)
+          ~stage:(Delator.Field.string "provider-seal-diagnostic")
+          ~failure_class:(Delator.Field.string "artifact")
+          ~cause_class:(Delator.Field.string _cause_class)
+          ~remedy_class:
+            (Delator.Field.string "rebuild-provider-consumer")
+          ~correlation:(Delator.Field.string correlation)];
+        Some
+          (Diagnostic.make
+             (Diagnostic.Invalid_symbolic_dependency
+                {
+                  provider = description.unit_name;
+                  reason = "generated provider artifacts do not match this build";
+                  remedy =
+                    "rebuild the provider and consumer with the same VeroCaml toolchain";
+                })
+             (Diagnostic.file_span implementation.Cmt_input.source_file)) )
+    else None
+  in
+  let seal_error_internal = failure_class = Internal_seal_failure in
+  if seal_error_internal then
+    [%log.error "authenticated provider consistency invariant failed"
+      ~provider:(Delator.Field.string description.unit_name)
+      ~stage:(Delator.Field.string "provider-seal-diagnostic")
+      ~failure_class:(Delator.Field.string "internal")
+      ~cause_class:(Delator.Field.string _cause_class)
+      ~correlation:(Delator.Field.string correlation)];
+  let seal_error_message =
+    if seal_error_internal then
+      "verification could not complete because an internal consistency check failed"
+    else
+      Option.fold ~none:message ~some:(fun diagnostic -> diagnostic.Diagnostic.message)
+        seal_error_diagnostic
+  in
+  { seal_error_message; seal_error_diagnostic; seal_error_internal }
+
+let seal_provider_with_diagnostic
+    ~provider_completion:(provider_completion [@delator.skip])
+    ~implementation:(implementation [@delator.skip])
+    ~program:(program [@delator.skip])
+    ~direct_dependencies:
+      (direct_dependencies
+        [@delator.field (fun providers -> string_of_int (List.length providers))])
+    (provider
+      [@delator.field (fun provider -> provider.unit_name)]) =
+  let[@log_value.info] _correlation =
+    symbolic_provider_correlation implementation provider
+  in
+      [%log.debug "starting completed provider seal"
+        ~provider:(Delator.Field.string provider.unit_name)
+        ~route:(Delator.Field.string (_symbolic_provider_route implementation))
+        ~stage:(Delator.Field.string "provider-seal")
+        ~correlation:
+          (Delator.Field.string (_correlation [@log_value.info]))
+        ~callable_count:(Delator.Field.int (List.length provider.callables))
+        ~direct_dependency_count:
+          (Delator.Field.int (List.length direct_dependencies))
+        ~decision:(Delator.Field.string "started")];
+      if
     not
       (Verified_provider_completion_private.authenticates provider_completion
          ~implementation ~program)
-  then Error "[VERO_DEPENDENCY] retained provider lacks verified completion"
-  else if not (description_matches_program program description) then
-    Error "[VERO_DEPENDENCY] retained summary does not match verified provider"
+  then
+    Error
+      (seal_error ~implementation ~description:provider
+         ~cause_class:"completion-unavailable"
+         ~failure_class:
+           (Artifact_seal_failure Diagnostic.Missing_provider_artifact)
+         "[VERO_DEPENDENCY] retained provider lacks verified completion")
+  else if not (description_matches_program program provider) then
+    Error
+      (seal_error ~implementation ~description:provider
+         ~cause_class:"completed-descriptor-mismatch"
+         ~failure_class:
+           (Artifact_seal_failure Diagnostic.Mismatched_provider_artifact)
+         "[VERO_DEPENDENCY] retained summary does not match verified provider")
   else if
     List.exists
       (fun (specification : provider_external_specification) ->
@@ -1554,24 +2402,86 @@ let seal_provider ~provider_completion ~implementation ~program
                    && String.equal link.import_crc link.target_interface_digest)
                  implementation.imports)
         | Sst.Same_unit_target _ | Sst.Unresolved_target _ -> true)
-      description.external_specifications
-  then
+      provider.external_specifications
+  then (
+    [%log.debug "rejected provider external specification target receipt"
+      ~provider:(Delator.Field.string provider.unit_name)
+      ~stage:(Delator.Field.string "provider-seal")
+      ~decision:(Delator.Field.string "rejected")
+      ~reason_class:(Delator.Field.string "external-target-import-crc")];
     Error
-      "[VERO_DEPENDENCY] provider external specification target import is not exact"
+      (seal_error ~implementation ~description:provider
+         ~cause_class:"external-target-import-mismatch"
+         ~failure_class:
+           (Artifact_seal_failure Diagnostic.Mismatched_provider_artifact)
+         "[VERO_DEPENDENCY] provider external specification target import is not exact"))
   else
-    match validate_description description with
-    | Error _ as error -> error
+    match logical_sort_interface_authority implementation provider with
+    | Error _message ->
+        Error
+          (seal_error ~implementation ~description:provider
+             ~cause_class:"logical-sort-interface-set-mismatch"
+             ~failure_class:
+               (Artifact_seal_failure Diagnostic.Mismatched_provider_artifact)
+             "provider logical-sort artifacts do not match this build")
+    | Ok () -> (
+    match symbolic_interface_authority ~program implementation provider with
+    | Error _message ->
+        Error
+          (seal_error ~implementation ~description:provider
+             ~cause_class:"typed-symbolic-interface-mismatch"
+             ~failure_class:
+               (Artifact_seal_failure Diagnostic.Mismatched_provider_artifact)
+             "provider artifacts do not match this build")
+    | Ok () -> (
+    match
+      broadcast_interface_authority ~program implementation provider
+        direct_dependencies
+    with
+    | Error _message ->
+        Error
+          (seal_error ~implementation ~description:provider
+             ~cause_class:"broadcast-interface-set-mismatch"
+             ~failure_class:
+               (Artifact_seal_failure Diagnostic.Mismatched_provider_artifact)
+             "[VERO_DEPENDENCY] provider broadcast authority is incomplete or mismatched")
+    | Ok () -> (
+    match validate_description provider with
+    | Error message ->
+        Error
+          (seal_error ~implementation ~description:provider
+             ~cause_class:"provider-descriptor-invariant"
+             ~failure_class:Internal_seal_failure
+             message)
     | Ok () -> (
         match
           obligation_description ~parametric_adts:program.Sst.parametric_adts
-            description
+            provider
         with
-        | Error _ as error -> error
-        | Ok description ->
+        | Error message ->
+            Error
+              (seal_error ~implementation ~description:provider
+                 ~cause_class:"provider-contract-invariant"
+                 ~failure_class:Internal_seal_failure
+                 message)
+        | Ok provider ->
             let snapshot =
-              provider_snapshot implementation program description
+              provider_snapshot implementation program provider
                 direct_dependencies
             in
+            [%log.info "completed provider seal"
+              ~provider:(Delator.Field.string provider.unit_name)
+              ~route:
+                (Delator.Field.string
+                   (_symbolic_provider_route implementation))
+              ~stage:(Delator.Field.string "provider-seal")
+              ~correlation:
+                (Delator.Field.string (_correlation [@log_value.info]))
+              ~callable_count:
+                (Delator.Field.int (List.length provider.callables))
+              ~direct_dependency_count:
+                (Delator.Field.int (List.length direct_dependencies))
+              ~decision:(Delator.Field.string "accepted")];
             Ok
               {
                 provider_issuer = issuer;
@@ -1580,10 +2490,22 @@ let seal_provider ~provider_completion ~implementation ~program
                 program;
                 direct_dependencies;
                 provider_completion;
-                description;
+                description = provider;
                 snapshot;
-              })
-[@@delator.instrument] [@@delator.level debug]
+              }))))
+[@@delator.instrument]
+[@@delator.level debug]
+[@@delator.no_exn_log]
+
+let seal_error_message error = error.seal_error_message
+let seal_error_diagnostic error = error.seal_error_diagnostic
+let seal_error_is_internal error = error.seal_error_internal
+
+let seal_provider ~provider_completion ~implementation ~program
+    ~direct_dependencies description =
+  seal_provider_with_diagnostic ~provider_completion ~implementation ~program
+    ~direct_dependencies description
+  |> Result.map_error seal_error_message
 
 let provider_matches provider ~implementation ~program =
   require_provider provider;
@@ -1631,8 +2553,65 @@ let mapping_for_provider provider =
       mapping_symbolic_declarations;
     }
 
+let provider_closure providers =
+  let rec add collected provider =
+    require_provider provider;
+    match
+      List.find_opt
+        (fun candidate ->
+          String.equal candidate.description.unit_name
+            provider.description.unit_name)
+        collected
+    with
+    | Some candidate ->
+        if String.equal candidate.snapshot provider.snapshot then collected
+        else (
+          [%log.debug "rejected conflicting retained provider closure"
+            ~provider:(Delator.Field.string provider.description.unit_name)
+            ~stage:(Delator.Field.string "forwarding-closure")
+            ~decision:(Delator.Field.string "rejected")
+            ~reason_class:(Delator.Field.string "conflicting-provider-receipt")];
+          mapping_error
+            "retained provider dependency closure has conflicting receipts")
+    | None ->
+        List.fold_left add (provider :: collected) provider.direct_dependencies
+  in
+  List.fold_left add [] providers |> List.rev
+
 let create_unchecked providers =
   let descriptions = descriptions providers in
+  let logical_sorts =
+    descriptions
+    |> List.concat_map (fun (description : provider_description) ->
+           description.logical_sorts)
+    |> List.sort Logical_sort_private.compare
+  in
+  let rec conflicting_origin = function
+    | [] -> None
+    | sort :: rest ->
+        if
+          List.exists
+            (fun candidate ->
+              String.equal
+                (Logical_sort_private.origin_material sort)
+                (Logical_sort_private.origin_material candidate)
+              && not (Logical_sort_private.equal sort candidate))
+            rest
+        then Some sort.provider_origin
+        else conflicting_origin rest
+  in
+  let* () =
+    match conflicting_origin logical_sorts with
+    | None -> Ok ()
+    | Some provider ->
+        Error
+          (Printf.sprintf
+             "[VERO_DEPENDENCY] provider %s supplies conflicting base logical-sort receipts"
+             provider)
+  in
+  let logical_sorts =
+    List.sort_uniq Logical_sort_private.compare logical_sorts
+  in
   let external_type_specifications =
     List.concat_map
       (fun (provider : provider_description) ->
@@ -1762,170 +2741,307 @@ let create_unchecked providers =
   let* mapped_external_specifications =
     map_external_specifications [] mappings
   in
-  let raw_mapped_broadcast_groups =
+  let closure_providers = provider_closure providers in
+  let rec map_closure mapped = function
+    | [] -> Ok (List.rev mapped)
+    | provider :: rest ->
+        let* mapping = mapping_for_provider provider in
+        map_closure (mapping :: mapped) rest
+  in
+  let* closure_mappings = map_closure [] closure_providers in
+  let rec map_broadcast_declarations mapped = function
+    | [] -> Ok (List.rev mapped)
+    | scope :: rest ->
+        let provider = scope.mapping_description in
+        let rec one mapped = function
+          | [] -> map_broadcast_declarations mapped rest
+          | declaration :: tail ->
+              let identity = declaration.broadcast_identity in
+              let callable =
+                {
+                  resolved_path = identity.canonical_path;
+                  binding_uid = identity.compiler_uid;
+                  definition = declaration.broadcast_definition;
+                  signature = declaration.broadcast_signature;
+                  finite_requirements = [];
+                  broadcast_trigger_span =
+                    Some declaration.broadcast_trigger_span;
+                  model = None;
+                }
+              in
+              let* summary =
+                transform_callable scope.mapping_type_ids
+                  scope.mapping_function_ids
+                  scope.mapping_symbolic_declarations provider callable
+              in
+              one
+                ({
+                   identity;
+                   definition = summary.definition;
+                   trigger_span = declaration.broadcast_trigger_span;
+                   trust = declaration.broadcast_trust;
+                 }
+                :: mapped)
+                tail
+        in
+        one mapped provider.broadcast_declarations
+  in
+  let* all_broadcast_declarations =
+    map_broadcast_declarations [] closure_mappings
+  in
+  let all_broadcast_groups =
     List.concat_map
       (fun scope ->
         List.map
           (fun (group : provider_broadcast_group) ->
             {
-              path = group.resolved_path;
-              binding_uid = group.binding_uid;
-              target_paths = group.target_paths;
+              identity = group.broadcast_group_identity;
+              members = group.broadcast_members;
+              sources = group.broadcast_sources;
             })
           scope.mapping_description.broadcast_groups)
-      mappings
+      closure_mappings
   in
-  let declaration_paths =
-    mapped_callables
-    |> List.filter_map (fun (callable : callable_snapshot) ->
-           Option.map (Fun.const callable.path) callable.broadcast_trigger_span)
-  in
-  let group_paths =
+  let all_identities =
     List.map
-      (fun (group : broadcast_group_snapshot) -> group.path)
-      raw_mapped_broadcast_groups
+      (fun (declaration : broadcast_declaration_snapshot) ->
+        declaration.identity)
+      all_broadcast_declarations
+    @ List.map
+        (fun (group : broadcast_group_snapshot) -> group.identity)
+        all_broadcast_groups
   in
-  let known_path path =
-    List.mem path declaration_paths || List.mem path group_paths
+  let paths =
+    List.map
+      (fun (identity : Retained_broadcast_private.identity) ->
+        identity.canonical_path)
+      all_identities
   in
-  let path_parent path =
-    match List.rev (String.split_on_char '.' path) with
-    | _leaf :: reversed_parent -> String.concat "." (List.rev reversed_parent)
-    | [] -> ""
+  let* () =
+    if List.length paths = List.length (List.sort_uniq String.compare paths) then
+      Ok ()
+    else (
+      [%log.debug "rejected retained broadcast snapshot namespace collision"
+        ~route:(Delator.Field.string "provider-environment")
+        ~stage:(Delator.Field.string "import-snapshot")
+        ~set_cardinality:(Delator.Field.int (List.length paths))
+        ~decision:(Delator.Field.string "rejected")
+        ~reason_class:(Delator.Field.string "provider-path-collision")];
+      Error
+        "[VERO_DEPENDENCY] retained broadcast namespace has conflicting provider receipts")
   in
-  let path_root path =
-    match String.split_on_char '.' path with root :: _ -> root | [] -> ""
+  let root_identities =
+    List.concat_map provider_broadcast_identities descriptions
   in
-  let resolve_target group_path target =
-    let _attempted =
-      [
-        target;
-        path_root group_path ^ "." ^ target;
-        path_parent group_path ^ "." ^ target;
-      ]
-      |> List.sort_uniq String.compare
-    in
-    let candidates = List.filter known_path _attempted in
-    let _known_paths = declaration_paths @ group_paths in
-    match candidates with
-    | [ resolved ] ->
-        [%log.trace "resolved imported broadcast group target"
-          ~group:(Delator.Field.string group_path)
-          ~source_target:(Delator.Field.string target)
-          ~resolved_target:(Delator.Field.string resolved)];
-        Ok resolved
-    | [] ->
-        [%log.debug "imported broadcast group target did not resolve"
-          ~group:(Delator.Field.string group_path)
-          ~source_target:(Delator.Field.string target)
-          ~attempted:(Delator.Field.string (String.concat "," _attempted))
-          ~known:(Delator.Field.string (String.concat "," _known_paths))];
-        Error
-          (Printf.sprintf
-             "[VERO_DEPENDENCY] imported broadcast group %s has unknown target %s"
-             group_path target)
-    | _ :: _ :: _ ->
-        [%log.warn "imported broadcast group target is ambiguous"
-          ~group:(Delator.Field.string group_path)
-          ~source_target:(Delator.Field.string target)
-          ~matches:(Delator.Field.string (String.concat "," candidates))];
-        Error
-          (Printf.sprintf
-             "[VERO_DEPENDENCY] imported broadcast group %s has ambiguous target %s"
-             group_path target)
+  let rec select selected pending =
+    match pending with
+    | [] -> Ok selected
+    | identity :: rest
+      when List.exists
+             (Retained_broadcast_private.equal_identity identity)
+             selected ->
+        select selected rest
+    | identity :: rest -> (
+        match
+          ( List.find_opt
+              (fun (declaration : broadcast_declaration_snapshot) ->
+                Retained_broadcast_private.equal_identity identity
+                  declaration.identity)
+              all_broadcast_declarations,
+            List.find_opt
+              (fun (group : broadcast_group_snapshot) ->
+                Retained_broadcast_private.equal_identity identity
+                  group.identity)
+              all_broadcast_groups )
+        with
+        | Some _, None -> select (identity :: selected) rest
+        | None, Some group ->
+            select (identity :: selected) (group.members @ rest)
+        | None, None ->
+            [%log.debug "rejected incomplete retained broadcast forwarding closure"
+              ~route:(Delator.Field.string "provider-environment")
+              ~stage:(Delator.Field.string "import-snapshot")
+              ~decision:(Delator.Field.string "rejected")
+              ~reason_class:(Delator.Field.string "missing-forwarded-identity")];
+            Error
+              "[VERO_DEPENDENCY] retained broadcast forwarding closure is incomplete"
+        | Some _, Some _ ->
+            [%log.debug "rejected conflicting retained broadcast identity kinds"
+              ~route:(Delator.Field.string "provider-environment")
+              ~stage:(Delator.Field.string "import-snapshot")
+              ~decision:(Delator.Field.string "rejected")
+              ~reason_class:(Delator.Field.string "conflicting-identity-kind")];
+            Error
+              "[VERO_DEPENDENCY] retained broadcast identity has conflicting kinds")
   in
-  let rec resolve_groups resolved = function
-    | [] -> Ok (List.rev resolved)
-    | (group : broadcast_group_snapshot) :: rest ->
-        let* target_paths =
-          List.fold_left
-            (fun result target ->
-              let* targets = result in
-              let* target = resolve_target group.path target in
-              Ok (target :: targets))
-            (Ok []) group.target_paths
-          |> Result.map List.rev
-        in
-        resolve_groups ({ group with target_paths } :: resolved) rest
+  let* selected = select [] root_identities in
+  let selected identity =
+    List.exists (Retained_broadcast_private.equal_identity identity) selected
   in
-  let* mapped_broadcast_groups =
-    resolve_groups [] raw_mapped_broadcast_groups
+  let mapped_broadcast_declarations =
+    List.filter
+      (fun (declaration : broadcast_declaration_snapshot) ->
+        selected declaration.identity)
+      all_broadcast_declarations
+  and mapped_broadcast_groups =
+    List.filter
+      (fun (group : broadcast_group_snapshot) -> selected group.identity)
+      all_broadcast_groups
   in
-  List.iter
-    (fun (_group : broadcast_group_snapshot) ->
-      [%log.trace "mapped imported broadcast group"
-        ~path:(Delator.Field.string _group.path)
-        ~value_uid:(Delator.Field.string _group.binding_uid)
-        ~targets:(Delator.Field.int (List.length _group.target_paths))])
-    mapped_broadcast_groups;
-  [%log.debug "mapped imported broadcast metadata"
-    ~declarations:
-      (Delator.Field.int
-         (List.fold_left
-            (fun count callable ->
-              count
-              + if Option.is_some callable.broadcast_trigger_span then 1 else 0)
-            0 mapped_callables))
-    ~groups:(Delator.Field.int (List.length mapped_broadcast_groups))];
   let numeric_collision identities index =
     let identities = List.sort_uniq compare identities in
     let indices = List.map index identities in
     List.length indices <> List.length (List.sort_uniq Int.compare indices)
   in
+  let all_mappings = mappings @ closure_mappings in
   let mapped_type_identities =
     List.concat_map
       (fun scope -> List.map snd scope.mapping_type_ids)
-      mappings
+      all_mappings
   in
   let mapped_function_identities =
     List.concat_map
       (fun scope -> List.map snd scope.mapping_function_ids)
-      mappings
+      all_mappings
   in
-  if
-    numeric_collision mapped_type_identities (fun id -> id.Sst.type_index)
-  then Error "[VERO_DEPENDENCY] retained type synthetic index collision"
+  let callable_identities =
+    List.map
+      (fun (item : callable_snapshot) -> item.definition.Sst.function_id)
+      mapped_callables
+    @ List.map
+        (fun (item : broadcast_declaration_snapshot) ->
+          item.definition.Sst.function_id)
+        mapped_broadcast_declarations
+  in
+  if numeric_collision mapped_type_identities (fun id -> id.Sst.type_index) then (
+    [%log.debug "rejected retained type synthetic index collision"
+      ~stage:(Delator.Field.string "import-snapshot")
+      ~route:(Delator.Field.string "provider-environment")
+      ~decision:(Delator.Field.string "rejected")
+      ~reason_class:(Delator.Field.string "type-index-collision")];
+    Error "[VERO_DEPENDENCY] retained type synthetic index collision")
   else if
-    numeric_collision mapped_function_identities (fun id ->
-        id.Sst.function_index)
-  then Error "[VERO_DEPENDENCY] retained callable synthetic index collision"
+    numeric_collision mapped_function_identities (fun id -> id.Sst.function_index)
+  then (
+    [%log.debug "rejected retained callable synthetic index collision"
+      ~stage:(Delator.Field.string "import-snapshot")
+      ~route:(Delator.Field.string "provider-environment")
+      ~decision:(Delator.Field.string "rejected")
+      ~reason_class:(Delator.Field.string "callable-index-collision")];
+    Error "[VERO_DEPENDENCY] retained callable synthetic index collision")
+  else if
+    numeric_collision callable_identities (fun id -> id.Sst.function_index)
+  then (
+    [%log.debug "rejected retained callable snapshot identity collision"
+      ~route:(Delator.Field.string "provider-environment")
+      ~stage:(Delator.Field.string "import-snapshot")
+      ~set_cardinality:(Delator.Field.int (List.length callable_identities))
+      ~decision:(Delator.Field.string "rejected")
+      ~reason_class:(Delator.Field.string "synthetic-identity-collision")];
+    Error "[VERO_DEPENDENCY] retained callable synthetic identity collision")
   else
-        let snapshot =
-          String.concat "|"
-            (List.map
-               (fun (callable : callable_snapshot) ->
-                 callable.path ^ "#" ^ callable.binding_uid ^ "#"
-                 ^ callable.summary_digest)
-               mapped_callables)
-            ^ String.concat "|"
-                (List.map
-                   (fun (specification : external_specification_snapshot) ->
-                     specification.provider_unit ^ "#"
-                     ^ specification.definition.function_id.function_name)
-                 mapped_external_specifications)
-            ^ String.concat "|"
-                (List.map
-                   (fun (group : broadcast_group_snapshot) ->
-                     group.path ^ "#" ^ group.binding_uid ^ "="
-                     ^ String.concat "," group.target_paths)
-                   mapped_broadcast_groups)
+    let external_target_material
+        (specification : external_specification_snapshot) =
+      let target =
+        match specification.target_link with
+        | Sst.Imported_unverified_target link ->
+            String.concat "#"
+              [
+                link.target_unit;
+                link.target_interface_digest;
+                link.canonical_path;
+                link.value_uid;
+                link.import_crc;
+              ]
+        | Sst.Same_unit_target _ -> "same-unit"
+        | Sst.Unresolved_target _ -> "unresolved"
+      in
+      String.concat "#"
+        [
+          specification.provider_unit;
+          specification.provider_interface;
+          specification.definition.function_id.function_name;
+          Parametric_signature_private.semantic_fingerprint
+            specification.signature;
+          target;
+        ]
+    in
+    let snapshot =
+      String.concat "|"
+        (List.map
+           (fun (callable : callable_snapshot) ->
+             callable.path ^ "#" ^ callable.binding_uid ^ "#"
+             ^ callable.summary_digest)
+           mapped_callables)
+      ^ String.concat "|"
+          (List.map external_target_material mapped_external_specifications)
+      ^ String.concat "|"
+          (List.map
+             (fun (declaration : broadcast_declaration_snapshot) ->
+               Retained_broadcast_private.identity_key declaration.identity)
+             mapped_broadcast_declarations)
+      ^ String.concat "|"
+          (List.map
+             (fun (group : broadcast_group_snapshot) ->
+               Retained_broadcast_private.identity_key group.identity ^ "="
+               ^ String.concat ","
+                   (List.map Retained_broadcast_private.identity_key
+                      group.members))
+             mapped_broadcast_groups)
+      ^ String.concat "|"
+          (List.map Logical_sort_private.canonical_material logical_sorts)
         in
+        [%log.trace "sealed authenticated broadcast import snapshot"
+          ~route:(Delator.Field.string "provider-environment")
+          ~stage:(Delator.Field.string "import-snapshot")
+          ~declaration_count:
+            (Delator.Field.int (List.length mapped_broadcast_declarations))
+          ~group_count:(Delator.Field.int (List.length mapped_broadcast_groups))
+          ~decision:(Delator.Field.string "sealed")];
         Ok
           {
             issuer;
             token = ref ();
             providers;
             callables = mapped_callables;
+            broadcast_declarations = mapped_broadcast_declarations;
             broadcast_groups = mapped_broadcast_groups;
             types = mapped_types;
+            logical_sorts;
             external_specifications = mapped_external_specifications;
             snapshot;
           }
 
-let create providers =
-  try create_unchecked providers
-  with Import_mapping_error message -> Error message
-[@@delator.instrument] [@@delator.level debug]
+let create
+    (providers
+      [@delator.field (fun providers -> string_of_int (List.length providers))]) =
+  let result =
+    try create_unchecked providers
+    with Import_mapping_error message -> Error message
+  in
+  (match result with
+  | Ok _environment ->
+      [%log.info "completed authenticated provider import snapshot"
+        ~stage:(Delator.Field.string "import-snapshot")
+        ~route:(Delator.Field.string "provider-environment")
+        ~provider_count:(Delator.Field.int (List.length providers))
+        ~declaration_count:
+          (Delator.Field.int
+             (List.length _environment.broadcast_declarations))
+        ~group_count:
+          (Delator.Field.int (List.length _environment.broadcast_groups))
+        ~decision:(Delator.Field.string "accepted")]
+  | Error _ ->
+      [%log.debug "rejected authenticated provider import snapshot"
+        ~stage:(Delator.Field.string "import-snapshot")
+        ~route:(Delator.Field.string "provider-environment")
+        ~provider_count:(Delator.Field.int (List.length providers))
+        ~decision:(Delator.Field.string "rejected")
+        ~reason_class:(Delator.Field.string "snapshot-closure")]);
+  result
+[@@delator.instrument]
+[@@delator.level debug]
+[@@delator.no_exn_log]
 
 let empty =
   {
@@ -1933,8 +3049,10 @@ let empty =
     token = ref ();
     providers = [];
     callables = [];
+    broadcast_declarations = [];
     broadcast_groups = [];
     types = [];
+    logical_sorts = [];
     external_specifications = [];
     snapshot = "empty";
   }
@@ -1948,6 +3066,10 @@ let callables environment =
   require environment;
   environment.callables
 
+let broadcast_declarations environment =
+  require environment;
+  environment.broadcast_declarations
+
 let broadcast_groups environment =
   require environment;
   environment.broadcast_groups
@@ -1955,6 +3077,10 @@ let broadcast_groups environment =
 let types environment =
   require environment;
   environment.types
+
+let logical_sorts environment =
+  require environment;
+  environment.logical_sorts
 
 let external_specifications environment =
   require environment;
@@ -2014,7 +3140,9 @@ let summary_is_aggregate_model (summary : callable_snapshot) =
     -> (
       match summary.definition.result_type with
       | Sst.Aggregate _ | Sst.Application _ -> true
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ -> false)
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Parameter _ ->
+          false)
   | Some _ | None -> false
 
 let seal_calls environment ~implementation ~program =
@@ -2029,13 +3157,47 @@ let seal_calls environment ~implementation ~program =
              import.crc)
       imports
   in
+  let expressions = program_expressions program in
+  let callable_is_referenced function_id =
+    List.exists
+      (fun expression ->
+        match expression.Sst.expression_desc with
+        | Sst.Direct_call { callee; _ }
+        | Sst.Reveal callee
+        | Sst.Reveal_with_fuel { function_id = callee; _ } ->
+            same_function_id function_id callee
+        | _ -> false)
+      expressions
+  in
+  let provider_has_referenced_callable provider =
+    List.exists
+      (fun (callable : provider_callable) ->
+        callable_is_referenced callable.definition.Sst.function_id)
+      provider.description.callables
+  in
   if
     not
       (List.for_all
          (fun provider ->
-           provider.description.callables = [] || direct_provider provider)
+           (not (provider_has_referenced_callable provider))
+           || direct_provider provider)
          environment.providers)
   then
+    let[@log_value.warn] rejected_providers =
+      environment.providers
+      |> List.filter (fun provider ->
+             provider_has_referenced_callable provider
+             && not (direct_provider provider))
+      |> List.map (fun provider ->
+             Delator.Field.string provider.description.unit_name)
+    in
+    [%log.warn "rejected referenced callable from a non-direct provider"
+      ~stage:(Delator.Field.string "retained-call-seal")
+      ~route:(Delator.Field.string "exact-compiler-import")
+      ~providers:
+        (Delator.Field.seq (rejected_providers [@log_value.warn]))
+      ~decision:(Delator.Field.string "rejected")
+      ~reason_class:(Delator.Field.string "non-direct-callable")];
     Error
       "[VERO_DEPENDENCY] retained callable target is not an exact direct \
        dependency"
@@ -2095,7 +3257,8 @@ let seal_calls environment ~implementation ~program =
       | Sst.Field_read _ | Sst.Field_write _ | Sst.Shared_scalar_field_write _
       | Sst.Owned_tree_nested_write _ | Sst.Let_mutable _ | Sst.Mutable_write _
       | Sst.Let _ | Sst.Sequence _ | Sst.If _ | Sst.Match _
-      | Sst.Checked_arithmetic _ | Sst.Compare _ | Sst.Boolean_not _
+      | Sst.Lift_runtime_int _ | Sst.Checked_arithmetic _ | Sst.Compare _
+      | Sst.Boolean_not _
       | Sst.Boolean_binary _ | Sst.Proof_region _ | Sst.Old _
       | Sst.Use_type_invariant _ | Sst.Local_assert _ | Sst.Optional_absent
       | Sst.Optional_present _ | Sst.Optional_forward _ ->
@@ -2168,9 +3331,59 @@ let seal_calls environment ~implementation ~program =
                   let arguments =
                     List.map Sst.require_value_argument arguments
                   in
-                  let* _ =
+                  let validation =
                     Parametric_signature_private.validate_call summary.signature
                       ~type_arguments ~actual_result:expression.typ ~arguments
+                  in
+                  let* _ =
+                    match validation with
+                    | Ok _ as accepted -> accepted
+                    | Error (message [@log_value.debug]) as rejected ->
+                        let[@log_value.debug] argument_types =
+                          arguments
+                          |> List.filteri (fun index _ -> index < 16)
+                          |> List.map
+                            (fun (_, (argument : Sst.expression)) ->
+                              Delator.Field.string
+                                (Parametric_type.to_string argument.typ))
+                        in
+                        let[@log_value.debug] dropped_argument_types =
+                          Int.max 0 (List.length arguments - 16)
+                        in
+                        let[@log_value.debug] inferred_types =
+                          type_arguments
+                          |> List.filteri (fun index _ -> index < 16)
+                          |> List.map
+                            (fun typ ->
+                              Delator.Field.string
+                                (Parametric_type.to_string typ))
+                        in
+                        let[@log_value.debug] dropped_inferred_types =
+                          Int.max 0 (List.length type_arguments - 16)
+                        in
+                        [%log.debug "rejected retained generic call seal"
+                          ~stage:(Delator.Field.string "retained-call-seal")
+                          ~callee:
+                            (Delator.Field.string
+                               summary.definition.function_id.function_name)
+                          ~type_arguments:
+                            (Delator.Field.seq
+                               ~dropped:
+                                 (dropped_inferred_types [@log_value.debug])
+                               (inferred_types [@log_value.debug]))
+                          ~argument_types:
+                            (Delator.Field.seq
+                               ~dropped:
+                                 (dropped_argument_types [@log_value.debug])
+                               (argument_types [@log_value.debug]))
+                          ~result_type:
+                            (Delator.Field.string
+                               (Parametric_type.to_string expression.typ))
+                          ~detail:
+                            (Delator.Field.string
+                               (message [@log_value.debug]))
+                          ~decision:(Delator.Field.string "rejected")];
+                        rejected
                   in
                   let call =
                     {
@@ -2260,7 +3473,6 @@ let ephemeral_contract_view registration expression fallback =
           | Ok instantiated ->
               Some
                 { call.summary.definition with
-                  Sst.type_binders = [];
                   parameters = instantiated.parameters;
                   contracts = instantiated.contracts;
                   result_type = instantiated.result_type }))
@@ -2506,6 +3718,8 @@ let dump environment =
   |> String.concat "\n"
 
 module For_testing = struct
+  let symbolic_marker_matches_material = symbolic_marker_matches_material
+
   type aggregate_lifecycle = {
     descriptors_issued : int;
     applications_admitted : int;
@@ -2909,8 +4123,10 @@ module For_testing = struct
         family_digest = "family";
         import_digest = "imports";
         callables;
+        broadcast_declarations = [];
         broadcast_groups = [];
         types;
+        logical_sorts = [];
         external_specifications = [];
       }
     in
@@ -3009,8 +4225,10 @@ module For_testing = struct
           family_digest = "family";
           import_digest = "imports";
           callables = [];
+          broadcast_declarations = [];
           broadcast_groups = [];
           types = [ typ ];
+          logical_sorts = [];
           external_specifications = [];
         }
       in

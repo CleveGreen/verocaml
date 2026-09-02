@@ -7,7 +7,7 @@ type stack = {
   length : int;
 }
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -15,9 +15,8 @@ let rec spec_node_len (node : int node) : int =
 [@@verocaml.spec]
 [@@verocaml.revealed]
 
-let spec_push_front (value : int) (stack : stack) : stack =
-  let { top; length } = stack in
-  { top = Node (value, top); length = length + 1 }
+let spec_push_front (value : int) (stack : stack) : int node =
+  Node (value, stack.top)
 [@@verocaml.spec]
 
 let stack_wf (stack : stack) : bool =
@@ -35,8 +34,7 @@ let lemma_push_front_wf (value : int) (stack : stack [@finite]) =
   [%verocaml.requires stack_wf stack];
   lemma_stack_push_length value stack.top;
   let pushed = spec_push_front value stack in
-  [%verocaml.assert pushed.length = pushed.length];
-  [%verocaml.assert pushed.top = pushed.top];
+  [%verocaml.assert spec_node_len pushed = spec_node_len pushed];
   ()
 [@@verocaml.proof]
 
@@ -47,8 +45,7 @@ let lemma_push_front_wf_tracked
   [%verocaml.requires stack_wf stack];
   lemma_stack_push_length value stack.top;
   let pushed = spec_push_front value stack in
-  [%verocaml.assert pushed.length = pushed.length];
-  [%verocaml.assert pushed.top = pushed.top];
+  [%verocaml.assert spec_node_len pushed = spec_node_len pushed];
   ()
 [@@verocaml.proof]
 

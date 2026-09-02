@@ -128,7 +128,7 @@ let fields = function
         constructors
 let deeply_immutable program typ =
   let rec loop visiting = function
-    | Sst.Unit | Sst.Bool | Sst.Int -> true
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> true
     | Sst.Parameter _ | Sst.Application _ -> false
     | Sst.Tuple components ->
         List.for_all (fun (_, typ) -> loop visiting typ) components
@@ -189,8 +189,8 @@ let abstraction_for_model program model =
               Some (root, evidence, owned)
           | Some _ | None -> None)
       | Some _ | None -> None)
-  | Some { typ = (Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
-            | Sst.Application _ );
+  | Some { typ = (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+            | Sst.Tuple _ | Sst.Parameter _ | Sst.Application _ );
           _;
         }
     | None ->
@@ -320,8 +320,8 @@ let result_constructor_fields program result_type constructor arguments =
           fail
             "owned-contents application result has no exact authenticated \
              descriptor")
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
-  | Sst.Aggregate _ ->
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Parameter _ | Sst.Aggregate _ ->
       fail "owned-contents result constructor has a substituted result type"
 let model_call program model formal =
   let rec path acc expression =
@@ -370,8 +370,8 @@ let model_call program model formal =
       let* path, typ = path [] actual in
       (match typ with
       | Sst.Aggregate carrier -> Ok (callee, path, carrier)
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
-      | Sst.Application _ ->
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Parameter _ | Sst.Application _ ->
           fail "owned-contents helper carrier is not an aggregate")
   | _ ->
       fail
@@ -382,7 +382,9 @@ let scalar_kind = function
   | Sst.Int -> Some Scalar_int
   | Sst.Bool -> Some Scalar_bool
   | Sst.Unit -> Some Scalar_unit
-  | Sst.Tuple _ | Sst.Aggregate _ | Sst.Parameter _ | Sst.Application _ -> None
+  | Sst.Mathematical_int | Sst.Tuple _ | Sst.Aggregate _ | Sst.Parameter _
+  | Sst.Application _ ->
+      None
 let collect_case program owned helper result_type carrier (case : Sst.case) =
   if Option.is_some case.case_guard then
     fail "owned-contents carrier cases cannot have guards"
@@ -463,8 +465,8 @@ let collect_case program owned helper result_type carrier (case : Sst.case) =
                       (deeply_immutable program expression.typ
                       && same_type type_id constructor.constructor_type)
                 | Sst.Application _ -> expression.typ <> result_type
-                | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _
-                | Sst.Parameter _ ->
+                | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                | Sst.Tuple _ | Sst.Parameter _ ->
                     true)
               then
                 fail
@@ -578,7 +580,8 @@ let collect_case program owned helper result_type carrier (case : Sst.case) =
           | Sst.Symbolic_application _
           | Sst.Forall _ | Sst.Exists _
           | Sst.Field_read _ | Sst.Match _ | Sst.Let _ | Sst.If _
-          | Sst.Compare _ | Sst.Boolean_not _ | Sst.Boolean_binary _
+          | Sst.Lift_runtime_int _ | Sst.Compare _ | Sst.Boolean_not _
+          | Sst.Boolean_binary _
           | Sst.Checked_arithmetic _ | Sst.Sequence _ | Sst.Old _
           | Sst.Field_write _ | Sst.Shared_scalar_field_write _
           | Sst.Owned_tree_nested_write _ | Sst.Owned_tree_rebase _
@@ -716,8 +719,8 @@ let collect ~program ~model =
                   fail
                     "owned-contents application result lacks an exact \
                      immutable descriptor")
-          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
-          | Sst.Aggregate _ ->
+          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+          | Sst.Parameter _ | Sst.Aggregate _ ->
             fail
                 "owned-contents model/helper result is substituted or not \
                  deeply immutable"
@@ -912,6 +915,7 @@ let field_expression program field expression =
       | Error _ -> None)
   | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
   | Sst.Variable _ | Sst.Tuple_value _ | Sst.Field_read _ | Sst.Match _
+  | Sst.Lift_runtime_int _
   | Sst.Let _ | Sst.If _ | Sst.Compare _ | Sst.Boolean_not _
   | Sst.Boolean_binary _ | Sst.Checked_arithmetic _ | Sst.Sequence _
   | Sst.Old _ | Sst.Field_write _ | Sst.Shared_scalar_field_write _
@@ -1120,6 +1124,7 @@ let authenticate_successor_expression program grammar expression =
   | Sst.Shared_scalar_field_write _ | Sst.Int_constant _
   | Sst.Bool_constant _ | Sst.Unit_constant | Sst.Variable _
   | Sst.Tuple_value _ | Sst.Record_value _ | Sst.Constructor_value _
+  | Sst.Lift_runtime_int _
   | Sst.Field_read _ | Sst.Match _ | Sst.Let _ | Sst.If _
   | Sst.Compare _ | Sst.Boolean_not _ | Sst.Boolean_binary _
   | Sst.Checked_arithmetic _ | Sst.Sequence _ | Sst.Old _
@@ -1225,8 +1230,58 @@ let lookup_type types id =
     (fun (definition : Sst.type_definition) ->
       same_type_id definition.type_id id)
     types
+let type_contains_mathematical_int ~types ~parametric_adts typ =
+  let local_fields = function
+    | Sst.Record_definition fields -> fields
+    | Sst.Variant_definition constructors ->
+        List.concat_map
+          (fun (constructor : Sst.constructor_definition) ->
+            constructor.constructor_fields)
+          constructors
+  in
+  let parametric_fields = function
+    | Parametric_adt.Record fields -> fields
+    | Parametric_adt.Variant constructors ->
+        List.concat_map
+          (fun (constructor : Parametric_adt.constructor) ->
+            constructor.constructor_fields)
+          constructors
+  in
+  let rec contains visiting typ =
+    if List.exists (Parametric_type.equal typ) visiting then false
+    else
+      match typ with
+      | Sst.Mathematical_int -> true
+      | Sst.Tuple components ->
+          List.exists
+            (fun (_, component) -> contains (typ :: visiting) component)
+            components
+      | Sst.Aggregate type_id -> (
+          match lookup_type types type_id with
+          | Some definition ->
+              local_fields definition.type_kind
+              |> List.exists (fun (field : Sst.field_definition) ->
+                     contains (typ :: visiting) field.field_type)
+          | None -> false)
+      | Sst.Application (constructor, arguments) ->
+          List.exists (contains (typ :: visiting)) arguments
+          ||
+          (match Parametric_adt.find parametric_adts constructor with
+          | None -> false
+          | Some descriptor ->
+              parametric_fields (Parametric_adt.kind descriptor)
+              |> List.exists (fun field ->
+                     match
+                       Parametric_adt.instantiate_field descriptor arguments
+                         field
+                     with
+                     | Ok field_type -> contains (typ :: visiting) field_type
+                     | Error _ -> true))
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Parameter _ -> false
+  in
+  contains [] typ
 let rec validate_type_reference types function_id span = function
-  | Sst.Unit | Sst.Bool | Sst.Int -> Ok ()
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> Ok ()
   | Sst.Tuple components ->
       iter_result
         (fun (_, typ) -> validate_type_reference types function_id span typ)
@@ -1432,7 +1487,8 @@ let validate_shared_invariant_client_paths types
       | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
       | Sst.Variable _ | Sst.Tuple_value _ | Sst.Record_value _
       | Sst.Constructor_value _ | Sst.Field_read _ | Sst.Field_write _
-      | Sst.Shared_scalar_field_write _ | Sst.Checked_arithmetic _
+      | Sst.Shared_scalar_field_write _ | Sst.Lift_runtime_int _
+      | Sst.Checked_arithmetic _
       | Sst.Boolean_not _ | Sst.Boolean_binary _ | Sst.Compare _
       | Sst.Let_mutable _ | Sst.Mutable_read _ | Sst.Mutable_write _
       | Sst.Let _ | Sst.Sequence _ | Sst.Direct_call _
@@ -1451,7 +1507,8 @@ let validate_shared_invariant_client_paths types
       | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
       | Sst.Variable _ | Sst.Tuple_value _ | Sst.Record_value _
       | Sst.Constructor_value _ | Sst.Field_read _ | Sst.Field_write _
-      | Sst.Shared_scalar_field_write _ | Sst.Checked_arithmetic _
+      | Sst.Shared_scalar_field_write _ | Sst.Lift_runtime_int _
+      | Sst.Checked_arithmetic _
       | Sst.Boolean_not _ | Sst.Boolean_binary _ | Sst.Compare _
       | Sst.Let_mutable _ | Sst.Mutable_read _ | Sst.Mutable_write _
       | Sst.Let _ | Sst.Sequence _ | Sst.If _ | Sst.Match _
@@ -1847,8 +1904,8 @@ let rec validate_expression ~require_authenticated_owned_tree_roots ~types
               }
           | Some { representation = Sst.Revealed; _ } | None ->
               None)
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
-        | Sst.Application _ ->
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Parameter _ | Sst.Application _ ->
             None
     in
     Spec_function_sst_private.exact_owned_contents_construction
@@ -1859,8 +1916,27 @@ let rec validate_expression ~require_authenticated_owned_tree_roots ~types
       validate_type_reference types (Some function_id) expression.span
         expression.typ
     in
+    let* () =
+      if
+        stage = Sst.Runtime
+        && type_contains_mathematical_int ~types ~parametric_adts expression.typ
+      then
+        ([%log.debug "rejected mathematical integer from executable value"
+           ~stage:(Delator.Field.string "semantic-type-containment")
+           ~boundary:(Delator.Field.string "runtime-expression")
+           ~semantic_type:
+             (Delator.Field.string
+                (Parametric_type.to_string expression.typ))
+           ~decision:(Delator.Field.string "rejected")
+           ~reason_class:
+             (Delator.Field.string "transitive-mathematical-int")];
+        fail ~function_id expression.span
+          (Malformed_expression
+             "mathematical Int is ghost-only and cannot occur in an executable value"))
+      else Ok ()
+    in
     match expression.expression_desc with
-    | Sst.Int_constant _ when expression.typ <> Sst.Int ->
+    | Sst.Int_constant _ when not (Parametric_type.is_integer expression.typ) ->
         fail ~function_id expression.span
           (Malformed_expression "integer constant has a non-integer type")
     | Sst.Bool_constant _ when expression.typ <> Sst.Bool ->
@@ -2090,6 +2166,7 @@ let rec validate_expression ~require_authenticated_owned_tree_roots ~types
         let* () =
             match
               Parametric_lowering_private.validate_sst_direct_call
+                ~logical:(stage <> Sst.Runtime)
                 ~definition:callee_definition ~type_arguments
                 ~actual_result:expression.typ ~call_span:expression.span
                 ~arguments
@@ -2503,7 +2580,11 @@ let check_clause_indices function_id label clauses =
                   label))
   in
   loop 0 clauses
-let scalar_type = function Sst.Int | Sst.Bool -> true | _ -> false
+let scalar_type = function
+  | Sst.Int | Sst.Mathematical_int | Sst.Bool -> true
+  | Sst.Unit | Sst.Tuple _ | Sst.Aggregate _ | Sst.Parameter _
+  | Sst.Application _ ->
+      false
 let logical_type types typ =
   Spec_definition.classify_logical_type types typ
 let is_logical_type types typ = Option.is_some (logical_type types typ)
@@ -2528,11 +2609,15 @@ let locally_ranked_type rank_domains = function
           | Some (Parametric_type.Application (candidate, actuals)) ->
               Parametric_type.compare_constructor candidate constructor = 0
               && List.equal Parametric_type.equal actuals arguments
-          | Some (Unit | Bool | Int | Tuple _ | Aggregate _ | Parameter _)
+          | Some
+              (Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _
+              | Parameter _)
           | None ->
               false)
         rank_domains
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ -> false
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Parameter _ ->
+      false
 (* Rank-backed logical shape is deliberately private to SST validation.  An
    issued rank domain authenticates a local immutable type-instance snapshot,
    including the generic-profile/actual evidence sealed into that snapshot;
@@ -2570,7 +2655,7 @@ let admit_rank_backed_logical_shape ~rank_domains ~parametric_adts types selecte
       | None, _ :: _ :: _ | Some _, [ _ ] | Some _, _ :: _ :: _ -> None
   in
   let rec classify visiting current = function
-    | Sst.Unit | Sst.Bool | Sst.Int -> Some current
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> Some current
     | Sst.Parameter _ -> None
     | Sst.Application (constructor, arguments) -> (
         match Parametric_adt.find parametric_adts constructor with
@@ -2696,7 +2781,9 @@ let scalar_terminal = function
   | Sst.Int -> Some Owned_terminal_int
   | Sst.Bool -> Some Owned_terminal_bool
   | Sst.Unit -> Some Owned_terminal_unit
-    | Sst.Tuple _ | Sst.Aggregate _ | Sst.Parameter _ | Sst.Application _ -> None
+    | Sst.Mathematical_int | Sst.Tuple _ | Sst.Aggregate _ | Sst.Parameter _
+    | Sst.Application _ ->
+        None
 let same_owned_path left right =
   left.owned_path_steps = right.owned_path_steps
   && left.owned_path_terminal = right.owned_path_terminal
@@ -2789,7 +2876,8 @@ let collect_owned_root_scalar_model ~program ~types
             malformed definition.span
                 "owned-root scalar model result must be a local immutable \
                  scalar record")
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Parameter _
       | Sst.Application _ ->
         malformed definition.span
           "owned-root scalar model must return an immutable scalar record"
@@ -2828,7 +2916,9 @@ let collect_owned_root_scalar_model ~program ~types
             same_type_id target type_id
         | Some
             {
-                Sst.field_type = Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _;
+                Sst.field_type =
+                  Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                  | Sst.Tuple _;
               _;
             }
           | Some { Sst.field_type = Sst.Parameter _ | Sst.Application _; _ }
@@ -2839,7 +2929,8 @@ let collect_owned_root_scalar_model ~program ~types
   let owner_matches typ owner =
     match typ with
     | Sst.Aggregate type_id -> same_type_id type_id (owner_type owner)
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Parameter _
       | Sst.Application _ -> false
   in
   let paths = ref [] in
@@ -3026,8 +3117,8 @@ let collect_owned_root_scalar_model ~program ~types
                   malformed scrutinee.span
                       "owned-root scalar model may match only a registered \
                        local variant")
-            | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
-            | Sst.Application _ ->
+            | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+            | Sst.Tuple _ | Sst.Parameter _ | Sst.Application _ ->
               malformed scrutinee.span
                   "owned-root scalar model match scrutinee is not a variant \
                    path"
@@ -3160,8 +3251,8 @@ let collect_owned_root_scalar_model ~program ~types
         Result.is_ok
           (Parametric_rank_domain_private.derive_application
              ~program:physical_program ~span:expression.span typ)
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Aggregate _
-    | Sst.Parameter _ ->
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+    | Sst.Aggregate _ | Sst.Parameter _ ->
         false)
     ||
     match ranked_shape_domain with
@@ -3175,13 +3266,17 @@ let collect_owned_root_scalar_model ~program ~types
     | Sst.Application (constructor, arguments) ->
         Option.map (fun descriptor -> (descriptor, arguments))
           (Parametric_adt.find parametric_adts constructor)
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Aggregate _
-    | Sst.Parameter _ -> None
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+    | Sst.Aggregate _ | Sst.Parameter _ ->
+        None
   in
   let application_owner typ expected =
     match application_descriptor typ with
     | Some (descriptor, _) -> Parametric_adt.type_id descriptor = expected
     | None -> typ = Sst.Aggregate expected
+  in
+  let logical_value_type declared actual =
+    Parametric_type.equal declared actual
   in
   let instantiated_field_type typ (field : Sst.field_id) =
     match application_descriptor typ with
@@ -3267,7 +3362,7 @@ let collect_owned_root_scalar_model ~program ~types
     | Sst.Int_pattern _ ->
         if irrefutable then
           malformed pattern.span "spec let patterns must be irrefutable"
-        else if pattern.typ = Sst.Int then Ok ()
+        else if Parametric_type.is_integer pattern.typ then Ok ()
         else malformed pattern.span "spec integer pattern type mismatch"
     | Sst.Bool_pattern _ ->
         if irrefutable then
@@ -3288,8 +3383,9 @@ let collect_owned_root_scalar_model ~program ~types
                       "spec tuple pattern component mismatch"
                 else validate_pattern ~irrefutable nested)
               (Ok ()) components expected
-          | Sst.Tuple _ | Sst.Unit | Sst.Bool | Sst.Int | Sst.Aggregate _
-          | Sst.Parameter _ | Sst.Application _ ->
+          | Sst.Tuple _ | Sst.Unit | Sst.Bool | Sst.Int
+          | Sst.Mathematical_int | Sst.Aggregate _ | Sst.Parameter _
+          | Sst.Application _ ->
             malformed pattern.span "spec tuple pattern type mismatch")
     | Sst.Record_pattern fields ->
         let validate_field (field, (nested : Sst.pattern)) =
@@ -3322,8 +3418,9 @@ let collect_owned_root_scalar_model ~program ~types
                   else validate_pattern ~irrefutable:false argument)
                 (Ok ()) arguments
                 (constructor_argument_types_for typ constructor_definition)
-          | ( ( Sst.Aggregate _ | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _
-                | Sst.Parameter _ | Sst.Application _ ),
+          | ( ( Sst.Aggregate _ | Sst.Unit | Sst.Bool | Sst.Int
+                | Sst.Mathematical_int | Sst.Tuple _ | Sst.Parameter _
+                | Sst.Application _ ),
                 (Some _ | None) ) ->
               malformed pattern.span
                 "spec constructor pattern has the wrong nominal owner")
@@ -3344,6 +3441,14 @@ let collect_owned_root_scalar_model ~program ~types
   let rec loop (expression : Sst.expression) =
     match expression.expression_desc with
     | Sst.Int_constant _ when expression.typ = Sst.Int -> Ok ()
+    | Sst.Int_constant _ when expression.typ = Sst.Mathematical_int -> Ok ()
+    | Sst.Lift_runtime_int operand
+      when expression.typ = Sst.Mathematical_int
+           && operand.typ = Sst.Int
+           && (match operand.expression_desc with
+              | Sst.Lift_runtime_int _ -> false
+              | _ -> true) ->
+        loop operand
     | Sst.Bool_constant _ when expression.typ = Sst.Bool -> Ok ()
     | Sst.Unit_constant when expression.typ = Sst.Unit -> Ok ()
     | Sst.Variable { binding; _ }
@@ -3360,14 +3465,14 @@ let collect_owned_root_scalar_model ~program ~types
                 let* () = result in
                 if
                   label <> expected_label
-                  || component.Sst.typ <> expected_type
+                  || not (logical_value_type expected_type component.Sst.typ)
                 then
                   malformed component.span
                     "spec tuple component type or label mismatch"
                 else loop component)
               (Ok ()) components expected
-        | Sst.Tuple _ | Sst.Unit | Sst.Bool | Sst.Int | Sst.Aggregate _
-          | Sst.Parameter _ | Sst.Application _ ->
+        | Sst.Tuple _ | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+        | Sst.Aggregate _ | Sst.Parameter _ | Sst.Application _ ->
             malformed expression.span "spec tuple value type mismatch")
     | Sst.Record_value { record_type; fields } -> (
         match record_fields record_type fields with
@@ -3380,10 +3485,33 @@ let collect_owned_root_scalar_model ~program ~types
                 let* () = result in
                 if
                   field <> expected.field_id
-                  || instantiated_field_type expression.typ field <> Some value.Sst.typ
-                then
+                  || not
+                       (Option.fold ~none:false
+                          ~some:(fun declared ->
+                            logical_value_type declared value.Sst.typ)
+                          (instantiated_field_type expression.typ field))
+                then (
+                  [%log.debug "rejected logical record field semantic type"
+                    ~stage:(Delator.Field.string "spec-expression-validation")
+                    ~function_name:
+                      (Delator.Field.string function_id.function_name)
+                    ~record_sort:
+                      (Delator.Field.string
+                         (Parametric_type.to_string expression.typ))
+                    ~field_name:(Delator.Field.string field.field_name)
+                    ~declared_sort:
+                      (Delator.Field.string
+                         (Option.fold ~none:"<missing>"
+                            ~some:Parametric_type.to_string
+                            (instantiated_field_type expression.typ field)))
+                    ~value_sort:
+                      (Delator.Field.string
+                         (Parametric_type.to_string value.Sst.typ))
+                    ~decision:(Delator.Field.string "rejected")
+                    ~reason_class:
+                      (Delator.Field.string "field-semantic-type-mismatch")];
                   malformed value.span
-                    "spec record construction field mismatch"
+                    "spec record construction field mismatch")
                 else loop value)
               (Ok ()) fields expected_fields
         | Some _ | None ->
@@ -3399,7 +3527,7 @@ let collect_owned_root_scalar_model ~program ~types
             List.fold_left2
               (fun result argument expected_type ->
                 let* () = result in
-                if argument.Sst.typ <> expected_type then
+                if not (logical_value_type expected_type argument.Sst.typ) then
                   malformed argument.span
                     "spec constructor argument type mismatch"
                 else loop argument)
@@ -3418,11 +3546,36 @@ let collect_owned_root_scalar_model ~program ~types
         let* () =
           if
             application_owner record.typ field_owner
-            && instantiated_field_type record.typ field = Some expression.typ
+            && Option.fold ~none:false
+                 ~some:(fun declared ->
+                   logical_value_type declared expression.typ)
+                 (instantiated_field_type record.typ field)
           then Ok ()
-          else
+          else (
+            [%log.debug "rejected logical field projection semantic type"
+              ~stage:(Delator.Field.string "spec-expression-validation")
+              ~function_name:(Delator.Field.string function_id.function_name)
+              ~record_sort:
+                (Delator.Field.string
+                   (Parametric_type.to_string record.typ))
+              ~field_name:(Delator.Field.string field.field_name)
+              ~field_owner:(Delator.Field.string field_owner.type_name)
+              ~declared_sort:
+                (Delator.Field.string
+                   (Option.fold ~none:"<missing>"
+                      ~some:Parametric_type.to_string
+                      (instantiated_field_type record.typ field)))
+              ~result_sort:
+                (Delator.Field.string
+                   (Parametric_type.to_string expression.typ))
+              ~owner_matches:
+                (Delator.Field.bool
+                   (application_owner record.typ field_owner))
+              ~decision:(Delator.Field.string "rejected")
+              ~reason_class:
+                (Delator.Field.string "field-semantic-type-mismatch")];
             malformed expression.span
-              "spec field projection has the wrong nominal domain"
+              "spec field projection has the wrong nominal domain")
         in
           match model_domain with
         | Some domain when same_type_id domain field_owner ->
@@ -3510,15 +3663,18 @@ let collect_owned_root_scalar_model ~program ~types
     | Sst.Checked_arithmetic (operation, operands) ->
         let expected_arity =
           match operation with
-          | Sst.Add | Sst.Subtract -> 2
+          | Sst.Add | Sst.Subtract | Sst.Multiply -> 2
           | Sst.Negate | Sst.Multiply_constant _ | Sst.Successor
           | Sst.Predecessor | Sst.Absolute_value ->
               1
         in
         if
-          expression.typ <> Sst.Int
+          (expression.typ <> Sst.Int
+          && expression.typ <> Sst.Mathematical_int)
           || List.length operands <> expected_arity
-          || List.exists (fun operand -> operand.Sst.typ <> Sst.Int) operands
+          || List.exists
+               (fun operand -> operand.Sst.typ <> expression.typ)
+               operands
         then
           malformed expression.span
             "spec arithmetic has an invalid scalar type or arity"
@@ -3533,7 +3689,7 @@ let collect_owned_root_scalar_model ~program ~types
                 || Parametric_type.is_spec_function left.typ
           | Sst.Less_than | Sst.Less_or_equal | Sst.Greater_than
           | Sst.Greater_or_equal ->
-              left.typ = Sst.Int
+              Parametric_type.is_integer left.typ
         in
         if expression.typ <> Sst.Bool || not supported_operands then
           malformed expression.span
@@ -3669,7 +3825,8 @@ let collect_owned_root_scalar_model ~program ~types
       | Sst.If (_, _, None)
       | Sst.Proof_region _ | Sst.Reveal _ | Sst.Reveal_with_fuel _ | Sst.Old _
       | Sst.Use_type_invariant _ | Sst.Local_assert _ | Sst.Direct_call _
-      | Sst.Callback_call _ | Sst.Callback_requires _ | Sst.Callback_ensures _
+      | Sst.Lift_runtime_int _ | Sst.Callback_call _ | Sst.Callback_requires _
+      | Sst.Callback_ensures _
       | Sst.Optional_absent | Sst.Optional_present _ | Sst.Optional_forward _ ->
         malformed expression.span
           "expression is outside the aggregate spec grammar"
@@ -3731,8 +3888,8 @@ let validate_spec_graph functions =
       [] spec_definitions
   in
   Ok ()
-  let validate_proof_expression ~rank_domains ~parametric_adts ~types functions
-      definition expression =
+  let validate_proof_expression ~rank_domains ~parametric_adts ~physical_program
+      ~types functions definition expression =
   let function_id = definition.Sst.function_id in
   let ranked_shape_domain = ref None in
   let rec admitted_value_type typ =
@@ -3746,7 +3903,8 @@ let validate_spec_graph functions =
             (fun (_, component) -> admitted_value_type component)
             components
       | Sst.Aggregate _ -> is_logical_type types typ
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Parameter _ | Sst.Application _ ->
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+      | Sst.Parameter _ | Sst.Application _ ->
           false
     else
       admit_rank_backed_logical_shape ~rank_domains ~parametric_adts types
@@ -3786,6 +3944,13 @@ let validate_spec_graph functions =
     in
     match expression.expression_desc with
       | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant -> Ok ()
+    | Sst.Lift_runtime_int operand
+      when expression.typ = Sst.Mathematical_int
+           && operand.typ = Sst.Int
+           && (match operand.expression_desc with
+              | Sst.Lift_runtime_int _ -> false
+              | _ -> true) ->
+        loop operand
     | Sst.Variable _
       when scalar_type expression.typ || expression.typ = Sst.Unit
            || admitted_value_type expression.typ ->
@@ -3795,7 +3960,12 @@ let validate_spec_graph functions =
           iter_result
             (fun (pattern, value) ->
               match pattern.Sst.pattern_desc with
-                | Sst.Bind { typ = Sst.Int | Sst.Bool | Sst.Unit; _ }
+                | Sst.Bind
+                    {
+                      typ =
+                        (Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Unit);
+                      _;
+                    }
                 when pattern.typ = value.Sst.typ ->
                   loop value
                 | Sst.Bind { typ; _ }
@@ -3831,7 +4001,7 @@ let validate_spec_graph functions =
                 scalar_type left.typ || admitted_value_type left.typ
           | Sst.Less_than | Sst.Less_or_equal | Sst.Greater_than
           | Sst.Greater_or_equal ->
-              left.typ = Sst.Int
+              Parametric_type.is_integer left.typ
         in
         if not supported then reject ()
         else
@@ -3870,6 +4040,21 @@ let validate_spec_graph functions =
               let* () = iter_result loop (Option.to_list case.case_guard) in
               loop case.case_body)
           cases
+    | Sst.Direct_call _
+      when
+        Spec_function_sst_private.lambda expression <> None
+        || Spec_function_sst_private.application expression <> None
+        || Spec_function_sst_private.is_reference expression ->
+        [%log.trace
+          "validating logical specification-function surface in proof body"
+          ~stage:
+            (Delator.Field.string "proof-specification-function-validation")
+          ~function_name:(Delator.Field.string function_id.function_name)
+          ~surface_sort:
+            (Delator.Field.string (Parametric_type.to_string expression.typ))
+          ~decision:(Delator.Field.string "delegated-to-logical-grammar")];
+        validate_spec_expression ~rank_domains ~physical_program
+          ~parametric_adts types functions definition expression
     | Sst.Direct_call
         {
             call_form = Sst.Specification_call | Sst.Proof_call;
@@ -3911,7 +4096,8 @@ let validate_spec_graph functions =
       | Sst.Shared_scalar_field_write _ | Sst.Owned_tree_nested_write _
       | Sst.Owned_tree_rebase _ | Sst.Let_mutable _ | Sst.Mutable_read _
       | Sst.Mutable_write _ | Sst.Match _ | Sst.Proof_region _ | Sst.Old _
-      | Sst.Direct_call _ | Sst.Callback_call _ | Sst.Callback_requires _
+      | Sst.Lift_runtime_int _ | Sst.Direct_call _ | Sst.Callback_call _
+      | Sst.Callback_requires _
       | Sst.Callback_ensures _ | Sst.Optional_absent | Sst.Optional_present _
       | Sst.Optional_forward _ ->
         reject ()
@@ -4116,7 +4302,8 @@ let parametric_decrease ~program ~span typ =
       Result.is_ok
         (Parametric_rank_domain_private.derive_application ~program ~span
            application)
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Aggregate _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Aggregate _
   | Sst.Parameter _ ->
       false
 let parametric_formal ~program ~span = function
@@ -4125,7 +4312,8 @@ let parametric_formal ~program ~span = function
         (Parametric_rank_domain_private.derive_application ~program ~span typ)
       || Parametric_adt.deeply_immutable_instance program.Sst.parametric_adts
            typ
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Aggregate _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Aggregate _
   | Sst.Parameter _ ->
       false
 let validate_function ~require_authenticated_owned_tree_roots ~rank_domains
@@ -4160,6 +4348,50 @@ let validate_function ~require_authenticated_owned_tree_roots ~rank_domains
            })
   in
   let* () = validate_policy definition.span definition.policy in
+  let* () =
+    if definition.mode <> Sst.Exec then Ok ()
+    else
+      let contains =
+        type_contains_mathematical_int ~types ~parametric_adts
+      in
+      let parameter_contains = function
+        | Sst.Value_parameter parameter ->
+            contains parameter.pattern.typ
+            || Option.fold ~none:false
+                 ~some:(fun default ->
+                   contains default.Sst.optional_pattern.typ
+                   || contains default.Sst.optional_expression.typ)
+                 parameter.optional_default
+        | Sst.Callback_parameter formal ->
+            List.exists contains
+              (Callback_shape_private.endpoint_types
+                 formal.binding.callback_shape)
+            || contains
+                 (Callback_shape_private.result formal.binding.callback_shape)
+      in
+      if
+        contains definition.result_type
+        || List.exists parameter_contains definition.parameters
+      then
+        ([%log.debug
+           "rejected transitive mathematical integer at executable callable boundary"
+           ~stage:(Delator.Field.string "semantic-type-containment")
+           ~boundary:(Delator.Field.string "executable-callable")
+           ~function_name:
+             (Delator.Field.string definition.function_id.function_name)
+           ~result_contains:
+             (Delator.Field.bool (contains definition.result_type))
+           ~parameter_contains:
+             (Delator.Field.bool
+                (List.exists parameter_contains definition.parameters))
+           ~decision:(Delator.Field.string "rejected")
+           ~reason_class:
+             (Delator.Field.string "transitive-mathematical-int")];
+        fail ~function_id definition.span
+          (Malformed_expression
+             "mathematical Int is ghost-only and cannot cross an executable function boundary"))
+      else Ok ()
+  in
   let* bound =
     fold_result
       (fun bound parameter ->
@@ -4311,7 +4543,17 @@ let validate_function ~require_authenticated_owned_tree_roots ~rank_domains
               ~enclosing_recursive:definition.recursive ~stage:Sst.Logical
                 ~allow_old:false bound clause.predicate.expression
           in
-          if clause.predicate.expression.typ = Sst.Int then Ok ()
+          if Parametric_type.is_integer clause.predicate.expression.typ then (
+            [%log.trace "accepted scalar recursive decreases measure"
+              ~stage:(Delator.Field.string "termination-type-validation")
+              ~function_name:
+                (Delator.Field.string definition.function_id.function_name)
+              ~measure_type:
+                (Delator.Field.string
+                   (Parametric_type.to_string
+                      clause.predicate.expression.typ))
+              ~decision:(Delator.Field.string "accepted")];
+            Ok ())
           else if
             match
               owned_recursive_contents_for_helper ~program:physical_program
@@ -4394,7 +4636,8 @@ let validate_function ~require_authenticated_owned_tree_roots ~rank_domains
                            identity.rank_type_id = type_id)
                          (Parametric_rank_domain_private.component domain))
                   rank_domains
-            | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ ->
+            | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+            | Sst.Tuple _ | Sst.Parameter _ ->
                 false
             | Sst.Application _ as application ->
                 parametric_decrease ~program:physical_program
@@ -4433,7 +4676,9 @@ let validate_function ~require_authenticated_owned_tree_roots ~rank_domains
             (Invalid_body "checked exec body result type mismatch")
     | Sst.Spec, Sst.Symbolic_declaration declaration ->
         let supported = function
-          | Sst.Unit | Sst.Int | Sst.Bool | Sst.Parameter _ -> true
+          | Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Bool
+          | Sst.Parameter _ ->
+              true
           | Sst.Application _ as typ
             when Parametric_type.is_spec_function typ ->
               true
@@ -4515,10 +4760,11 @@ let validate_function ~require_authenticated_owned_tree_roots ~rank_domains
                           not (admitted_nonrecursive_shape typ)
                       | Sst.Wildcard | Sst.Owned_tree_cursor_pattern _
                       | Sst.Int_pattern _ | Sst.Bool_pattern _
-                      | Sst.Unit_pattern | Sst.Tuple_pattern _
+                      | Sst.Tuple_pattern _
                       | Sst.Record_pattern _ | Sst.Constructor_pattern _
                       | Sst.Or_pattern _ ->
-                          true)
+                          true
+                      | Sst.Unit_pattern -> false)
                     (Sst_callback_private.value_parameters definition.parameters)
             then
               fail ~function_id definition.span
@@ -4563,7 +4809,8 @@ let validate_function ~require_authenticated_owned_tree_roots ~rank_domains
         let aggregate_result =
           match definition.result_type with
           | Sst.Aggregate _ | Sst.Application _ -> true
-          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ ->
+          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+          | Sst.Parameter _ ->
               false
         in
           let frozen_helper = frozen_spine_for_helper types definition in
@@ -4573,7 +4820,7 @@ let validate_function ~require_authenticated_owned_tree_roots ~rank_domains
         in
         let admitted_recursive_shape typ =
           match typ with
-          | Sst.Int | Sst.Bool -> true
+          | Sst.Int | Sst.Mathematical_int | Sst.Bool -> true
           | Sst.Aggregate type_id
               when Option.fold ~none:false
                 ~some:(fun frozen ->
@@ -4598,7 +4845,8 @@ let validate_function ~require_authenticated_owned_tree_roots ~rank_domains
                 (fun candidate ->
                   Parametric_type.compare_binder binder candidate = 0)
                 definition.type_binders
-          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Aggregate _
+          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+          | Sst.Tuple _ | Sst.Aggregate _
           | Sst.Application _ ->
               false)
           || parametric_formal ~program:physical_program
@@ -4655,7 +4903,9 @@ let validate_function ~require_authenticated_owned_tree_roots ~rank_domains
                  parameter.Sst.label <> None
                  ||
                  match parameter.pattern.pattern_desc with
-                   | Sst.Bind { typ = Sst.Int | Sst.Bool; _ } -> false
+                   | Sst.Bind
+                       { typ = Sst.Int | Sst.Mathematical_int | Sst.Bool; _ } ->
+                       false
                    | Sst.Bind { typ; _ }
                      when Parametric_type.is_spec_function typ ->
                        false
@@ -4819,7 +5069,14 @@ let validate_function ~require_authenticated_owned_tree_roots ~rank_domains
                     }
                   when not definition.recursive ->
                     false
-                  | Sst.Unit_pattern | Sst.Bind { typ = Sst.Unit | Sst.Int | Sst.Bool; _ } -> false
+                  | Sst.Unit_pattern
+                  | Sst.Bind
+                      {
+                        typ =
+                          (Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Bool);
+                        _;
+                      } ->
+                      false
                   | Sst.Bind { typ; uniqueness = Sst.Definitely_aliased; _ }
                   when locally_ranked_type rank_domains typ ->
                     false
@@ -4885,7 +5142,7 @@ let validate_function ~require_authenticated_owned_tree_roots ~rank_domains
                 (Invalid_body "proof body result type mismatch")
             else
                 validate_proof_expression ~rank_domains
-                  ~parametric_adts:parametric_adts ~types
+                  ~parametric_adts:parametric_adts ~physical_program ~types
                   functions definition body.expression
         in
         Ok ()
@@ -5846,7 +6103,9 @@ let validate_shared_scalar_function ~physical_program types functions
     | Sst.Aggregate type_id -> same_type_id owner type_id
     | Sst.Tuple components ->
         List.exists (fun (_, typ) -> mentions_type owner typ) components
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Parameter _ | Sst.Application _ -> false
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Parameter _
+    | Sst.Application _ ->
+        false
   in
   let* body =
     match definition.body with
@@ -5873,7 +6132,8 @@ let validate_shared_scalar_function ~physical_program types functions
   let* () =
     match definition.result_type with
     | Sst.Unit | Sst.Bool | Sst.Int -> Ok ()
-      | Sst.Tuple _ | Sst.Aggregate _ | Sst.Parameter _ | Sst.Application _ ->
+    | Sst.Mathematical_int | Sst.Tuple _ | Sst.Aggregate _ | Sst.Parameter _
+    | Sst.Application _ ->
         malformed definition.span
           "bounded shared-scalar mutation may return only unit or a scalar"
   in
@@ -5896,7 +6156,8 @@ let validate_shared_scalar_function ~physical_program types functions
       (fun (parameter : Sst.value_parameter) ->
         match parameter.pattern.typ with
         | Sst.Aggregate _ -> true
-          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
+          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+          | Sst.Parameter _
           | Sst.Application _ -> false)
       (Sst_callback_private.value_parameters definition.parameters)
   in
@@ -6019,7 +6280,8 @@ let validate_shared_scalar_function ~physical_program types functions
             | Some edge -> (
                 match edge.field_type with
                 | Sst.Aggregate _ -> true
-                        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _
+                        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                        | Sst.Tuple _
                         | Sst.Parameter _ | Sst.Application _ ->
                             false)
                     | None -> false)
@@ -6046,7 +6308,9 @@ let validate_shared_scalar_function ~physical_program types functions
         | Sst.Bind binding -> (
             match binding.typ with
             | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ -> [ binding.id ]
-              | Sst.Aggregate _ | Sst.Parameter _ | Sst.Application _ -> [])
+            | Sst.Mathematical_int | Sst.Aggregate _ | Sst.Parameter _
+            | Sst.Application _ ->
+                [])
         | _ -> [])
       (Sst_callback_private.value_parameters definition.parameters)
   in
@@ -6229,6 +6493,13 @@ let validate_shared_scalar_function ~physical_program types functions
             malformed expression.span
               "shared-scalar grammar forbids standalone aggregate or unbound \
                scalar values")
+    | Sst.Lift_runtime_int operand
+      when expression.typ = Sst.Mathematical_int
+           && operand.typ = Sst.Int
+           && (match operand.expression_desc with
+              | Sst.Lift_runtime_int _ -> false
+              | _ -> true) ->
+        recurse operand
     | Sst.Field_read
         {
           record =
@@ -6259,7 +6530,7 @@ let validate_shared_scalar_function ~physical_program types functions
     | Sst.Forall quantifier | Sst.Exists quantifier ->
         let scalar_bound =
           match quantifier.quantifier_binder.typ with
-          | Sst.Int | Sst.Bool ->
+          | Sst.Int | Sst.Mathematical_int | Sst.Bool ->
               quantifier.quantifier_binder.id :: scalar_bound
           | Sst.Unit | Sst.Tuple _ | Sst.Aggregate _ | Sst.Parameter _
           | Sst.Application _ ->
@@ -6306,7 +6577,8 @@ let validate_shared_scalar_function ~physical_program types functions
       | Sst.Sequence _ | Sst.If _ | Sst.Match _ | Sst.Direct_call _
       | Sst.Callback_call _ | Sst.Callback_requires _ | Sst.Callback_ensures _
       | Sst.Reveal _ | Sst.Reveal_with_fuel _ | Sst.Use_type_invariant _
-      | Sst.Proof_region _ | Sst.Optional_absent | Sst.Optional_present _
+      | Sst.Lift_runtime_int _ | Sst.Proof_region _ | Sst.Optional_absent
+      | Sst.Optional_present _
       | Sst.Optional_forward _ | Sst.Symbolic_application _ ->
         malformed expression.span
           "expression is outside the bounded shared-scalar grammar"
@@ -6378,7 +6650,8 @@ let validate_shared_scalar_function ~physical_program types functions
             | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ ->
                 let* () = pure ~allow_old:false aliases scalar_bound value in
                 runtime aliases (binding.id :: scalar_bound) epoch writes body
-              | Sst.Aggregate _ | Sst.Parameter _ | Sst.Application _ ->
+            | Sst.Mathematical_int | Sst.Aggregate _ | Sst.Parameter _
+            | Sst.Application _ ->
                 malformed value.span
                   "shared-scalar aggregate construction or rebinding is not \
                    admitted")
@@ -6546,7 +6819,7 @@ let finite_rank_domain_for_type ~program ~span ~types rank_domains type_id =
         with
         | Ok domain -> Some domain
         | Error _ -> None)
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Parameter _ ->
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Parameter _ ->
         None
     | Sst.Tuple components ->
         List.fold_left
@@ -6776,7 +7049,9 @@ module Semantic_environment = struct
               (Parametric_adt.type_constructor descriptor)
             = 0
             && List.equal Parametric_type.equal candidate_arguments arguments
-        | Some (Unit | Bool | Int | Tuple _ | Aggregate _ | Parameter _)
+        | Some
+            (Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _
+            | Parameter _)
         | None ->
             false)
       rank_domains
@@ -6795,7 +7070,7 @@ module Semantic_environment = struct
               Recursive_decrease decrease.clause.span
               else
                 match decrease.clause.expression.typ with
-              | Sst.Int -> Direct_integer_decrease decrease
+              | Sst.Int | Sst.Mathematical_int -> Direct_integer_decrease decrease
               | Sst.Aggregate type_id -> (
                   match rank_domain_for_type !rank_domains type_id with
                   | Some domain ->
@@ -7102,7 +7377,9 @@ module Semantic_environment = struct
       | Sst.Aggregate type_id -> finite_rank_domain_for_type ~program:physical_program ~span:pattern.span ~types !rank_domains type_id
       | Sst.Application _ as application -> (
           match Parametric_rank_domain_private.derive_application ~program:physical_program ~span:pattern.span application with Ok domain -> Some domain | Error _ -> None)
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ -> None
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Parameter _ ->
+          None
     in
     Option.iter (fun domain -> rank_domains := domain :: !rank_domains) rank_domain;
     rank_domain
@@ -7202,7 +7479,8 @@ module Semantic_environment = struct
                             (match definition.result_type with
                             | Sst.Aggregate type_id -> Some type_id
                             | Sst.Application _ -> None
-                            | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _
+                            | Sst.Unit | Sst.Bool | Sst.Int
+                            | Sst.Mathematical_int | Sst.Tuple _
                             | Sst.Parameter _ ->
                                 assert false);
                         }
@@ -7360,7 +7638,8 @@ let find_logical_type validated typ =
   match typ with
   | Sst.Aggregate type_id ->
       Option.bind (find_type validated type_id) type_logical_type
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+    | Sst.Parameter _
     | Sst.Application _ ->
       Option.map
         (fun logical_type ->
@@ -7770,7 +8049,8 @@ let validate_internal ?imports ?external_specifications (program : Sst.program) 
                       | Error error ->
                           fail ~function_id:definition.function_id error.span
                             (Forged_rank_domain error.detail))
-                  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _
+                  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                  | Sst.Tuple _
                   | Sst.Aggregate _ | Sst.Parameter _ ->
                       Ok ()))
   in
@@ -7861,7 +8141,8 @@ let validate_internal ?imports ?external_specifications (program : Sst.program) 
                             invalid
                                 "finite formal must be an exact local ranked \
                                  deeply immutable aggregate")
-                      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _
+                      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                      | Sst.Tuple _
                       | Sst.Parameter _ ->
                         invalid
                             "finite formal must be an exact local ranked \

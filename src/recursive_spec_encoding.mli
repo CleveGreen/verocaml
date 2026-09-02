@@ -36,6 +36,8 @@ type nullary_branch_retry_counters : value mod contended portable = {
 }
 
 val prepare : Sst.program -> (prepared, error) result
+val prepare_validated :
+  Sst_validation.validated_program -> (prepared, error) result
 val has_definitions : prepared -> bool
 val termination_obligation_count : prepared -> int
 val verify :

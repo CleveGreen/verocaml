@@ -17,6 +17,7 @@ val package_root : t -> string
 val binary_root : t -> string
 val dune_path : t -> string
 val tool_path : t -> string
+val ocaml_path : t -> string
 val library_set_digest : t -> string
 val library_names : t -> string list
 

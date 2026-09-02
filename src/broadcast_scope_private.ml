@@ -2,6 +2,7 @@ type declaration_kind = Proved | Trusted
 
 type declaration = {
   declaration_id : string;
+  compiler_uid : string;
   function_id : Sst.function_id;
   kind : declaration_kind;
   declaration_span : Diagnostic.span;
@@ -9,10 +10,17 @@ type declaration = {
   preverified : bool;
 }
 
-type target = { target_id : string; target_group : bool }
+type target = {
+  target_id : string;
+  target_group : bool;
+  target_path : string;
+  target_uid : string;
+  target_interface_uid : string option;
+}
 
 type group = {
   group_id : string;
+  compiler_uid : string;
   group_name : string;
   targets : target list;
   span : Diagnostic.span;
@@ -277,16 +285,28 @@ let unique_by id values =
   loop [] values
 
 let validate_targets declarations groups targets =
-  let declaration id =
-    List.exists (fun value -> String.equal value.declaration_id id) declarations
-  and group id =
-    List.exists (fun value -> String.equal value.group_id id) groups
+  let declaration target =
+    List.exists
+      (fun value ->
+        String.equal value.declaration_id target.target_id
+        &&
+        (String.equal value.compiler_uid "<validation>"
+        || String.equal value.compiler_uid target.target_uid))
+      declarations
+  and group target =
+    List.exists
+      (fun value ->
+        String.equal value.group_id target.target_id
+        &&
+        (String.equal value.compiler_uid "<validation>"
+        || String.equal value.compiler_uid target.target_uid))
+      groups
   in
   match
     List.find_opt
       (fun target ->
-        if target.target_group then not (group target.target_id)
-        else not (declaration target.target_id))
+        if target.target_group then not (group target)
+        else not (declaration target))
       targets
   with
   | None -> Ok ()
@@ -336,6 +356,7 @@ let validate_target_graph ~declaration_ids ~groups =
       (fun function_index declaration_id ->
         {
           declaration_id;
+          compiler_uid = "<validation>";
           function_id =
             {
               Sst.function_index;
@@ -353,6 +374,7 @@ let validate_target_graph ~declaration_ids ~groups =
       (fun index (group_id, group_name, targets) ->
         {
           group_id;
+          compiler_uid = "<validation>";
           group_name;
           targets;
           span =
@@ -384,7 +406,14 @@ let find program =
         (Weak.get entry.program 0))
     (live_entries ())
 
-let register ~program ~declarations ~groups ~scopes =
+let register ~program:(program [@delator.skip])
+    ~declarations:
+      (declarations
+        [@delator.field (fun values -> string_of_int (List.length values))])
+    ~groups:(groups
+      [@delator.field (fun values -> string_of_int (List.length values))])
+    ~scopes:(scopes
+      [@delator.field (fun values -> string_of_int (List.length values))]) =
   [%log.debug "register broadcast scope graph"
     ~declarations:(Delator.Field.int (List.length declarations))
     ~groups:(Delator.Field.int (List.length groups))
@@ -392,9 +421,12 @@ let register ~program ~declarations ~groups ~scopes =
   List.iter
     (fun _scope ->
       [%log.trace "register broadcast function scope"
-        ~function_name:
-          (Delator.Field.string _scope.function_id.Sst.function_name)
-        ~function_index:(Delator.Field.int _scope.function_id.function_index)
+        ~correlation:
+          (Delator.Field.string
+             (Digest.to_hex
+                (Digest.string
+                   (_scope.function_id.Sst.function_name ^ ":"
+                  ^ string_of_int _scope.function_id.function_index))))
         ~targets:(Delator.Field.int (List.length _scope.targets))
         ~expressions:(Delator.Field.int (List.length _scope.expressions))])
     scopes;
@@ -435,7 +467,16 @@ let register ~program ~declarations ~groups ~scopes =
              ~some:(fun value -> value != program)
              (Weak.get entry.program 0))
          (live_entries ());
+  [%log.info "completed broadcast scope graph registration"
+    ~stage:(Delator.Field.string "scope-registration")
+    ~declaration_count:(Delator.Field.int (List.length declarations))
+    ~group_count:(Delator.Field.int (List.length groups))
+    ~scope_count:(Delator.Field.int (List.length scopes))
+    ~decision:(Delator.Field.string "accepted")];
   Ok ()
+[@@delator.instrument]
+[@@delator.level debug]
+[@@delator.no_exn_log]
 
 let position_compare left right =
   match Int.compare left.Diagnostic.line right.Diagnostic.line with
@@ -452,7 +493,10 @@ let merge_targets left right =
     (fun targets target ->
       if
         List.exists
-          (fun current -> String.equal current.target_id target.target_id)
+          (fun current ->
+            current.target_group = target.target_group
+            && String.equal current.target_id target.target_id
+            && String.equal current.target_uid target.target_uid)
           targets
       then targets
       else targets @ [ target ])
@@ -503,10 +547,13 @@ let expand entry targets =
     if target_value.target_group then
       match
         List.find_opt
-          (fun group -> String.equal group.group_id target_value.target_id)
+          (fun group ->
+            String.equal group.group_id target_value.target_id
+            && String.equal group.compiler_uid target_value.target_uid)
           entry.groups
       with
-      | None -> Error ("unknown active broadcast group " ^ target_value.target_id)
+      | None ->
+          Error ("unknown active broadcast group " ^ target_value.target_id)
       | Some group ->
           List.fold_left
             (fun result member ->
@@ -517,7 +564,8 @@ let expand entry targets =
       match
         List.find_opt
           (fun declaration ->
-            String.equal declaration.declaration_id target_value.target_id)
+            String.equal declaration.declaration_id target_value.target_id
+            && String.equal declaration.compiler_uid target_value.target_uid)
           entry.declarations
       with
       | None ->
@@ -545,7 +593,8 @@ let expand entry targets =
           String.compare left.declaration.declaration_id
             right.declaration.declaration_id))
 
-let active ~program ~function_id ~span =
+let active ~program:(program [@delator.skip])
+    ~function_id:(function_id [@delator.skip]) ~span:(span [@delator.skip]) =
   match find program with
   | None -> Error "broadcast scope is absent or stale"
   | Some entry -> (
@@ -553,10 +602,23 @@ let active ~program ~function_id ~span =
       [%log.debug "resolve active broadcast scope"
         ~function_name:(Delator.Field.string function_id.Sst.function_name)
         ~function_index:(Delator.Field.int function_id.function_index)
+        ~correlation:
+          (Delator.Field.string
+             (Digest.to_hex
+                (Digest.string
+                   (function_id.Sst.function_name ^ ":"
+                  ^ string_of_int function_id.function_index))))
         ~targets:(Delator.Field.int (List.length targets))];
       let* selections = expand entry targets in
       [%log.trace "expanded active broadcast scope"
         ~function_name:(Delator.Field.string function_id.function_name)
+        ~function_index:(Delator.Field.int function_id.function_index)
+        ~correlation:
+          (Delator.Field.string
+             (Digest.to_hex
+                (Digest.string
+                   (function_id.Sst.function_name ^ ":"
+                  ^ string_of_int function_id.function_index))))
         ~selections:(Delator.Field.int (List.length selections))];
       match
         List.find_opt
@@ -571,6 +633,9 @@ let active ~program ~function_id ~span =
           Error
             ("active broadcast lemma is not verified: "
            ^ pending.declaration.declaration_id))
+[@@delator.instrument]
+[@@delator.level trace]
+[@@delator.no_exn_log]
 
 let proved_prerequisites ~program function_id =
   match find program with
@@ -665,13 +730,22 @@ let counters selections =
     }
     selections
 
-let destroy program =
+let destroy (program [@delator.skip]) =
+  let[@log_value.trace] _before = List.length (live_entries ()) in
   entries :=
     List.filter
       (fun entry ->
         Option.fold ~none:false
           ~some:(fun value -> value != program)
           (Weak.get entry.program 0))
-      (live_entries ())
+      (live_entries ());
+  [%log.trace "pruned broadcast scope lifecycle entries"
+    ~stage:(Delator.Field.string "scope-cleanup")
+    ~before_count:(Delator.Field.int (_before [@log_value.trace]))
+    ~after_count:(Delator.Field.int (List.length !entries))
+    ~decision:(Delator.Field.string "released")]
+[@@delator.instrument]
+[@@delator.level trace]
+[@@delator.no_exn_log]
 
 let registered program = Option.is_some (find program)

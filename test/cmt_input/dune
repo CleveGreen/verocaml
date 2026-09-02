@@ -72,15 +72,6 @@
  (action
   (run %{validator} %{report} %{archive})))
 
-(cram
- (alias cmt-input-specialist-check)
- (runtest_alias false)
- (deps
-  (glob_files fixtures/*)
-  prepared-implementation.cmt
-  prepared-interface.cmti
-  cmt_input_tool.exe))
-
 (alias
  (name cmt-input-check)
  (deps

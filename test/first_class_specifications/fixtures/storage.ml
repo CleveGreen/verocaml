@@ -1,4 +1,6 @@
-let increment (value : int) : int = value + 1 [@@verocaml.spec]
+open Vstd
+
+let increment (value : int) : Int.t = value + 1 [@@verocaml.spec]
 
 let use (value : int) : int =
   [%verocaml.assert

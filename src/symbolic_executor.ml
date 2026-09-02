@@ -777,6 +777,7 @@ let arithmetic_operation = function
   | Sst.Add -> Vir.Add
   | Sst.Subtract -> Vir.Subtract
   | Sst.Negate -> Vir.Negate
+  | Sst.Multiply -> Vir.Multiply
   | Sst.Multiply_constant value -> Vir.Multiply_constant value
   | Sst.Successor -> Vir.Successor
   | Sst.Predecessor -> Vir.Predecessor
@@ -797,6 +798,8 @@ let arithmetic_term function_name span operation arguments =
   | Sst.Subtract, [ left; right ] ->
       Ok (Vir.Integer_subtract (left, right))
   | Sst.Negate, [ value ] -> Ok (Vir.Integer_negate value)
+  | Sst.Multiply, [ left; right ] ->
+      Ok (Vir.Integer_multiply (left, right))
   | Sst.Multiply_constant constant, [ value ] ->
       Ok (Vir.Integer_multiply_constant (constant, value))
   | Sst.Successor, [ value ] ->
@@ -4240,6 +4243,7 @@ let validate_with_raw_termination (program : Sst.program) =
 let legacy_parametric_rejection (definition : Sst.function_definition) =
   let rec legacy_type = function
     | Sst.Unit | Sst.Bool | Sst.Int | Sst.Aggregate _ -> true
+    | Sst.Mathematical_int -> false
     | Sst.Tuple components ->
         List.for_all (fun (_, typ) -> legacy_type typ) components
     | Sst.Parameter _ | Sst.Application _ -> false
@@ -4264,6 +4268,62 @@ let legacy_parametric_rejection (definition : Sst.function_definition) =
       }
   else None
 
+let rec expression_has_mathematical_int (expression : Sst.expression) =
+  Parametric_type.contains_mathematical_int expression.typ
+  ||
+  match expression.expression_desc with
+  | Sst.Lift_runtime_int _ -> true
+  | _ ->
+      List.exists expression_has_mathematical_int
+        (Sst_callback_private.expression_children expression)
+
+let definition_has_mathematical_int (definition : Sst.function_definition) =
+  let pattern_has_mathematical_int (pattern : Sst.pattern) =
+    Parametric_type.contains_mathematical_int pattern.typ
+  in
+  let parameter_has_mathematical_int = function
+    | Sst.Value_parameter parameter ->
+        pattern_has_mathematical_int parameter.pattern
+        || Option.fold ~none:false
+             ~some:(fun default ->
+               pattern_has_mathematical_int default.Sst.optional_pattern
+               || expression_has_mathematical_int default.optional_expression)
+             parameter.optional_default
+    | Sst.Callback_parameter formal ->
+        List.exists Parametric_type.contains_mathematical_int
+          (Callback_shape_private.endpoint_types formal.binding.callback_shape)
+        || Parametric_type.contains_mathematical_int
+             (Callback_shape_private.result formal.binding.callback_shape)
+  in
+  let clauses =
+    List.map
+      (fun (clause : Sst.predicate_clause) -> clause.predicate.expression)
+      definition.contracts.requires
+    @ List.map
+        (fun (clause : Sst.predicate_clause) -> clause.predicate.expression)
+        definition.contracts.decreases
+    @ List.map
+        (fun (clause : Sst.predicate_clause) -> clause.predicate.expression)
+        definition.contracts.assertions
+    @ List.map
+        (fun (clause : Sst.ensures_clause) -> clause.predicate.expression)
+        definition.contracts.ensures
+  in
+  let body =
+    match definition.body with
+    | Sst.Checked_exec { body; _ } | Sst.Spec_definition body ->
+        [ body.expression ]
+    | Sst.Recursive_spec_definition { body; _ }
+    | Sst.Proof_body { body; _ } ->
+        [ body.expression ]
+    | Sst.External_specification _ | Sst.Trusted_external_spec_target _
+    | Sst.Trusted_external_body _ | Sst.Symbolic_declaration _ ->
+        []
+  in
+  Parametric_type.contains_mathematical_int definition.result_type
+  || List.exists parameter_has_mathematical_int definition.parameters
+  || List.exists expression_has_mathematical_int (clauses @ body)
+
 let error_of_private (error : Symbolic_executor_private.error) =
   let unsupported =
     match error.unsupported with
@@ -4284,9 +4344,23 @@ let error_of_private (error : Symbolic_executor_private.error) =
   }
 
 let lower_function (definition : Sst.function_definition) =
-  if Quantifier_validation_private.definition_has_quantifier definition then
+  if
+    Quantifier_validation_private.definition_has_quantifier definition
+    || definition_has_mathematical_int definition
+  then
+    ( [%log.debug "routing function through generalized symbolic executor"
+        ~function_name:
+          (Delator.Field.string definition.function_id.function_name)
+        ~stage:(Delator.Field.string "symbolic-executor-routing")
+        ~has_quantifier:
+          (Delator.Field.bool
+             (Quantifier_validation_private.definition_has_quantifier
+                definition))
+        ~has_mathematical_int:
+          (Delator.Field.bool (definition_has_mathematical_int definition))
+        ~decision:(Delator.Field.string "generalized")];
     Symbolic_executor_private.lower_function definition
-    |> Result.map_error error_of_private
+    |> Result.map_error error_of_private )
   else
   match legacy_parametric_rejection definition with
   | Some error -> Error error
@@ -4333,9 +4407,38 @@ let lower_function (definition : Sst.function_definition) =
     termination summary
 
 let lower_program (program : Sst.program) =
-  if Quantifier_validation_private.program_has_quantifier program then
+  let has_mathematical_int =
+    List.exists definition_has_mathematical_int program.functions
+    || List.exists
+         (fun (definition : Sst.type_definition) ->
+           let fields =
+             match definition.type_kind with
+             | Sst.Record_definition fields -> fields
+             | Sst.Variant_definition constructors ->
+                 List.concat_map
+                   (fun constructor -> constructor.Sst.constructor_fields)
+                   constructors
+           in
+           List.exists
+             (fun field ->
+               Parametric_type.contains_mathematical_int field.Sst.field_type)
+             fields)
+         program.types
+  in
+  if
+    Quantifier_validation_private.program_has_quantifier program
+    || has_mathematical_int
+  then
+    ( [%log.debug "routing program through generalized symbolic executor"
+        ~stage:(Delator.Field.string "symbolic-executor-routing")
+        ~function_count:(Delator.Field.int (List.length program.functions))
+        ~has_quantifier:
+          (Delator.Field.bool
+             (Quantifier_validation_private.program_has_quantifier program))
+        ~has_mathematical_int:(Delator.Field.bool has_mathematical_int)
+        ~decision:(Delator.Field.string "generalized")];
     Symbolic_executor_private.lower_program program
-    |> Result.map_error error_of_private
+    |> Result.map_error error_of_private )
   else
   match List.find_map legacy_parametric_rejection program.functions with
   | Some _ ->

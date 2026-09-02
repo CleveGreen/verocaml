@@ -19,7 +19,7 @@ let classify (sample : sample) : int =
 let pair (sample : sample) : sample * int = (sample, sample.amount)
 [@@verocaml.spec]
 
-let sum_pair (pair : sample * int) : int =
+let sum_pair (pair : sample * int) : Vstd.Int.t =
   let sample, extra = pair in
   sample.amount + extra
 [@@verocaml.spec]

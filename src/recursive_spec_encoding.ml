@@ -50,6 +50,8 @@ let same_function_id =
   Recursive_spec_verification_private.same_function_id
 let prepare =
   Recursive_spec_verification_private.prepare
+let prepare_validated =
+  Recursive_spec_verification_private.prepare_validated
 let has_definitions =
   Recursive_spec_verification_private.has_definitions
 let termination_obligation_count =
@@ -165,7 +167,8 @@ let aggregate_closure definition =
                 (definition :: seen) (fields definition.type_kind))
     | Sst.Tuple components ->
         List.fold_left (fun seen (_, typ) -> visit seen typ) seen components
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Parameter _ | Sst.Application _ ->
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Parameter _
+    | Sst.Application _ ->
         seen
   in
   let seeds =
@@ -309,6 +312,7 @@ let type_suffix typ =
   |> fun digest -> String.sub digest 0 12
 let legacy_range_suffix parametric_adts = function
   | Sst.Int -> "int"
+  | Sst.Mathematical_int -> "Int"
   | Sst.Bool -> "bool"
   | Sst.Aggregate type_id ->
       Printf.sprintf "agg%d_%s" type_id.type_index type_id.type_name
@@ -331,7 +335,8 @@ let tag_function symbols owner_typ (type_id : Sst.type_id) span =
     | Sst.Application _ ->
         Printf.sprintf "verocaml_tag_t%d_%s_%s" type_id.type_index
           type_id.type_name (type_suffix owner_typ)
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ ->
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+    | Sst.Parameter _ ->
         assert false
   in
   cached_function symbols name [ sort symbols owner_typ ] Logic_ir.Int span
@@ -369,7 +374,8 @@ let selector_function symbols owner_typ (constructor : Sst.constructor_id)
               constructor.constructor_type.type_name
               constructor.constructor_index constructor.constructor_name index
               index (type_suffix typ)
-        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ ->
+        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+        | Sst.Parameter _ ->
             assert false
       in
       cached_function symbols name [ sort symbols owner_typ ] (sort symbols typ)
@@ -401,7 +407,8 @@ let constructor_function symbols (constructor : Sst.constructor_id)
               constructor.constructor_type.type_index
               constructor.constructor_type.type_name (type_suffix result_type)
               constructor.constructor_index constructor.constructor_name
-        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ ->
+        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+        | Sst.Parameter _ ->
             assert false
       in
       cached_function symbols name (List.map (sort symbols) argument_types)
@@ -416,7 +423,8 @@ let record_constructor_function symbols result_type
     | Sst.Application _ ->
         Printf.sprintf "verocaml_record_ctor_t%d_%s_%s" record_type.type_index
           record_type.type_name (type_suffix result_type)
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ ->
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+    | Sst.Parameter _ ->
         assert false
   in
   cached_function symbols name (List.map (sort symbols) field_types)
@@ -438,7 +446,8 @@ let record_selector_function symbols owner_typ (record_type : Sst.type_id)
           record_type.type_index (type_suffix owner_typ) record_type.type_index
           record_type.type_name field.field_index field.field_name
           (type_suffix typ)
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ ->
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+    | Sst.Parameter _ ->
         assert false
   in
   cached_function symbols name [ sort symbols owner_typ ] (sort symbols typ) span
@@ -481,7 +490,8 @@ let rec translate_pattern symbols environment scrutinee (pattern : Sst.pattern) 
                   (Logic_ir.equal ~span:pattern.span tag
                      (Logic_ir.int ~span:pattern.span
                         (Z.of_int constructor.constructor_index)))
-            | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ ->
+            | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+            | Sst.Tuple _ | Sst.Parameter _ ->
                 assert false)
       in
       let rec loop index environment conditions = function
@@ -624,6 +634,13 @@ let rec translate_body symbols environment fuel
   | Sst.Int_constant value -> Ok (Logic_ir.int ~span:expression.span value)
   | Sst.Bool_constant value -> Ok (Logic_ir.bool ~span:expression.span value)
   | Sst.Variable { binding; _ } -> lookup symbols environment binding
+  | Sst.Lift_runtime_int operand ->
+      [%log.trace "translate recursive-spec runtime-integer lift"
+        ~stage:(Delator.Field.string "recursive-totality-translation")
+        ~source_type:(Delator.Field.string "int")
+        ~target_type:(Delator.Field.string "mathematical-int")
+        ~decision:(Delator.Field.string "erase-representation-preserving-lift")];
+      recurse operand
   | Sst.Checked_arithmetic (operation, operands) -> (
       match (operation, operands) with
       | Sst.Add, [ left; right ] -> binary Logic_ir.add left right
@@ -631,6 +648,8 @@ let rec translate_body symbols environment fuel
       | Sst.Negate, [ value ] ->
           let* value = recurse value in
           of_logic (Logic_ir.negate ~span:expression.span value)
+      | Sst.Multiply, [ left; right ] ->
+          binary Logic_ir.multiply left right
       | Sst.Multiply_constant coefficient, [ value ] ->
           let* value = recurse value in
           of_logic (Logic_ir.scale ~span:expression.span coefficient value)
@@ -752,6 +771,39 @@ let rec translate_body symbols environment fuel
         (fun environment expression ->
           translate_body symbols environment fuel expression)
         symbols environment expression scrutinee cases
+  | Sst.Symbolic_application application ->
+      [%log.debug
+        "translating authenticated symbolic application in recursive totality"
+        ~stage:(Delator.Field.string "recursive-totality-translation")
+        ~route:(Delator.Field.string "recursive")
+        ~correlation:
+          (Delator.Field.string
+             (Symbolic_application_private.identity_digest application))
+        ~type_arity:
+          (Delator.Field.int
+             (List.length
+                (Symbolic_application_private.type_arguments application)))
+        ~term_arity:
+          (Delator.Field.int
+             (List.length
+                (Symbolic_application_private.arguments application)))];
+      let source_arguments = Symbolic_application_private.arguments application in
+      let* arguments =
+        List.fold_left
+          (fun result argument ->
+            let* arguments = result in
+            let* argument = recurse argument in
+            Ok (argument :: arguments))
+          (Ok []) source_arguments
+        |> Result.map List.rev
+      in
+      let* function_ =
+        cached_function symbols
+          (Symbolic_application_private.backend_head application)
+          (List.map (fun argument -> sort symbols argument.Sst.typ) source_arguments)
+          (sort symbols expression.typ) expression.span
+      in
+      apply symbols function_ arguments
   | Sst.Direct_call _
     when Spec_function_sst_private.application expression <> None ->
       let application =
@@ -760,7 +812,7 @@ let rec translate_body symbols environment fuel
       let* function_term = recurse application.application_function in
       let* argument_term = recurse application.application_argument in
       let* name =
-        Spec_function_logic_private.application_symbol_name
+        Spec_function_logic_private.application_backend_head
           ~arrow:application.application_arrow
           ~result_type:application.application_result ~span:expression.span
         |> Result.map_error (fun message ->
@@ -1075,6 +1127,33 @@ let validate_obligation_record_metadata ~(program : Sst.program)
       }
       :: !reached
   in
+  let recursive_result_type callee type_arguments call_span =
+    match
+      List.find_opt
+        (fun (definition : Sst.function_definition) ->
+          same_vir_function definition.function_id callee)
+        program.functions
+    with
+    | None ->
+        fail call_span
+          "recursive specification result type has no exact source definition"
+    | Some definition ->
+        Parametric_lowering_private.instantiate
+          ~binders:definition.type_binders ~arguments:type_arguments
+          definition.result_type
+        |> Result.map_error (fun message -> { span = call_span; message })
+        |> Result.map (fun result_type ->
+               [%log.trace "resolved recursive specification result type"
+                 ~stage:
+                   (Delator.Field.string "recursive-specification-encoding")
+                 ~function_name:
+                   (Delator.Field.string callee.function_name)
+                 ~result_type:
+                   (Delator.Field.string
+                      (Parametric_type.to_string result_type))
+                 ~decision:(Delator.Field.string "accepted")];
+               result_type)
+  in
   let record_definition record_type =
     match
       List.find_opt
@@ -1184,7 +1263,8 @@ let validate_obligation_record_metadata ~(program : Sst.program)
         argument value)
       (Ok ()) values
   and integer = function
-    | Vir.Integer_add (left, right) | Vir.Integer_subtract (left, right) ->
+    | Vir.Integer_add (left, right) | Vir.Integer_subtract (left, right)
+    | Vir.Integer_multiply (left, right) ->
         let* () = integer left in
         integer right
     | Vir.Integer_negate value
@@ -1201,8 +1281,18 @@ let validate_obligation_record_metadata ~(program : Sst.program)
         aggregate value
     | Vir.Integer_recursive_spec_application
         { callee; type_arguments; arguments = values; span = call_span } ->
-        note callee type_arguments values Sst.Int call_span None;
-        arguments values
+        let* result_type =
+          recursive_result_type callee type_arguments call_span
+        in
+        if
+          result_type <> Sst.Int
+          && result_type <> Sst.Mathematical_int
+        then
+          fail call_span
+            "integer recursive specification application has a non-integer result type"
+        else (
+          note callee type_arguments values result_type call_span None;
+          arguments values)
     | Vir.Integer_symbolic_application application ->
         arguments (Symbolic_application_private.arguments application)
     | Vir.Integer_constant _ | Vir.Integer_symbol _ -> Ok ()
@@ -1230,8 +1320,15 @@ let validate_obligation_record_metadata ~(program : Sst.program)
         aggregate right
     | Vir.Boolean_recursive_spec_application
         { callee; type_arguments; arguments = values; span = call_span } ->
-        note callee type_arguments values Sst.Bool call_span None;
-        arguments values
+        let* result_type =
+          recursive_result_type callee type_arguments call_span
+        in
+        if result_type <> Sst.Bool then
+          fail call_span
+            "Boolean recursive specification application has a non-Boolean result type"
+        else (
+          note callee type_arguments values result_type call_span None;
+          arguments values)
     | Vir.Boolean_specification_application { arguments = values; _ } ->
         arguments values
     | Vir.Boolean_symbolic_application application ->
@@ -1371,10 +1468,28 @@ let specialize_definition_view ~program ~definitions ~applications ordinal key =
                application.reached_argument_types expected_arguments
           && Parametric_type.equal application.reached_result_type result_type
         then Ok ()
-        else
+        else (
+          [%log.debug "rejected recursive specification application type"
+            ~stage:(Delator.Field.string "recursive-specification-encoding")
+            ~decision:(Delator.Field.string "rejected")
+            ~reason_class:(Delator.Field.string "exact-domain-range-mismatch")
+            ~expected_arguments:
+              (Delator.Field.string
+                 (String.concat ","
+                    (List.map Parametric_type.to_string expected_arguments)))
+            ~reached_arguments:
+              (Delator.Field.string
+                 (String.concat ","
+                    (List.map Parametric_type.to_string
+                       application.reached_argument_types)))
+            ~expected_result:
+              (Delator.Field.string (Parametric_type.to_string result_type))
+            ~reached_result:
+              (Delator.Field.string
+                 (Parametric_type.to_string application.reached_result_type))];
           fail application.reached_span
             "recursive specification application has an exact domain/range \
-             mismatch")
+             mismatch") )
       (Ok ()) applications
   in
   let stable =
@@ -2125,7 +2240,7 @@ let rec translate_integer environment term =
   | Vir.Integer_symbolic_application application ->
       translate_symbolic_application environment Logic_ir.Int application
   | Vir.Integer_constant _ | Vir.Integer_symbol _ | Vir.Integer_add _
-  | Vir.Integer_subtract _ | Vir.Integer_negate _
+  | Vir.Integer_subtract _ | Vir.Integer_negate _ | Vir.Integer_multiply _
   | Vir.Integer_multiply_constant _ | Vir.Integer_absolute_value _
   | Vir.Integer_conditional _ | Vir.Integer_recursive_spec_application _ ->
       assert false)
@@ -2407,8 +2522,21 @@ and translate_callback_relation ?(range = Logic_ir.Bool) environment name
     }
     ~name ~range ~arguments ~span:call_span
 and translate_symbolic_application environment range application =
+  [%log.debug "translating authenticated symbolic application"
+    ~correlation:
+      (Delator.Field.string
+         (Symbolic_application_private.identity_digest application))
+    ~route:(Delator.Field.string "recursive")
+    ~type_arity:
+      (Delator.Field.int
+         (List.length
+            (Symbolic_application_private.type_arguments application)))
+    ~term_arity:
+      (Delator.Field.int
+         (List.length
+            (Symbolic_application_private.arguments application)))];
   translate_callback_relation ~range environment
-    (Symbolic_application_private.symbol_name application)
+    (Symbolic_application_private.backend_head application)
     (Symbolic_application_private.arguments application)
     (Symbolic_application_private.span application)
 let translate_boolean_terms environment terms =
@@ -2535,7 +2663,8 @@ let exact_nullary_constructor_metadata verified constructor =
   | Some { constructor_fields = _ :: _; _ } | None -> false
 let rec nullary_scalar_integer_argument = function
   | Vir.Integer_constant _ | Vir.Integer_symbol _ -> true
-  | Vir.Integer_add (left, right) | Vir.Integer_subtract (left, right) ->
+  | Vir.Integer_add (left, right) | Vir.Integer_subtract (left, right)
+  | Vir.Integer_multiply (left, right) ->
       nullary_scalar_integer_argument left
       && nullary_scalar_integer_argument right
   | Vir.Integer_negate value
@@ -2568,8 +2697,8 @@ and nullary_scalar_boolean_argument = function
       nullary_scalar_integer_argument left
       && nullary_scalar_integer_argument right
   | Vir.Parametric_equal (left, right) ->
-      Parametric_logic_private.for_all_conditions
-        nullary_scalar_boolean_argument left right
+      nullary_scalar_parametric_argument left
+      && nullary_scalar_parametric_argument right
   | Vir.Boolean_recursive_spec_application _
   | Vir.Boolean_symbolic_application _
   | Vir.Boolean_specification_application _
@@ -2577,6 +2706,35 @@ and nullary_scalar_boolean_argument = function
   | Vir.Boolean_selector _
   | Vir.Aggregate_equal _
   | Vir.Boolean_invariant_application _ ->
+      false
+and nullary_scalar_parametric_argument term =
+  match term.Vir.parametric_desc with
+  | Vir.Parametric_symbol _ | Vir.Parametric_selector _ -> true
+  | Vir.Parametric_conditional (condition, consequent, alternative) ->
+      nullary_scalar_boolean_argument condition
+      && nullary_scalar_parametric_argument consequent
+      && nullary_scalar_parametric_argument alternative
+  | Vir.Parametric_symbolic_application
+      (_application [@log_value.debug]) ->
+      [%log.debug "abstaining from recursive nullary specialization"
+        ~stage:(Delator.Field.string "recursive-nullary-analysis")
+        ~failure_class:
+          (Delator.Field.string "parametric-symbolic-application")
+        ~decision:(Delator.Field.string "abstain")
+        ~correlation:
+          (Delator.Field.string
+             (Symbolic_application_private.identity_digest
+                (_application [@log_value.debug])))
+        ~type_arity:
+          (Delator.Field.int
+             (List.length
+                (Symbolic_application_private.type_arguments
+                   (_application [@log_value.debug]))))
+        ~term_arity:
+          (Delator.Field.int
+             (List.length
+                (Symbolic_application_private.arguments
+                   (_application [@log_value.debug]))))];
       false
 let nullary_branch_argument_supported = function
   | Vir.Recursive_integer_argument term ->
@@ -2784,7 +2942,8 @@ let nullary_branch_specialization ?solver_controls verified ~activations
                   | Sst.Callback_call _ | Sst.Callback_requires _
                   | Sst.Callback_ensures _ | Sst.Reveal _
                   | Sst.Reveal_with_fuel _ | Sst.Use_type_invariant _
-                  | Sst.Local_assert _ | Sst.Proof_region _ | Sst.Old _
+                  | Sst.Lift_runtime_int _ | Sst.Local_assert _
+                  | Sst.Proof_region _ | Sst.Old _
                   | Sst.Forall _ | Sst.Exists _
                   | Sst.Symbolic_application _ ->
                       abstain ())
@@ -2934,6 +3093,7 @@ let rec ground_sst_expression fuel environment
   let evaluate = ground_sst_expression fuel environment in
   match expression.expression_desc with
   | Sst.Int_constant value -> Some (Ground_integer value)
+  | Sst.Lift_runtime_int operand -> evaluate operand
   | Sst.Bool_constant value -> Some (Ground_boolean value)
   | Sst.Unit_constant -> Some Ground_unit
   | Sst.Variable { binding; _ } -> List.assoc_opt binding.id environment
@@ -3014,6 +3174,7 @@ let rec ground_sst_expression fuel environment
             | Sst.Add, [ left; right ] -> Some (Z.add left right)
             | Sst.Subtract, [ left; right ] -> Some (Z.sub left right)
             | Sst.Negate, [ value ] -> Some (Z.neg value)
+            | Sst.Multiply, [ left; right ] -> Some (Z.mul left right)
             | Sst.Multiply_constant constant, [ value ] ->
                 Some (Z.mul constant value)
             | Sst.Successor, [ value ] -> Some (Z.succ value)
@@ -3160,6 +3321,12 @@ let rec ground_vir_integer context = function
   | Vir.Integer_negate value ->
       Option.bind (ground_vir_integer context value) (fun value ->
           checked_integer (Z.neg value))
+  | Vir.Integer_multiply (left, right) -> (
+      match
+        (ground_vir_integer context left, ground_vir_integer context right)
+      with
+      | Some left, Some right -> checked_integer (Z.mul left right)
+      | None, _ | _, None -> None)
   | Vir.Integer_multiply_constant (constant, value) ->
       Option.bind (ground_vir_integer context value) (fun value ->
           checked_integer (Z.mul constant value))

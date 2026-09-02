@@ -2,10 +2,10 @@ type node = Empty | Node of int * node
 
 type stack = {
   top : node;
-  length : int;
+  length : Vstd.Int.t;
 }
 
-let rec spec_repeat (value : int) (n : int) (stack : stack) : stack =
+let rec spec_repeat (value : int) (n : Vstd.Int.t) (stack : stack) : stack =
   [%verocaml.decreases n];
   if n <= 0 then stack
   else
@@ -17,6 +17,7 @@ let rec spec_repeat (value : int) (n : int) (stack : stack) : stack =
 let equality_route (value : int) (n : int) (stack : stack [@finite]) : unit =
   [%verocaml.requires n >= 0];
   [%verocaml.ensures fun _result ->
-    let expected = spec_repeat value n stack in
+  let expected = spec_repeat value n stack in
     expected = expected];
   ()
+[@@verocaml.proof]

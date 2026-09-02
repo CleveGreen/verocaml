@@ -62,19 +62,6 @@
  (action
   (run %{validator} %{report} %{archive})))
 
-(cram
- (alias private-receipt-specialist-check)
- (runtest_alias false)
- (deps
-  (glob_files fixtures/*.ml)
-  check_private_visibility.exe
-  private_receipt_tool.exe
-  ../../verocaml.install
-  ../../src/verocaml.exe
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
-
 (alias
  (name private-receipt-check)
  (deps

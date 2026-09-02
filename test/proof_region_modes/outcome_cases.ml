@@ -23,7 +23,7 @@ let require_kinds function_name kinds expectation =
 
 let source_case ~name ~module_name ~source expectation =
   let input =
-    Fixture.single_source ~module_name ~source ~libraries:[ "verocaml.ghost" ]
+    Fixture.single_source ~module_name ~source ~libraries:[ "verocaml.vstd"; "verocaml.ghost" ]
   in
   Suite.case ~name ~expectation (run_fixture input)
 
@@ -75,7 +75,7 @@ let empty_stack (_ : unit) : stack =
 |vero}
 
 let recursive_control_source =
-  {vero|let rec recurse (x : int) (y : int) : int =
+  {vero|let rec recurse (x : Vstd.Int.t) (y : Vstd.Int.t) : Vstd.Int.t =
   [%verocaml.decreases y];
   if y <= 0 then x else recurse (x + 1) (y - 1)
 [@@verocaml.spec] [@@verocaml.revealed]

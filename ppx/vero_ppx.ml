@@ -40,27 +40,30 @@ let transform_interface
 let mapper (arguments [@delator.skip]) =
   configure_observability ();
   let keep_ghost = keep_ghost_of_arguments arguments in
-  let mapper = Vero_ppx_rewriter.make arguments in
-  let root_structure = ref true in
-  let root_signature = ref true in
+  let implementation_mapper =
+    lazy
+      (Vero_ppx_rewriter.make ~entrypoint:Vero_ppx_rewriter.Implementation
+         arguments)
+  in
+  let interface_mapper =
+    lazy
+      (Vero_ppx_rewriter.make ~entrypoint:Vero_ppx_rewriter.Interface
+         arguments)
+  in
   {
-    mapper with
+    Ast_mapper.default_mapper with
     Ast_mapper.structure =
-      (fun self structure ->
-        if !root_structure then (
-          root_structure := false;
-          transform_implementation ~keep_ghost
-            (mapper.Ast_mapper.structure self)
-            structure)
-        else mapper.Ast_mapper.structure self structure);
+      (fun _self structure ->
+        let mapper = Lazy.force implementation_mapper in
+        transform_implementation ~keep_ghost
+          (mapper.Ast_mapper.structure mapper)
+          structure);
     signature =
-      (fun self signature ->
-        if !root_signature then (
-          root_signature := false;
-          transform_interface ~keep_ghost
-            (mapper.Ast_mapper.signature self)
-            signature)
-        else mapper.Ast_mapper.signature self signature);
+      (fun _self signature ->
+        let mapper = Lazy.force interface_mapper in
+        transform_interface ~keep_ghost
+          (mapper.Ast_mapper.signature mapper)
+          signature);
   }
 [@@delator.instrument] [@@delator.level debug]
 

@@ -1,12 +1,52 @@
-(cram
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
  (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries outcome_test_support verocaml_core))
+
+(rule
+ (targets
+  user-diagnostics-outcome-cases.result-report
+  user-diagnostics-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
   (glob_files fixtures/*.ml)
-  ../../src/verocaml.exe
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   user-diagnostics-outcome-cases.result-report
+   user-diagnostics-outcome-cases.failure-archive)))
+
+(rule
+ (alias user-diagnostics-outcome-check)
+ (deps
+  (:report user-diagnostics-outcome-cases.result-report)
+  (:archive user-diagnostics-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
 
 (alias
  (name user-diagnostics-check)
  (deps
-  (alias runtest)))
+  (alias user-diagnostics-outcome-check)))
+
+(alias
+ (name runtest)
+ (deps
+  (alias user-diagnostics-outcome-check)))

@@ -38,5 +38,6 @@ val classify :
   resolved_path:string ->
   binding_uid:string ->
   definition:Sst.function_definition ->
+  result_mode:Sst.instance_mode ->
   model:model option ->
   (classification, string) result

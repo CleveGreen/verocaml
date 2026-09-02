@@ -47,7 +47,9 @@ let vir_aggregate_type_of_sst descriptors = function
                 ^ String.concat "," (List.map Parametric_type.to_string arguments)
                 ^ ">";
               aggregate_type_arguments = arguments })
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ -> None
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Parameter _ ->
+      None
 
 let selector_domain aggregate selector =
   { selector with Vir.selector_domain = aggregate.Vir.aggregate_type }
@@ -89,9 +91,18 @@ let argument_selector (constructor : Sst.constructor_id) index path
     selector_path = path;
   }
 
+let rec requires_parametric_selection = function
+  | Sst.Parameter _ | Sst.Application _ -> true
+  | Sst.Tuple components ->
+      List.exists
+        (fun (_, component) -> requires_parametric_selection component)
+        components
+  | Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Aggregate _ ->
+      false
+
 let rec selected_value_without_state aggregate make_selector path = function
   | Sst.Unit -> Unit_value
-  | Sst.Int ->
+  | Sst.Int | Sst.Mathematical_int ->
       Integer_value
         (Vir.Integer_selector (make_selector path Vir.Integer, aggregate))
   | Sst.Bool ->
@@ -119,7 +130,7 @@ let rec selected_value_without_state aggregate make_selector path = function
 let rec selected_parametric_value_without_state ~aggregate_type aggregate
     make_selector path = function
   | Sst.Unit -> Unit_value
-  | Sst.Int ->
+  | Sst.Int | Sst.Mathematical_int ->
       Integer_value
         (Vir.Integer_selector (make_selector path Vir.Integer, aggregate))
   | Sst.Bool ->
@@ -168,12 +179,22 @@ let rec selected_parametric_value_without_state ~aggregate_type aggregate
                make_selector (path @ [ index ]) typ)
            components)
 
-let rec ranges_of_value = function
-  | Integer_value term -> Vir.integer_range term
-  | Tuple_value values -> List.concat_map ranges_of_value values
-  | Unit_value | Boolean_value _ | Aggregate_value _ | Parametric_value _
-  | Function_value _ ->
+let rec ranges_of_value typ value =
+  match (typ, value) with
+  | Sst.Int, Integer_value term -> Vir.integer_range term
+  | Sst.Mathematical_int, Integer_value _ -> []
+  | Sst.Tuple components, Tuple_value values
+    when List.length components = List.length values ->
+      List.map2
+        (fun (_, typ) value -> ranges_of_value typ value)
+        components values
+      |> List.concat
+  | ( Sst.Unit | Sst.Bool | Sst.Aggregate _ | Sst.Parameter _
+    | Sst.Application _ ),
+    ( Unit_value | Boolean_value _ | Aggregate_value _ | Parametric_value _
+    | Function_value _ ) ->
       []
+  | _, _ -> []
 
 let value_of_recursive_argument = function
   | Vir.Recursive_integer_argument term -> Integer_value term
@@ -411,7 +432,8 @@ let scalar_variant_equality descriptors typ (left : Vir.aggregate_term)
         Some (conjunction (tag_equality :: List.map constructor_law layout)))
     | None, _
     | Some _,
-      (Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Aggregate _
+      (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Aggregate _
       | Sst.Parameter _) ->
         None
 
@@ -419,6 +441,7 @@ let written_constructor (expression : Sst.expression) =
   match expression.expression_desc with
   | Sst.Constructor_value { constructor; _ } -> Some constructor
   | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
+  | Sst.Lift_runtime_int _
   | Sst.Optional_absent | Sst.Optional_present _ | Sst.Optional_forward _
   | Sst.Variable _ | Sst.Tuple_value _ | Sst.Record_value _ | Sst.Field_read _
   | Sst.Field_write _ | Sst.Shared_scalar_field_write _
@@ -610,8 +633,8 @@ let constructors_of_field type_definitions owner field =
   | Some
       {
         field_type =
-          (Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
-          | Sst.Application _);
+          (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+          | Sst.Parameter _ | Sst.Application _);
         _;
       }
   | None ->
@@ -708,8 +731,8 @@ let owned_aggregate_at_path type_definitions assumptions root steps =
           | Some
               {
                 field_type =
-                  (Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _
-                  | Sst.Parameter _ | Sst.Application _);
+                  (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                  | Sst.Tuple _ | Sst.Parameter _ | Sst.Application _);
                 _;
               }
           | None ->
@@ -758,7 +781,8 @@ let owned_scalar_aggregate_root_is_flat (aggregate : Vir.aggregate_term) =
 
 let rec owned_scalar_integer_is_flat = function
   | Vir.Integer_constant _ | Vir.Integer_symbol _ -> true
-  | Vir.Integer_add (left, right) | Vir.Integer_subtract (left, right) ->
+  | Vir.Integer_add (left, right) | Vir.Integer_subtract (left, right)
+  | Vir.Integer_multiply (left, right) ->
       owned_scalar_integer_is_flat left && owned_scalar_integer_is_flat right
   | Vir.Integer_negate operand | Vir.Integer_absolute_value operand
   | Vir.Integer_multiply_constant (_, operand) ->

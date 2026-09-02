@@ -37,17 +37,17 @@
     "delator-source": {
       "flake": false,
       "locked": {
-        "lastModified": 1788072376,
-        "narHash": "sha256-3BdjwLlxXY7xR1Pq0dpR/RkEQWQZUtnAyjZCNv6cCgk=",
+        "lastModified": 1788308979,
+        "narHash": "sha256-3zcHmVTTerdtM2Lq1SL2bbBgC01kJ8pVlsoXkZ40Vq4=",
         "owner": "CleveGreen",
         "repo": "delator",
-        "rev": "c6d9de5092eabbcb5711f4d5b7b1231f509294e8",
+        "rev": "a38be199a04cd934d51e51b7b2b96b3ece556aed",
         "type": "github"
       },
       "original": {
         "owner": "CleveGreen",
         "repo": "delator",
-        "rev": "c6d9de5092eabbcb5711f4d5b7b1231f509294e8",
+        "rev": "a38be199a04cd934d51e51b7b2b96b3ece556aed",
         "type": "github"
       }
     },

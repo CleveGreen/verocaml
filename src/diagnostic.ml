@@ -31,6 +31,7 @@ type unsupported_construct =
   | Partial_function_parameter
   | Mutual_recursion
   | Unsupported_generic_use
+  | Polymorphic_function
   | Higher_order_function
   | Higher_order_call
   | Unknown_or_external_call
@@ -41,7 +42,6 @@ type unsupported_construct =
   | Object
   | First_class_module
   | Concurrency
-  | Nonlinear_multiplication
   | Structural_aggregate_equality
   | Wrapping_arithmetic
   | Aggregate
@@ -58,6 +58,15 @@ type unsupported_construct =
   | Quantifier_type
   | Unsupported_logical_quantifier
 
+type failure_class = Source_failure | Artifact_failure | Internal_failure
+
+type broadcast_artifact_failure =
+  | Missing_provider_artifact
+  | Malformed_provider_artifact
+  | Stale_provider_artifact
+  | Mismatched_provider_artifact
+  | Conflicting_provider_artifact
+
 type classification =
   | Unsupported_target of {
       expected_int_size : int;
@@ -69,9 +78,18 @@ type classification =
   | Input_io_error
   | Invalid_recursive_rank of string
   | Invalid_broadcast of string
+  | Invalid_broadcast_dependency of {
+      provider : string;
+      failure : broadcast_artifact_failure;
+    }
   | Invalid_symbolic_declaration of string
   | Invalid_symbolic_application of string
   | Invalid_symbolic_authentication of string
+  | Invalid_symbolic_dependency of {
+      provider : string;
+      reason : string;
+      remedy : string;
+    }
   | Executable_function_in_specification of { function_name : string }
   | Unannotated_erased_call of {
       caller_name : string;
@@ -104,6 +122,19 @@ type t = {
   span : span;
   submessages : submessage list;
 }
+
+let failure_class = function
+  | Malformed_input | Incompatible_magic | Input_io_error
+  | Invalid_broadcast_dependency _ | Invalid_symbolic_dependency _
+  | Invalid_imported_specification _ ->
+      Artifact_failure
+  | Unsupported_target _ | Unsupported_input _ | Invalid_recursive_rank _
+  | Invalid_broadcast _ | Invalid_symbolic_declaration _
+  | Invalid_symbolic_application _ | Invalid_symbolic_authentication _
+  | Executable_function_in_specification _ | Unannotated_erased_call _
+  | Invalid_verification_call _ | Invalid_semantic_program _
+  | Unsupported_construct _ ->
+      Source_failure
 
 let position_of_lexing_position position =
   {
@@ -179,13 +210,34 @@ let code_and_message = function
   | Invalid_broadcast _ ->
       ( "VERO_INVALID_BROADCAST",
         "VeroCaml could not validate this broadcast declaration or activation." )
+  | Invalid_broadcast_dependency { provider; failure } ->
+      let problem =
+        match failure with
+        | Missing_provider_artifact -> "required build artifacts are missing"
+        | Malformed_provider_artifact ->
+            "generated build artifacts are malformed or unreadable"
+        | Stale_provider_artifact -> "generated build artifacts are stale"
+        | Mismatched_provider_artifact ->
+            "generated build artifacts do not match this build"
+        | Conflicting_provider_artifact ->
+            "multiple conflicting build artifact sets were found"
+      in
+      ( "VERO_DEPENDENCY",
+        Printf.sprintf "Broadcast provider %S cannot be used because its %s."
+          provider problem )
   | Invalid_symbolic_declaration detail ->
       ("VERO_SYMBOLIC_DECLARATION", detail)
-  | Invalid_symbolic_application detail ->
-      ("VERO_SYMBOLIC_APPLICATION", detail)
+  | Invalid_symbolic_application _ ->
+      ( "VERO_SYMBOLIC_APPLICATION",
+        "Symbolic applications are allowed only in specification or proof \
+         code. Move this use into a function marked [@@verocaml.spec] or \
+         [@@verocaml.proof]." )
   | Invalid_symbolic_authentication _ ->
       ( "VERO_INVALID_SYMBOLIC",
         "VeroCaml could not validate this symbolic declaration or use." )
+  | Invalid_symbolic_dependency { provider; reason; remedy } ->
+      ( "VERO_DEPENDENCY",
+        Printf.sprintf "symbolic provider %s: %s; %s" provider reason remedy )
   | Executable_function_in_specification { function_name } ->
       ( "VERO_EXEC_IN_SPEC",
         Printf.sprintf
@@ -233,6 +285,9 @@ let code_and_message = function
       | Unsupported_generic_use ->
           ( "VERO_UNSUPPORTED_GENERIC_USE",
             "VeroCaml cannot represent this generic use in its supported first-order logic." )
+      | Polymorphic_function ->
+          ( "VERO_UNSUPPORTED_POLYMORPHISM",
+            "polymorphic functions are not supported" )
       | Higher_order_function ->
           ( "VERO_UNSUPPORTED_HIGHER_ORDER_FUNCTION",
             "This function value is outside the supported verified-callback subset." )
@@ -253,9 +308,6 @@ let code_and_message = function
             "first-class modules are not supported" )
       | Concurrency ->
           ("VERO_UNSUPPORTED_CONCURRENCY", "concurrency is not supported")
-      | Nonlinear_multiplication ->
-          ( "VERO_UNSUPPORTED_NONLINEAR_MULTIPLICATION",
-            "multiplication between symbolic values is not supported" )
       | Structural_aggregate_equality ->
           ( "VERO_UNSUPPORTED_AGGREGATE_EQUALITY",
             "structural equality over aggregates is not supported" )
@@ -350,6 +402,11 @@ let default_submessages = function
         Hint
           "Rebuild the provider and consumer together, and ensure the consumer directly imports every specification provider and external target it uses.";
       ]
+  | Invalid_broadcast_dependency _ | Invalid_symbolic_dependency _ ->
+      [
+        Hint
+          "Rebuild the provider and consumer together with the same VeroCaml toolchain, then make the generated provider artifacts available to verification.";
+      ]
   | Invalid_broadcast _ ->
       [
         Hint
@@ -370,6 +427,11 @@ let default_submessages = function
       [
         Hint
           "If OCaml inferred a more general type than intended, add a source type annotation; otherwise rewrite this use with supported first-order values.";
+      ]
+  | Unsupported_construct Polymorphic_function ->
+      [
+        Hint
+          "Provide an external type specification for the generic dependency or use an explicitly supported first-order interface.";
       ]
   | Unsupported_construct Higher_order_function
   | Unsupported_construct Higher_order_call ->
@@ -441,6 +503,7 @@ let make classification span =
         ~detail:(Delator.Field.string _detail)]
   | Unsupported_target _ | Unsupported_input _ | Malformed_input
   | Incompatible_magic | Input_io_error | Invalid_recursive_rank _
+  | Invalid_broadcast_dependency _ | Invalid_symbolic_dependency _
   | Invalid_symbolic_declaration _ | Invalid_symbolic_application _
   | Executable_function_in_specification _ | Unannotated_erased_call _
   | Invalid_verification_call _ | Invalid_imported_specification _
@@ -461,6 +524,14 @@ let with_hint hint diagnostic =
     diagnostic with
     submessages = diagnostic.submessages @ [ Hint hint ];
   }
+
+let with_hints hints diagnostic =
+  let notes =
+    List.filter
+      (function Hint _ -> false | Note _ -> true)
+      diagnostic.submessages
+  in
+  { diagnostic with submessages = List.map (fun hint -> Hint hint) hints @ notes }
 
 let with_note ~span message diagnostic =
   {

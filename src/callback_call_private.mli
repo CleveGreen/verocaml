@@ -26,9 +26,19 @@ type 'error direct_lowering_services = {
     Types.type_expr ->
     (Parametric_type.t, 'error) result;
   optional_carrier :
-    Location.t -> Parametric_type.t -> (Parametric_type.t, 'error) result;
+    Location.t ->
+    Parametric_type.t ->
+    Parametric_type.t ->
+    (Parametric_type.t, 'error) result;
   lower_expression :
     Typedtree.expression -> (Sst.expression, 'error) result;
+  lower_expression_expected :
+    expected:Sst.typ -> Typedtree.expression -> (Sst.expression, 'error) result;
+  adapt_argument :
+    Location.t ->
+    expected:Sst.typ ->
+    Sst.expression ->
+    (Sst.expression, 'error) result;
   callback_actual :
     Callback_shape_private.t ->
     string option ->
@@ -39,6 +49,7 @@ type 'error direct_lowering_services = {
   policy_error : Location.t -> string -> 'error;
   polymorphic_error : Location.t -> 'error;
   higher_order_error : Location.t -> 'error;
+  semantic_result_type : Sst.typ option;
   span : Location.t -> Sst.span;
   current : Ident.t option;
 }

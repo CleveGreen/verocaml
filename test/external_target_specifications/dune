@@ -55,16 +55,6 @@
  (action
   (run %{validator} %{report} %{archive})))
 
-(cram
- (alias external-target-specifications-specialist-check)
- (runtest_alias false)
- (deps
-  (glob_files fixtures/*)
-  external_target_specifications_tool.exe
-  ../../src/verocaml.exe
-  ../../ppx/vero_ppx.exe
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
-
 (alias
  (name external-target-specifications-check)
  (deps

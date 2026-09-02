@@ -73,9 +73,6 @@ and odd (n : int) = n <> 0 && even (n - 1)
     rejection_case ~name:"higher-order-rejected" ~module_name:"Higher_order"
       ~code:"VERO_CALLBACK_CONTRACT"
       ~source:"let higher_order (f : int -> int) (x : int) = f x\n";
-    rejection_case ~name:"nonlinear-multiplication-rejected"
-      ~module_name:"Nonlinear" ~code:"VERO_UNSUPPORTED_NONLINEAR_MULTIPLICATION"
-      ~source:"let nonlinear (x : int) (y : int) = x * y\n";
     rejection_case ~name:"aggregate-equality-rejected"
       ~module_name:"Aggregate_equality" ~code:"VERO_UNSUPPORTED_GENERIC_USE"
       ~source:
@@ -119,6 +116,10 @@ let accepted_cases =
       ~function_name:"read"
       ~source:
         "type aggregate = { value : int }\nlet read value = value.value\n";
+    accepted_case ~name:"guarded-nonlinear-multiplication-admitted"
+      ~module_name:"Nonlinear" ~function_name:"nonlinear"
+      ~source:
+        "let nonlinear (x : int) (y : int) =\n  [%verocaml.requires x = 0];\n  x * y\n";
   ]
 
 let effect_project =

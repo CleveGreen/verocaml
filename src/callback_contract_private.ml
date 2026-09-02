@@ -403,7 +403,10 @@ type ('bindings, 'error) parameter_services = {
   normalized_type :
     Location.t -> Types.type_expr -> (Parametric_type.t, 'error) result;
   optional_carrier :
-    Location.t -> Parametric_type.t -> (Parametric_type.t, 'error) result;
+    Location.t ->
+    Parametric_type.t ->
+    Parametric_type.t ->
+    (Parametric_type.t, 'error) result;
   lower_expression :
     'bindings -> Typedtree.expression -> (Sst.expression, 'error) result;
   lower_pattern :
@@ -419,6 +422,7 @@ type ('bindings, 'error) parameter_services = {
   span : Location.t -> Sst.span;
   partial_error : Location.t -> 'error;
   parameter_pattern_error : Location.t -> 'error;
+  parameter_type_error : Location.t -> string -> 'error;
 }
 
 let rec irrefutable_parameter_pattern (pattern : Sst.pattern) =
@@ -432,77 +436,91 @@ let rec irrefutable_parameter_pattern (pattern : Sst.pattern) =
   | Sst.Owned_tree_cursor_pattern _ | Sst.Or_pattern _ ->
       false
 
-let lower_parameters services initial parameters =
-  let rec lower lowered bindings = function
-    | [] -> Ok (List.rev lowered, bindings)
-    | (parameter : Typedtree.function_param) :: rest ->
-        if parameter.fp_partial = Typedtree.Partial then
-          Error (services.partial_error parameter.fp_loc)
-        else
-          match parameter.fp_kind with
-          | Typedtree.Tparam_optional_default
-              (source_pattern, default_expression, _) ->
-              let* payload_type =
-                services.normalized_type source_pattern.pat_loc
-                  source_pattern.pat_type
-              in
-              let* carrier_type =
-                services.optional_carrier source_pattern.pat_loc payload_type
-              in
-              let carrier_pattern =
-                {
-                  Sst.pattern_desc = Sst.Wildcard;
-                  typ = carrier_type;
-                  span = services.span parameter.fp_loc;
-                }
-              in
-              let* default_expression =
-                services.lower_expression bindings default_expression
-              in
-              let* optional_pattern, bindings =
-                services.lower_pattern bindings source_pattern
-              in
-              if not (irrefutable_parameter_pattern optional_pattern) then
-                Error (services.parameter_pattern_error parameter.fp_loc)
-              else
-                lower
-                  (Sst.Value_parameter
-                     {
-                       Sst.label =
-                         services.parameter_label parameter.fp_arg_label;
-                       pattern = carrier_pattern;
-                       optional_default =
-                         Some
+let lower_parameters services ~function_type initial parameters =
+  match
+    Parametric_lowering_private.compiler_parameter_domains function_type
+      parameters
+  with
+  | Error (location, message) ->
+      Error (services.parameter_type_error location message)
+  | Ok domains ->
+      let rec lower lowered bindings parameters domains =
+        match parameters, domains with
+        | [], [] -> Ok (List.rev lowered, bindings)
+        | (parameter : Typedtree.function_param) :: rest,
+          domain :: remaining_domains ->
+            if parameter.fp_partial = Typedtree.Partial then
+              Error (services.partial_error parameter.fp_loc)
+            else (
+              match parameter.fp_kind with
+              | Typedtree.Tparam_optional_default
+                  (source_pattern, default_expression, _) ->
+                  let* payload_type =
+                    services.normalized_type source_pattern.pat_loc
+                      source_pattern.pat_type
+                  in
+                  let* carrier_type =
+                    let* carrier_type =
+                      services.normalized_type source_pattern.pat_loc domain
+                    in
+                    services.optional_carrier source_pattern.pat_loc carrier_type
+                      payload_type
+                  in
+                  let carrier_pattern =
+                    {
+                      Sst.pattern_desc = Sst.Wildcard;
+                      typ = carrier_type;
+                      span = services.span parameter.fp_loc;
+                    }
+                  in
+                  let* default_expression =
+                    services.lower_expression bindings default_expression
+                  in
+                  let* optional_pattern, bindings =
+                    services.lower_pattern bindings source_pattern
+                  in
+                  if not (irrefutable_parameter_pattern optional_pattern) then
+                    Error (services.parameter_pattern_error parameter.fp_loc)
+                  else
+                    lower
+                      (Sst.Value_parameter
+                         {
+                           Sst.label =
+                             services.parameter_label parameter.fp_arg_label;
+                           pattern = carrier_pattern;
+                           optional_default =
+                             Some
+                               {
+                                 Sst.optional_pattern;
+                                 optional_expression = default_expression;
+                               };
+                         }
+                      :: lowered)
+                      bindings rest remaining_domains
+              | Typedtree.Tparam_pat pattern ->
+                  if services.is_callback pattern.pat_type then
+                    let* callback = services.issue_callback parameter pattern in
+                    lower (callback :: lowered) bindings rest remaining_domains
+                  else
+                    let* pattern, bindings =
+                      services.lower_pattern bindings pattern
+                    in
+                    if not (irrefutable_parameter_pattern pattern) then
+                      Error (services.parameter_pattern_error parameter.fp_loc)
+                    else
+                      lower
+                        (Sst.Value_parameter
                            {
-                             Sst.optional_pattern;
-                             optional_expression = default_expression;
-                           };
-                     }
-                  :: lowered)
-                  bindings rest
-          | Typedtree.Tparam_pat pattern ->
-              if services.is_callback pattern.pat_type then
-                let* callback = services.issue_callback parameter pattern in
-                lower (callback :: lowered) bindings rest
-              else
-                let* pattern, bindings =
-                  services.lower_pattern bindings pattern
-                in
-                if not (irrefutable_parameter_pattern pattern) then
-                  Error (services.parameter_pattern_error parameter.fp_loc)
-                else
-                  lower
-                    (Sst.Value_parameter
-                       {
-                         Sst.label =
-                           services.parameter_label parameter.fp_arg_label;
-                         pattern;
-                         optional_default = None;
-                       }
-                    :: lowered)
-                    bindings rest
-  in
-  lower [] initial parameters
+                             Sst.label =
+                               services.parameter_label parameter.fp_arg_label;
+                             pattern;
+                             optional_default = None;
+                           }
+                        :: lowered)
+                        bindings rest remaining_domains)
+        | [], _ :: _ | _ :: _, [] -> assert false
+      in
+      lower [] initial parameters domains
 
 type recursive_helper_role =
   | Ordinary_direct_spec
@@ -547,6 +565,7 @@ let recursive_helper_expression_children (expression : Sst.expression) =
   | Sst.Variable _ | Sst.Mutable_read _ | Sst.Owned_tree_rebase _
   | Sst.Reveal _ | Sst.Reveal_with_fuel _ | Sst.Optional_absent ->
       []
+  | Sst.Lift_runtime_int operand -> [ operand ]
   | Sst.Tuple_value values -> List.map snd values
   | Sst.Record_value { fields; _ } -> List.map snd fields
   | Sst.Constructor_value { arguments; _ }
@@ -612,6 +631,7 @@ let validate_builtin_assertion_predicate predicate =
     | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
     | Sst.Variable _ ->
         Ok ()
+    | Sst.Lift_runtime_int operand -> pure operand
     | Sst.Tuple_value values -> all (List.map snd values)
     | Sst.Record_value { fields; _ } -> all (List.map snd fields)
     | Sst.Constructor_value { arguments; _ }

@@ -271,6 +271,9 @@ let translate_integer_core services term =
         Logic_ir.negate ~span:services.span value |> services.term_result
       in
       Ok (Some term)
+  | Vir.Integer_multiply (left, right) ->
+      let* term = binary Logic_ir.multiply left right in
+      Ok (Some term)
   | Vir.Integer_multiply_constant (coefficient, value) ->
       let* value = services.translate_integer value in
       let* term =
@@ -986,6 +989,10 @@ and integer (state : state) = function
       |> logic_or_fail
   | Integer_negate value ->
       Logic_ir.negate ~span:state.span (integer state value) |> logic_or_fail
+  | Integer_multiply (left, right) ->
+      Logic_ir.multiply ~span:state.span (integer state left)
+        (integer state right)
+      |> logic_or_fail
   | Integer_multiply_constant (coefficient, value) ->
       Logic_ir.scale ~span:state.span coefficient (integer state value)
       |> logic_or_fail
@@ -1275,13 +1282,27 @@ and recursive_argument_sort state = function
   | Vir.Recursive_aggregate_argument term -> aggregate_sort state term.aggregate_type
   | Vir.Recursive_parametric_argument term -> parametric_sort state term.parametric_sort
 and symbolic_application state range application =
+  [%log.debug "translating authenticated symbolic application"
+    ~stage:(Delator.Field.string "symbolic-translation")
+    ~correlation:
+      (Delator.Field.string
+         (Symbolic_application_private.identity_digest application))
+    ~route:(Delator.Field.string "ordinary")
+    ~type_arity:
+      (Delator.Field.int
+         (List.length
+            (Symbolic_application_private.type_arguments application)))
+    ~term_arity:
+      (Delator.Field.int
+         (List.length
+            (Symbolic_application_private.arguments application)))];
   let arguments =
     Symbolic_application_private.arguments application
   in
   let domain = List.map (recursive_argument_sort state) arguments in
   let function_ =
     declare state
-      (Symbolic_application_private.symbol_name application)
+      (Symbolic_application_private.backend_head application)
       domain range
   in
   Logic_ir.apply

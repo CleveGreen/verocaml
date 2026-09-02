@@ -87,7 +87,8 @@ let rec classify_calls_with classify_form stage (expression : Sst.expression) =
         | Sst.Callback_ensures _ | Sst.Optional_absent
         | Sst.Optional_present _ | Sst.Optional_forward _ | Sst.Reveal _
         | Sst.Reveal_with_fuel _ | Sst.Use_type_invariant _
-        | Sst.Local_assert _ | Sst.Proof_region _ | Sst.Old _ ->
+        | Sst.Local_assert _ | Sst.Proof_region _ | Sst.Old _
+        | Sst.Lift_runtime_int _ ->
             assert false)
     | Sst.Direct_call call ->
         Sst.Direct_call
@@ -138,6 +139,7 @@ let rec classify_calls_with classify_form stage (expression : Sst.expression) =
     | Sst.Optional_absent -> Sst.Optional_absent
     | Sst.Optional_present payload -> Sst.Optional_present (recurse payload)
     | Sst.Optional_forward payload -> Sst.Optional_forward (recurse payload)
+    | Sst.Lift_runtime_int operand -> Sst.Lift_runtime_int (recurse operand)
     | (Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
       | Sst.Variable _ | Sst.Mutable_read _) as desc ->
         desc

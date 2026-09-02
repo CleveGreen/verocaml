@@ -1,8 +1,47 @@
-(test
- (name oxcaml_backend)
- (libraries delator)
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases oxcaml_backend integration_environment)
+ (libraries outcome_test_support delator)
  (preprocess
   (pps delator.ppx -- --static-level=trace)))
 
-(cram
- (deps oxcaml_backend.exe))
+(rule
+ (targets
+  delator-oxcaml-outcome-cases.result-report
+  delator-oxcaml-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   delator-oxcaml-outcome-cases.result-report
+   delator-oxcaml-outcome-cases.failure-archive)))
+
+(rule
+ (alias delator-oxcaml-outcome-check)
+ (deps
+  (:report delator-oxcaml-outcome-cases.result-report)
+  (:archive delator-oxcaml-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
+(alias
+ (name runtest)
+ (deps
+  (alias delator-oxcaml-outcome-check)))

@@ -55,7 +55,7 @@ let validate_binders program (definition : Sst.function_definition) =
 
 let validate_type descriptors function_id span binders typ =
   let rec loop = function
-    | Parametric_type.Unit | Bool | Int | Aggregate _ -> Ok ()
+    | Parametric_type.Unit | Bool | Int | Mathematical_int | Aggregate _ -> Ok ()
     | Tuple components ->
         iter_result (fun (_, component) -> loop component) components
     | Parameter binder ->
@@ -103,7 +103,7 @@ let validate_pattern descriptors function_id binders (pattern : Sst.pattern) =
   loop pattern
 
 let validate_call descriptors functions (definition : Sst.function_definition)
-    (expression : Sst.expression) callee type_arguments arguments =
+    (expression : Sst.expression) call_form callee type_arguments arguments =
   let function_id = definition.Sst.function_id in
   let binders = definition.type_binders in
   let* () =
@@ -149,7 +149,11 @@ let validate_call descriptors functions (definition : Sst.function_definition)
       let actual_labels = List.map fst actuals in
       let* inferred =
         match
-          Parametric_lowering_private.infer_labeled_type_arguments
+          (if call_form = Sst.Exec_call then
+             Parametric_lowering_private.infer_labeled_type_arguments
+           else
+             Parametric_lowering_private
+             .infer_labeled_type_arguments_for_logical_call)
             ~binders:callee_definition.type_binders ~formal_types ~formal_labels
             ~actual_types ~actual_labels
             ~formal_result:callee_definition.result_type
@@ -169,6 +173,7 @@ let validate_call descriptors functions (definition : Sst.function_definition)
       in
       match
         Parametric_lowering_private.validate_sst_direct_call
+          ~logical:(call_form <> Sst.Exec_call)
           ~definition:callee_definition ~type_arguments
           ~actual_result:expression.typ ~call_span:expression.span ~arguments:actuals
       with
@@ -188,6 +193,7 @@ let validate_expression descriptors functions definition expression =
     | Mutable_read _ | Owned_tree_rebase _ | Optional_absent | Reveal _
     | Reveal_with_fuel _ ->
         Ok ()
+    | Lift_runtime_int operand -> loop operand
     | Tuple_value values -> visit (List.map snd values)
     | Record_value { fields; _ } -> visit (List.map snd fields)
     | Constructor_value { arguments; _ } | Checked_arithmetic (_, arguments) ->
@@ -244,7 +250,7 @@ let validate_expression descriptors functions definition expression =
         let* () = loop quantifier.quantifier_body in
         visit (Option.to_list quantifier.quantifier_trigger)
     | Direct_call
-        { callee; type_arguments; arguments; call_form = _; recursive = _ } ->
+        { callee; type_arguments; arguments; call_form; recursive = _ } ->
         let values =
           List.filter_map
             (function
@@ -263,8 +269,8 @@ let validate_expression descriptors functions definition expression =
           visit values
         else
           let* () =
-            validate_call descriptors functions definition expression callee
-              type_arguments arguments
+            validate_call descriptors functions definition expression call_form
+              callee type_arguments arguments
           in
           visit values
     | Callback_call application | Callback_requires application ->

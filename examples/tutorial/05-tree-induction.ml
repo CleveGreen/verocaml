@@ -1,6 +1,8 @@
+open Vstd
+
 type tree = Leaf of int | Branch of tree * tree
 
-let rec sum (tree : tree) : int =
+let rec sum (tree : tree) : Int.t =
   [%verocaml.decreases tree];
   match tree with
   | Leaf value -> value

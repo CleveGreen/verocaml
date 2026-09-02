@@ -28,38 +28,98 @@ let framed tag fields =
   let field value = Printf.sprintf "%d:%s" (String.length value) value in
   tag ^ String.concat "" (List.map field fields)
 
-let span_material span =
-  framed "s"
-    [
-      span.Diagnostic.file;
-      string_of_int span.start_pos.line;
-      string_of_int span.start_pos.column;
-      string_of_int span.end_pos.line;
-      string_of_int span.end_pos.column;
-    ]
+let declaration_material ~canonical_path ~value_uid =
+  framed "symbolic-origin-v1" [ canonical_path; value_uid ]
 
-let declaration_material ~marker_id ~declaration_index ~declaration_name
-    ~canonical_path ~value_uid ~source_file ~compilation_identity
-    ~declaration_span ~type_binders ~parameter_types ~result_type =
-  framed "D"
-    [
-      marker_id;
-      string_of_int declaration_index;
-      declaration_name;
-      canonical_path;
-      value_uid;
-      source_file;
-      compilation_identity;
-      span_material declaration_span;
-      Parametric_type.structural_vector_material
-        (List.map (fun binder -> Parametric_type.Parameter binder) type_binders);
-      Parametric_type.structural_vector_material parameter_types;
-      Parametric_type.structural_identity_material result_type;
-    ]
+let rec abi_type_material = function
+  | Parametric_type.Unit -> Ok "u"
+  | Bool -> Ok "b"
+  | Int -> Ok "i"
+  | Mathematical_int -> Ok "I"
+  | Parameter binder ->
+      Ok (framed "p" [ string_of_int binder.Parametric_type.ordinal ])
+  | Application (constructor, arguments) ->
+      let rec loop lowered = function
+        | [] -> Ok (List.rev lowered)
+        | argument :: rest ->
+            Result.bind (abi_type_material argument) (fun material ->
+                loop (material :: lowered) rest)
+      in
+      Result.map
+        (fun arguments ->
+          framed "a"
+            [
+              constructor.Parametric_type.constructor_identity;
+              framed "v" arguments;
+            ])
+        (loop [] arguments)
+  | Tuple components ->
+      let rec loop lowered = function
+        | [] -> Ok (List.rev lowered)
+        | (label, component) :: rest ->
+            Result.bind (abi_type_material component) (fun material ->
+                loop
+                  (framed "c"
+                     [ Option.value ~default:"" label; material ]
+                  :: lowered)
+                  rest)
+      in
+      Result.map (framed "t") (loop [] components)
+  | Aggregate _ -> Error "symbolic ABI contains an aggregate identity"
+
+let declaration_abi_material ~canonical_path ~value_uid ~type_binders
+    ~parameter_labels ~parameter_types ~result_type =
+  if List.length parameter_labels <> List.length parameter_types then
+    Error "symbolic ABI label and parameter vectors differ"
+  else
+    let binder_ordinals =
+      List.map (fun binder -> binder.Parametric_type.ordinal) type_binders
+    in
+    if binder_ordinals <> List.init (List.length binder_ordinals) Fun.id then
+      Error "symbolic ABI binders are not canonical and ordered"
+    else
+      let valid_parameter binder =
+        binder.Parametric_type.ordinal >= 0
+        && binder.ordinal < List.length type_binders
+      in
+      let all_types = result_type :: parameter_types in
+      if
+        List.exists
+          (fun typ ->
+            List.exists (fun binder -> not (valid_parameter binder))
+              (Parametric_type.parameters typ))
+          all_types
+      then Error "symbolic ABI type escapes its binder vector"
+      else
+        let rec lower_parameters lowered labels types =
+          match (labels, types) with
+          | [], [] -> Ok (List.rev lowered)
+          | label :: labels, typ :: types ->
+              Result.bind (abi_type_material typ) (fun material ->
+                  lower_parameters
+                    (framed "f" [ label; material ] :: lowered)
+                    labels types)
+          | [], _ :: _ | _ :: _, [] -> assert false
+        in
+        Result.bind
+          (lower_parameters [] parameter_labels parameter_types)
+          (fun parameters ->
+            Result.map
+              (fun result ->
+                framed "symbolic-abi-v1"
+                  [
+                    canonical_path;
+                    value_uid;
+                    framed "binders"
+                      (List.map string_of_int binder_ordinals);
+                    framed "parameters" parameters;
+                    result;
+                  ])
+              (abi_type_material result_type))
 
 let supported_type typ =
   let rec supported = function
-    | Parametric_type.Unit | Int | Bool | Parameter _ -> true
+    | Parametric_type.Unit | Int | Mathematical_int | Bool | Parameter _ -> true
     | Application (constructor, arguments) ->
         constructor.constructor_path <> ""
         && constructor.constructor_identity <> ""
@@ -86,10 +146,16 @@ let declare ~marker_id ~declaration_index ~declaration_name ~canonical_path
       ^ Parametric_type.to_string result_type)
   else
     let identity_material =
-      declaration_material ~marker_id ~declaration_index ~declaration_name
-        ~canonical_path ~value_uid ~source_file ~compilation_identity
-        ~declaration_span ~type_binders ~parameter_types ~result_type
+      declaration_material ~canonical_path ~value_uid
     in
+    [%log.trace "constructed semantic symbolic declaration identity"
+      ~stage:(Delator.Field.string "declaration-identity")
+      ~correlation:
+        (Delator.Field.string
+           (Digest.to_hex (Digest.string identity_material)))
+      ~binder_count:(Delator.Field.int (List.length type_binders))
+      ~parameter_count:(Delator.Field.int (List.length parameter_types))
+      ~decision:(Delator.Field.string "constructed")];
     Ok
       {
         marker_id;
@@ -105,6 +171,18 @@ let declare ~marker_id ~declaration_index ~declaration_name ~canonical_path
         result_type;
         identity_material;
       }
+
+let rebase_declaration (declaration : declaration) ~declaration_index ~declaration_name
+    ~canonical_path ~value_uid ~type_binders ~parameter_types ~result_type =
+  Result.map
+    (fun (rebased : declaration) ->
+      { rebased with identity_material = declaration.identity_material })
+    (declare ~marker_id:declaration.marker_id ~declaration_index
+       ~declaration_name ~canonical_path ~value_uid
+       ~source_file:declaration.source_file
+       ~compilation_identity:declaration.compilation_identity
+       ~declaration_span:declaration.declaration_span ~type_binders
+       ~parameter_types ~result_type)
 
 let instantiate declaration type_arguments =
   if List.length declaration.type_binders <> List.length type_arguments then
@@ -123,7 +201,14 @@ let instantiate declaration type_arguments =
           (fun result -> (parameters, result))
           (instantiate declaration.result_type))
 
-let symbol_name_for_application declaration ~type_arguments ~argument_types
+let application_material (declaration : declaration) type_arguments =
+  framed "symbolic-head-v1"
+    [
+      declaration.identity_material;
+      Parametric_type.structural_vector_material type_arguments;
+    ]
+
+let validate_instantiation declaration ~type_arguments ~argument_types
     ~result_type =
   Result.bind (instantiate declaration type_arguments)
     (fun (expected_arguments, expected_result) ->
@@ -132,17 +217,27 @@ let symbol_name_for_application declaration ~type_arguments ~argument_types
       then Error "symbolic application argument types are not exact"
       else if not (Parametric_type.equal expected_result result_type) then
         Error "symbolic application result type is not exact"
-      else
-        let stable_head =
-          framed "H"
-            [
-              declaration.canonical_path;
-              Parametric_type.structural_vector_material type_arguments;
-            ]
-        in
-        Ok
-          ("vero_symbolic_"
-          ^ Digest.to_hex (Digest.string stable_head)))
+      else Ok (application_material declaration type_arguments))
+
+let symbol_name_for_application declaration ~type_arguments ~argument_types
+    ~result_type =
+  Result.map
+    (fun _material ->
+      let presentation_material =
+        framed "symbolic-presentation-v1"
+          [
+            declaration.canonical_path;
+            Parametric_type.structural_vector_material type_arguments;
+          ]
+      in
+      let default =
+        "vero_symbolic_"
+        ^ Digest.to_hex (Digest.string presentation_material)
+      in
+      Symbolic_application_collision_testing_private.select_presentation_name
+        ~declaration_name:declaration.declaration_name ~default)
+    (validate_instantiation declaration ~type_arguments ~argument_types
+       ~result_type)
 
 let create declaration ~type_arguments ~arguments ~argument_types ~result_type
     ~span =
@@ -158,12 +253,17 @@ let create declaration ~type_arguments ~arguments ~argument_types ~result_type
         else if not (Parametric_type.equal expected_result result_type) then
           Error "symbolic application result type is not exact"
         else
-          let vector =
-            Parametric_type.structural_vector_material type_arguments
-          in
           let identity_material =
-            framed "A" [ declaration.identity_material; vector ]
+            application_material declaration type_arguments
           in
+          [%log.trace "correlated semantic symbolic application identity"
+            ~stage:(Delator.Field.string "application-identity")
+            ~correlation:
+              (Delator.Field.string
+                 (Digest.to_hex (Digest.string identity_material)))
+            ~type_arity:(Delator.Field.int (List.length type_arguments))
+            ~term_arity:(Delator.Field.int (List.length arguments))
+            ~decision:(Delator.Field.string "correlated")];
           Result.map
             (fun symbol_name ->
             {
@@ -218,6 +318,8 @@ let type_binders declaration = declaration.type_binders
 let parameter_types declaration = declaration.parameter_types
 let declaration_result_type (declaration : declaration) =
   declaration.result_type
+let declaration_identity_material (declaration : declaration) =
+  declaration.identity_material
 let type_arguments application = application.type_arguments
 let arguments application = application.arguments
 let argument_types application = application.argument_types
@@ -227,6 +329,64 @@ let identity_material application = application.identity_material
 let identity_digest application =
   Digest.to_hex (Digest.string application.identity_material)
 let symbol_name application = application.symbol_name
+
+let backend_head_lock = Mutex.create ()
+let backend_head_materials = Hashtbl.create 127
+
+let hex_encode material =
+  let encoded = Bytes.create (String.length material * 2) in
+  let hex = "0123456789abcdef" in
+  String.iteri
+    (fun index character ->
+      let code = Char.code character in
+      Bytes.set encoded (index * 2) hex.[code lsr 4];
+      Bytes.set encoded ((index * 2) + 1) hex.[code land 0xf])
+    material;
+  Bytes.unsafe_to_string encoded
+
+let intern_backend_head material =
+  let compact =
+    Printf.sprintf "vero_symbolic_v3_%08x" (Hashtbl.hash material)
+  in
+  Mutex.lock backend_head_lock;
+  Fun.protect
+    ~finally:(fun () -> Mutex.unlock backend_head_lock)
+    (fun () ->
+      match Hashtbl.find_opt backend_head_materials compact with
+      | None ->
+          Hashtbl.add backend_head_materials compact material;
+          (compact, "inserted")
+      | Some existing when String.equal existing material ->
+          (compact, "reused")
+      | Some _ ->
+          let collision_safe = compact ^ "_" ^ hex_encode material in
+          Hashtbl.replace backend_head_materials collision_safe material;
+          (collision_safe, "collision-fallback"))
+
+let backend_head_for_instantiation declaration ~type_arguments ~argument_types
+    ~result_type =
+  Result.map
+    (fun material -> fst (intern_backend_head material))
+    (validate_instantiation declaration ~type_arguments ~argument_types
+       ~result_type)
+
+let backend_head application =
+  let backend_head, _interning_decision =
+    intern_backend_head application.identity_material
+  in
+  [%log.trace "selecting authenticated symbolic backend head"
+    ~stage:(Delator.Field.string "backend-interning")
+    ~declaration_name:
+      (Delator.Field.string application.declaration.declaration_name)
+    ~correlation:(Delator.Field.string (identity_digest application))
+    ~type_arity:(Delator.Field.int (List.length application.type_arguments))
+    ~term_arity:(Delator.Field.int (List.length application.arguments))
+    ~decision:(Delator.Field.string _interning_decision)];
+  Symbolic_application_collision_testing_private.observe_backend_head
+    ~declaration_name:application.declaration.declaration_name
+    ~identity_digest:(identity_digest application)
+    ~presentation_name:application.symbol_name ~backend_head;
+  backend_head
 
 let same_declaration (left : declaration) (right : declaration) =
   String.equal left.identity_material right.identity_material

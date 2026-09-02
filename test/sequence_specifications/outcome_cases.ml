@@ -14,15 +14,12 @@ let read_source ~local ~repository =
   else if Sys.file_exists repository then read_file repository
   else failwith ("missing fixture source: " ^ repository)
 
-let sequence_library () =
-  read_source ~local:"../../library/seq.ml" ~repository:"library/seq.ml"
-
 let client name =
   read_source ~local:(Filename.concat "fixtures" name)
     ~repository:(Filename.concat "test/sequence_specifications/fixtures" name)
 
 let sequence_project ~name ~module_name ~client_source =
-  let source = sequence_library () ^ "\n" ^ client_source in
+  let source = "open Vstd.Seq\n" ^ client_source in
   let source_path = String.uncapitalize_ascii module_name ^ ".ml" in
   Fixture.dune_project
     {
@@ -37,13 +34,13 @@ let sequence_project ~name ~module_name ~client_source =
             contents =
               Printf.sprintf
                 "(library\n (name %s)\n (wrapped false)\n (modules %s)\n \
-                 (libraries verocaml.ghost)\n (flags (:standard -ppx \
+                 (libraries verocaml.vstd verocaml.ghost)\n (flags (:standard -ppx \
                  \"verocaml-ppx --keep-ghost\")))\n"
                 name module_name;
           };
           { path = source_path; contents = source };
         ];
-      libraries = [ "verocaml.ghost" ];
+      libraries = [ "verocaml.vstd"; "verocaml.ghost" ];
       targets = [ "@all" ];
       selected_units = [ module_name ];
     }

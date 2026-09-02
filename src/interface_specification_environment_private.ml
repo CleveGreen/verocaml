@@ -129,28 +129,78 @@ let rec public_dependency_message message =
          (String.length message - String.length prefix))
   else message
 
-let error ?unit_name ?diagnostic message =
+let broadcast_artifact_failure reason =
+  let reason = String.lowercase_ascii reason in
+  let contains fragment =
+    let fragment_length = String.length fragment in
+    let rec search offset =
+      offset + fragment_length <= String.length reason
+      &&
+      (String.equal (String.sub reason offset fragment_length) fragment
+      || search (offset + 1))
+    in
+    fragment_length = 0 || search 0
+  in
+  if contains "missing" || contains "unknown" || contains "no " || contains "lacks" then
+    Diagnostic.Missing_provider_artifact
+  else if contains "malformed" || contains "invalid" then
+    Diagnostic.Malformed_provider_artifact
+  else if contains "stale" then Diagnostic.Stale_provider_artifact
+  else if contains "conflict" || contains "ambiguous" || contains "duplicate" then
+    Diagnostic.Conflicting_provider_artifact
+  else Diagnostic.Mismatched_provider_artifact
+
+let _broadcast_artifact_failure_name = function
+  | Diagnostic.Missing_provider_artifact -> "missing"
+  | Diagnostic.Malformed_provider_artifact -> "malformed"
+  | Diagnostic.Stale_provider_artifact -> "stale"
+  | Diagnostic.Mismatched_provider_artifact -> "mismatched"
+  | Diagnostic.Conflicting_provider_artifact -> "conflicting"
+
+let error ?unit_name ?diagnostic ?(internal = false) message =
   let message = public_dependency_message message in
   let result = { unit_name; message } in
-  Option.iter
-    (fun diagnostic ->
-      with_error_diagnostics (fun () ->
-          Error_diagnostics.replace error_diagnostics result diagnostic))
-    diagnostic;
+  with_error_diagnostics (fun () ->
+      Option.iter
+        (fun diagnostic ->
+          Error_diagnostics.replace error_diagnostics result diagnostic)
+        diagnostic;
+      if internal then Internal_errors.replace internal_errors result ());
   Error result
 
-let internal_error ?unit_name message =
-  [%log.debug "internal verification error"
+let broadcast_dependency_error ~unit_name ~source_file ~stage:_stage ~route:_route
+    reason =
+  let failure = broadcast_artifact_failure reason in
+  [%log.debug "classified broadcast provider artifact rejection"
+    ~provider:(Delator.Field.string unit_name)
+    ~stage:(Delator.Field.string _stage)
+    ~route:(Delator.Field.string _route)
+    ~failure_class:(Delator.Field.string "artifact")
+    ~cause_class:
+      (Delator.Field.string (_broadcast_artifact_failure_name failure))
+    ~correlation:
+      (Delator.Field.string
+         (Digest.string
+            (unit_name ^ ":" ^ _stage ^ ":"
+           ^ _broadcast_artifact_failure_name failure)
+         |> Digest.to_hex))
+    ~decision:(Delator.Field.string "rejected")
+    ~remedy_class:(Delator.Field.string "rebuild-provider-consumer")];
+  let diagnostic =
+    Diagnostic.make
+      (Diagnostic.Invalid_broadcast_dependency { provider = unit_name; failure })
+      (Diagnostic.file_span source_file)
+  in
+  error ~unit_name ~diagnostic diagnostic.message
+
+let internal_error ?unit_name _message =
+  [%log.error "classified internal verification error"
     ~unit_name:
       (Delator.Field.string (Option.value ~default:"<unknown>" unit_name))
-    ~detail:(Delator.Field.string message)];
-  let result = { unit_name; message } in
-  with_error_diagnostics (fun () ->
-      Internal_errors.replace internal_errors result ());
-  Error result
-
-let error_is_internal error =
-  with_error_diagnostics (fun () -> Internal_errors.mem internal_errors error)
+    ~stage:(Delator.Field.string "error-routing")
+    ~reason_class:(Delator.Field.string "internal-verifier")];
+  error ?unit_name ~internal:true
+    "verification could not complete because an internal consistency check failed"
 
 let error_to_string error =
   Option.fold ~none:error.message
@@ -160,6 +210,15 @@ let error_to_string error =
 let error_diagnostic error =
   with_error_diagnostics (fun () ->
       Error_diagnostics.find_opt error_diagnostics error)
+
+let error_is_internal error =
+  with_error_diagnostics (fun () -> Internal_errors.mem internal_errors error)
+
+let retained_authority_identity_is_exact =
+  Cmt_input.retained_authority_identity_is_exact
+
+let exact_import = Cmt_input.exact_import
+let exact_imports = Cmt_input.exact_imports
 
 let rec handle_is_authentic (handle : handle) =
   handle.issuer == process_issuer
@@ -221,7 +280,7 @@ let candidate_family_digest candidate =
   |> Digest.to_hex
 
 let candidate_import_digest candidate =
-  candidate.Cmt_input.imports
+  candidate.Cmt_input.interface_imports
   |> Array.to_list
   |> List.map (fun (import : Cmt_input.import) ->
          import.unit_name ^ "=" ^ Option.value ~default:"<missing>" import.crc)
@@ -319,8 +378,8 @@ let interface_uids (implementation : Cmt_input.implementation) =
       let root =
         Subst.Lazy.force_signature interface.Cmi_format.cmi_sign
       in
-      let rec signature prefix items =
-        let module_types =
+      let rec signature enclosing_module_types prefix items =
+        let local_module_types =
           List.filter_map
             (function
               | Types.Sig_modtype (ident, declaration, _) ->
@@ -329,6 +388,7 @@ let interface_uids (implementation : Cmt_input.implementation) =
               | _ -> None)
             items
         in
+        let module_types = local_module_types @ enclosing_module_types in
         let rec module_signature seen = function
           | Types.Mty_signature nested -> Some nested
           | Mty_strengthen (nested, _, _) ->
@@ -368,21 +428,301 @@ let interface_uids (implementation : Cmt_input.implementation) =
             | Types.Sig_module (ident, _, declaration, _, _) -> (
                 match module_signature [] declaration.Types.md_type with
                 | Some nested ->
-                    signature (Ident.name ident :: prefix) nested
+                    signature module_types (Ident.name ident :: prefix) nested
                 | None -> [])
             | Types.Sig_typext _ | Types.Sig_modtype _ | Types.Sig_class _
             | Types.Sig_class_type _ ->
                 [])
           items
       in
-      signature [] root
+      signature [] [] root
 
 let binding_uid implementation kind path =
-  interface_uids implementation
-  |> List.find_map (fun (candidate_kind, candidate_path, uid) ->
-         if candidate_kind = kind && String.equal candidate_path path then
-           Some uid
-         else None)
+  let candidates =
+    interface_uids implementation
+    |> List.filter_map (fun (candidate_kind, candidate_path, uid) ->
+           if candidate_kind = kind && String.equal candidate_path path then
+             Some uid
+           else None)
+    |> List.sort_uniq String.compare
+  in
+  [%log.trace "evaluated unique compiler interface binding identity"
+    ~provider:(Delator.Field.string implementation.Cmt_input.unit_name)
+    ~stage:(Delator.Field.string "interface-binding-correlation")
+    ~member_kind:
+      (Delator.Field.string (match kind with `Value -> "value" | `Type -> "type"))
+    ~candidate_count:(Delator.Field.int (List.length candidates))
+    ~decision:
+      (Delator.Field.string
+         (match candidates with
+         | [ _ ] -> "correlated"
+         | [] -> "unresolved"
+         | _ :: _ :: _ -> "rejected"))];
+  match candidates with [ uid ] -> Some uid | [] | _ :: _ :: _ -> None
+
+let broadcast_identities implementation =
+  List.map
+    (fun member -> member.Retained_broadcast_private.identity)
+    implementation.Cmt_input.interface_broadcasts
+
+let preflight_broadcast_candidate ~dependencies implementation =
+  let unit_name = implementation.Cmt_input.unit_name in
+  let broadcast_error reason =
+    broadcast_dependency_error ~unit_name ~source_file:implementation.source_file
+      ~stage:"pre-solver-provider-reconciliation"
+      ~route:"typed-interface" reason
+  in
+  let imported_identities =
+    dependencies
+    |> List.filter (exact_imports implementation)
+    |> List.concat_map broadcast_identities
+    |> List.sort_uniq Retained_broadcast_private.compare_identity
+  in
+  let imported_declaration_identities, imported_group_identities =
+    List.partition
+      (fun (identity : Retained_broadcast_private.identity) ->
+        identity.kind = Retained_broadcast_private.Declaration)
+      imported_identities
+  in
+  let* broadcast_scan =
+    match
+      Typedtree_adapter_private.Public.Broadcast.authenticate_typedtree
+        ~imported_declarations:imported_declaration_identities
+        ~imported_groups:imported_group_identities
+        ~source_file:implementation.source_file ~imports:implementation.imports
+        ~artifact:
+          (Some
+             (Typedtree_adapter_private.Public.proof_capture_artifact
+                implementation))
+        implementation.structure
+    with
+    | Ok scan -> Ok scan
+    | Error diagnostic ->
+        error ~unit_name ~diagnostic diagnostic.Diagnostic.message
+  in
+  let interface_members = implementation.Cmt_input.interface_broadcasts in
+  let local_identities = broadcast_identities implementation in
+  let available_identities =
+    local_identities @ imported_identities
+    |> List.sort_uniq Retained_broadcast_private.compare_identity
+  in
+  let identity_for_source
+      (source : Retained_broadcast_private.source_reference) =
+    let candidates =
+      List.filter
+        (fun (identity : Retained_broadcast_private.identity) ->
+          String.equal identity.provider_origin source.member_provider_origin
+          && String.equal identity.interface_digest
+               source.member_interface_receipt
+          && String.equal identity.dependency_receipt
+               source.member_dependency_receipt
+          && identity.kind = source.member_kind
+          && String.equal identity.compiler_uid source.member_compiler_uid
+          && String.equal identity.canonical_path source.member_canonical_path)
+        available_identities
+    in
+    match candidates with
+    | [ identity ] -> Ok identity
+    | [] -> Error "broadcast group has an unknown compiler-resolved retained member"
+    | _ :: _ :: _ ->
+        Error "broadcast group has an ambiguous compiler-resolved retained member"
+  in
+  let implementation_triggers =
+    Typedtree_broadcast_private.declaration_triggers broadcast_scan
+  and implementation_groups =
+    Typedtree_broadcast_private.groups broadcast_scan
+  in
+  let identity_for_target target =
+    let kind =
+      if target.Typedtree_broadcast_private.target_group then
+        Retained_broadcast_private.Group
+      else Retained_broadcast_private.Declaration
+    in
+    let local_path =
+      if kind = Retained_broadcast_private.Declaration then
+        let prefix = "broadcast:" in
+        if
+          String.starts_with ~prefix target.target_id
+          && List.mem_assoc target.target_id implementation_triggers
+        then
+          Some
+            (unit_name ^ "."
+            ^ String.sub target.target_id (String.length prefix)
+                (String.length target.target_id - String.length prefix))
+        else None
+      else
+        implementation_groups
+        |> List.find_opt (fun group ->
+               String.equal group.Typedtree_broadcast_private.group_id
+                 target.target_id)
+        |> Option.map (fun (group : Typedtree_broadcast_private.group) ->
+               unit_name ^ "." ^ group.group_path)
+    in
+    let candidates =
+      match local_path with
+      | Some canonical_path ->
+          List.filter
+            (fun (identity : Retained_broadcast_private.identity) ->
+              identity.kind = kind
+              && String.equal identity.canonical_path canonical_path
+              && target.target_interface_uid = Some identity.compiler_uid)
+            local_identities
+      | None ->
+          List.filter
+            (fun (identity : Retained_broadcast_private.identity) ->
+              identity.kind = kind
+              && String.equal identity.compiler_uid target.target_uid
+              && String.equal identity.canonical_path target.target_path)
+            imported_identities
+    in
+    match candidates with
+    | [ identity ] -> Ok identity
+    | [] -> Error "implementation broadcast group has an unknown retained member"
+    | _ :: _ :: _ ->
+        Error "implementation broadcast group has an ambiguous retained member"
+  in
+  let declarations, groups =
+    List.partition
+      (fun member ->
+        member.Retained_broadcast_private.identity.kind
+        = Retained_broadcast_private.Declaration)
+      interface_members
+  in
+  let rec reconcile_declarations = function
+    | [] -> Ok ()
+    | member :: rest ->
+        let identity = member.Retained_broadcast_private.identity in
+        let prefix = unit_name ^ "." in
+        if not (String.starts_with ~prefix identity.canonical_path) then
+          Error "retained broadcast declaration has a foreign provider path"
+        else
+          let declaration_id =
+            "broadcast:"
+            ^ String.sub identity.canonical_path (String.length prefix)
+                (String.length identity.canonical_path - String.length prefix)
+          in
+          (match
+             ( Typedtree_broadcast_private.declaration_identity broadcast_scan
+                 declaration_id,
+               List.assoc_opt declaration_id implementation_triggers )
+           with
+          | Some (_, Some interface_uid), Some [ _ ]
+            when String.equal interface_uid identity.compiler_uid ->
+              [%log.trace "reconciled exact interface/implementation declaration identity"
+                ~provider:(Delator.Field.string unit_name)
+                ~stage:(Delator.Field.string "pre-solver-authority")
+                ~route:
+                  (Delator.Field.string "typedtree-interface-reconciliation")
+                ~correlation:
+                  (Delator.Field.string
+                     (Retained_broadcast_private.correlation identity))
+                ~decision:(Delator.Field.string "accepted")];
+              reconcile_declarations rest
+          | (Some _ | None), (Some _ | None) ->
+              Error
+                "retained broadcast declaration lacks exactly one completed implementation trigger")
+  in
+  let rec reconcile_groups = function
+    | [] -> Ok ()
+    | member :: rest ->
+        let identity = member.Retained_broadcast_private.identity in
+        let matching =
+          List.filter
+            (fun group ->
+              String.equal identity.canonical_path
+                (unit_name ^ "."
+                ^ group.Typedtree_broadcast_private.group_path)
+              && group.group_interface_uid = Some identity.compiler_uid)
+            implementation_groups
+        in
+        let* implementation_group =
+          match matching with
+          | [ group ] -> Ok group
+          | [] -> Error "retained broadcast group has no implementation group"
+          | _ :: _ :: _ ->
+              Error "retained broadcast group has ambiguous implementation authority"
+        in
+        let* interface_members =
+          List.fold_left
+            (fun result source ->
+              let* identities = result in
+              let* identity = identity_for_source source in
+              Ok (identity :: identities))
+            (Ok []) member.source_members
+        in
+        let* interface_set =
+          match Retained_broadcast_private.canonical_set interface_members with
+          | Ok set -> Ok set
+          | Error _ ->
+              Error "retained broadcast interface group contains a duplicate member"
+        in
+        let* implementation_members =
+          List.fold_left
+            (fun result target ->
+              let* identities = result in
+              let* identity = identity_for_target target in
+              Ok (identity :: identities))
+            (Ok []) implementation_group.group_targets
+        in
+        let* implementation_set =
+          match
+            Retained_broadcast_private.canonical_set implementation_members
+          with
+          | Ok set -> Ok set
+          | Error _ ->
+              Error
+                "retained broadcast implementation group contains a duplicate member"
+        in
+        if
+          List.compare Retained_broadcast_private.compare_identity interface_set
+            implementation_set
+          <> 0
+        then
+          Error
+            "retained broadcast interface and implementation group member sets differ"
+        else (
+          [%log.debug "reconciled pre-solver broadcast group exact set"
+            ~provider:(Delator.Field.string unit_name)
+            ~stage:(Delator.Field.string "pre-solver-authority")
+            ~route:(Delator.Field.string "typedtree-interface-reconciliation")
+            ~member_kind:(Delator.Field.string "group")
+            ~set_cardinality:(Delator.Field.int (List.length interface_set))
+            ~decision:(Delator.Field.string "accepted")];
+          reconcile_groups rest)
+  in
+  match reconcile_declarations declarations with
+  | Error reason -> broadcast_error reason
+  | Ok () -> (
+      match reconcile_groups groups with
+      | Error reason -> broadcast_error reason
+      | Ok () ->
+          [%log.debug "completed pre-solver broadcast authority reconciliation"
+            ~provider:(Delator.Field.string unit_name)
+            ~stage:(Delator.Field.string "pre-solver-authority")
+            ~route:(Delator.Field.string "typedtree-interface-reconciliation")
+            ~declaration_count:(Delator.Field.int (List.length declarations))
+            ~group_count:(Delator.Field.int (List.length groups))
+            ~decision:(Delator.Field.string "accepted")];
+          Ok ())
+
+let preflight_broadcast_implementations ~dependencies ~consumer =
+  let candidates =
+    dependencies @ [ consumer ]
+    |> List.fold_left
+         (fun unique candidate ->
+           if List.exists (( == ) candidate) unique then unique
+           else unique @ [ candidate ])
+         []
+  in
+  let rec preflight = function
+    | [] -> Ok ()
+    | implementation :: rest ->
+        let* () =
+          preflight_broadcast_candidate ~dependencies implementation
+        in
+        preflight rest
+  in
+  preflight candidates
 
 let parameter_kinds implementation ~canonical_path
     (definition : Sst.function_definition) =
@@ -499,7 +839,7 @@ let snapshot_requirement validated descriptor ordinal =
             Sst_validation.rank_ground_witnesses rank;
         }
 
-let rec provider_of_root root =
+let rec provider_of_root_internal root =
   require_root root;
   ignore (root_completion root);
   let implementation = root_implementation root
@@ -511,41 +851,53 @@ let rec provider_of_root root =
   in
   let rec seal_dependencies sealed = function
     | [] -> Ok (List.rev sealed)
-    | dependency :: rest -> (
-        match provider_of_root dependency with
-        | Error _ as error -> error
-        | Ok provider -> seal_dependencies (provider :: sealed) rest)
+    | dependency :: rest ->
+        let* provider = provider_of_root_internal dependency in
+        seal_dependencies (provider :: sealed) rest
   in
   let* direct_dependencies =
     seal_dependencies [] (root_dependencies root)
   in
-  let* imported = Imported_callable.create direct_dependencies in
-  let callable_descriptors =
-    Sst_validation.callable_descriptors semantic_snapshot
-  and public_models = root_models root in
+  let* imported =
+    match Imported_callable.create direct_dependencies with
+    | Ok imported -> Ok imported
+    | Error message -> error ~unit_name message
+  in
+  let imported_declaration_identities =
+    Imported_callable.broadcast_declarations imported
+    |> List.map
+         (fun (declaration : Imported_callable.broadcast_declaration_snapshot) ->
+           declaration.identity)
+  and imported_group_identities =
+    Imported_callable.broadcast_groups imported
+    |> List.map (fun (group : Imported_callable.broadcast_group_snapshot) ->
+           group.identity)
+  in
   let* broadcast_scan =
-    Typedtree_adapter_private.Public.Broadcast.authenticate_typedtree
-      ~imported_declarations:
-        (Imported_callable.callables imported
-        |> List.filter_map
-             (fun (callable : Imported_callable.callable_snapshot) ->
-               Option.map
-                 (Fun.const (callable.path, callable.binding_uid))
-                 callable.broadcast_trigger_span))
-      ~imported_groups:
-        (Imported_callable.broadcast_groups imported
-        |> List.map
-             (fun (group : Imported_callable.broadcast_group_snapshot) ->
-               (group.path, group.binding_uid)))
-      ~source_file:implementation.source_file ~imports:implementation.imports
-      ~artifact:
-        (Some
-           (Typedtree_adapter_private.Public.proof_capture_artifact
-              implementation))
-      implementation.structure
-    |> Result.map_error (fun diagnostic ->
-           Printf.sprintf "[VERO_DEPENDENCY] provider broadcast metadata failed [%s]: %s"
-             diagnostic.Diagnostic.code diagnostic.message)
+    match
+      Typedtree_adapter_private.Public.Broadcast.authenticate_typedtree
+        ~imported_declarations:imported_declaration_identities
+        ~imported_groups:imported_group_identities
+        ~source_file:implementation.source_file ~imports:implementation.imports
+        ~artifact:
+          (Some
+             (Typedtree_adapter_private.Public.proof_capture_artifact
+                implementation))
+        implementation.structure
+    with
+    | Ok scan -> Ok scan
+    | Error diagnostic ->
+        error ~unit_name ~diagnostic
+          "provider broadcast implementation metadata is invalid"
+  in
+  let interface_members = implementation.Cmt_input.interface_broadcasts in
+  let retained_declaration_paths =
+    interface_members
+    |> List.filter_map (fun member ->
+           let identity = member.Retained_broadcast_private.identity in
+           if identity.kind = Retained_broadcast_private.Declaration then
+             Some identity.canonical_path
+           else None)
   in
   let broadcast_triggers =
     Typedtree_broadcast_private.declaration_triggers broadcast_scan
@@ -553,13 +905,16 @@ let rec provider_of_root root =
   [%log.debug "authenticated provider broadcast interface"
     ~unit_name:(Delator.Field.string unit_name)
     ~interface_declarations:
-      (Delator.Field.int
-         (List.length implementation.interface_broadcast_declarations))
+      (Delator.Field.int (List.length retained_declaration_paths))
     ~interface_groups:
       (Delator.Field.int
-         (List.length implementation.interface_broadcast_groups))
+         (List.length interface_members
+         - List.length retained_declaration_paths))
     ~implementation_declarations:
       (Delator.Field.int (List.length broadcast_triggers))];
+  let callable_descriptors =
+    Sst_validation.callable_descriptors semantic_snapshot
+  and public_models = root_models root in
   let callables =
     root_callables root
     |> List.filter_map (fun (callable : public_callable) ->
@@ -596,16 +951,22 @@ let rec provider_of_root root =
            in
            let symbolic_parameter = function
              | Sst.Value_parameter
-                 { pattern = { pattern_desc = Sst.Wildcard; _ };
+                 {
+                   pattern = { pattern_desc = Sst.Wildcard; _ };
                    optional_default = None;
-                   _ } ->
+                   _;
+                 } ->
                  true
              | Sst.Value_parameter _ | Sst.Callback_parameter _ -> false
            in
            let symbolic =
              match definition.body with
              | Sst.Symbolic_declaration _ -> true
-             | _ -> false
+             | Sst.Checked_exec _ | Sst.Spec_definition _
+             | Sst.Recursive_spec_definition _ | Sst.Proof_body _
+             | Sst.External_specification _ | Sst.Trusted_external_spec_target _
+             | Sst.Trusted_external_body _ ->
+                 false
            in
            let eligible_abi =
              (if symbolic then
@@ -652,8 +1013,7 @@ let rec provider_of_root root =
                    | Ok signature ->
                    let broadcast_trigger_span =
                      if
-                       List.mem definition.function_id.function_name
-                         implementation.interface_broadcast_declarations
+                       List.mem resolved_path retained_declaration_paths
                      then
                        match
                          List.assoc_opt
@@ -671,12 +1031,15 @@ let rec provider_of_root root =
                    [%log.trace "classified provider broadcast callable"
                      ~unit_name:(Delator.Field.string unit_name)
                      ~path:(Delator.Field.string resolved_path)
-                     ~value_uid:
-                       (Delator.Field.string callable_binding_uid)
+                     ~correlation:
+                       (Delator.Field.string
+                          (Digest.string
+                             (unit_name ^ ":provider-callable:"
+                            ^ callable_binding_uid)
+                          |> Digest.to_hex))
                      ~declared:
                        (Delator.Field.bool
-                          (List.mem definition.function_id.function_name
-                             implementation.interface_broadcast_declarations))
+                          (List.mem resolved_path retained_declaration_paths))
                      ~authenticated:
                        (Delator.Field.bool
                           (Option.is_some broadcast_trigger_span))];
@@ -708,21 +1071,6 @@ let rec provider_of_root root =
                    })
            | true, _, _, _ -> None)
   in
-  let exported_broadcasts =
-    callables
-    |> List.filter_map (fun (callable : Imported_callable.provider_callable) ->
-           Option.map (Fun.const callable.resolved_path)
-             callable.broadcast_trigger_span)
-    |> List.map (fun path ->
-           let prefix = unit_name ^ "." in
-           String.sub path (String.length prefix)
-             (String.length path - String.length prefix))
-    |> List.sort_uniq String.compare
-  in
-  let declared_broadcasts =
-    List.sort_uniq String.compare
-      implementation.interface_broadcast_declarations
-  in
   let external_specifications =
     root_external_specifications root
     |> List.filter_map (fun (callable : public_callable) ->
@@ -739,7 +1087,15 @@ let rec provider_of_root root =
                    ~parameter_modes:callable.parameter_modes
                    ~result_mode:callable.result_mode ~provider_completion
                with
-               | Error _ -> None
+               | Error _ ->
+                   [%log.debug
+                     "rejected completed external specification signature"
+                     ~provider:(Delator.Field.string unit_name)
+                     ~stage:(Delator.Field.string "environment-sealing")
+                     ~decision:(Delator.Field.string "rejected")
+                     ~reason_class:
+                       (Delator.Field.string "external-signature")];
+                   None
                | Ok signature ->
                    Some
                      {
@@ -752,6 +1108,395 @@ let rec provider_of_root root =
            | Sst.External_specification _ | Sst.Trusted_external_spec_target _
            | Sst.Trusted_external_body _ | Sst.Symbolic_declaration _ ->
                None)
+  in
+  let broadcast_error reason =
+    broadcast_dependency_error ~unit_name ~source_file:implementation.source_file
+      ~stage:"provider-environment-reconciliation" ~route:"provider-environment"
+      reason
+  in
+  let local_identities =
+    List.map
+      (fun member -> member.Retained_broadcast_private.identity)
+      interface_members
+  in
+  let available_identities =
+    local_identities @ imported_declaration_identities
+    @ imported_group_identities
+  in
+  let identity_for_source
+      (source : Retained_broadcast_private.source_reference) =
+    let candidates =
+      List.filter
+        (fun (identity : Retained_broadcast_private.identity) ->
+          String.equal identity.provider_origin source.member_provider_origin
+          && String.equal identity.interface_digest
+               source.member_interface_receipt
+          && String.equal identity.dependency_receipt
+               source.member_dependency_receipt
+          && identity.kind = source.member_kind
+          && String.equal identity.compiler_uid source.member_compiler_uid
+          && String.equal identity.canonical_path
+               source.member_canonical_path)
+        available_identities
+    in
+    match candidates with
+    | [ identity ] -> Ok identity
+    | [] ->
+        [%log.debug "rejected unknown retained broadcast source identity"
+          ~provider:(Delator.Field.string unit_name)
+          ~stage:(Delator.Field.string "compiler-identity")
+          ~member_kind:
+            (Delator.Field.string
+               (Retained_broadcast_private.kind_name source.member_kind))
+          ~decision:(Delator.Field.string "rejected")
+          ~reason_class:(Delator.Field.string "unknown-full-identity")];
+        Error
+          "broadcast group has an unknown compiler-resolved retained member"
+    | _ :: _ :: _ ->
+        [%log.debug "rejected ambiguous retained broadcast source identity"
+          ~provider:(Delator.Field.string unit_name)
+          ~stage:(Delator.Field.string "compiler-identity")
+          ~member_kind:
+            (Delator.Field.string
+               (Retained_broadcast_private.kind_name source.member_kind))
+          ~candidate_count:(Delator.Field.int (List.length candidates))
+          ~decision:(Delator.Field.string "rejected")
+          ~reason_class:(Delator.Field.string "ambiguous-full-identity")];
+        Error
+          "broadcast group has an ambiguous compiler-resolved retained member"
+  in
+  let source_binding source identity =
+    if String.equal identity.Retained_broadcast_private.provider_origin unit_name then
+      Ok
+        {
+          Imported_callable.broadcast_source_reference = source;
+          broadcast_source_identity = identity;
+          broadcast_source_edge = None;
+          broadcast_source_authority_index = None;
+        }
+    else
+      let dependencies =
+        root_dependencies root
+        |> List.filter (fun dependency ->
+               let candidate = root_implementation dependency in
+               exact_imports implementation candidate
+               &&
+               (String.equal candidate.unit_name identity.provider_origin
+               || List.exists
+                    (fun member ->
+                      Retained_broadcast_private.equal_identity
+                        member.Retained_broadcast_private.identity identity)
+                    candidate.interface_broadcasts))
+      in
+      match (dependencies, implementation.retained_authority) with
+      | [ dependency ], Some parent ->
+          let candidate = root_implementation dependency in
+          let edges =
+            List.filter
+              (fun edge ->
+                String.equal edge.Retained_interface_authority_private.dependency_unit
+                  candidate.unit_name
+                && edge.dependency_authority_receipt
+                   = candidate.retained_authority_receipt)
+              parent.dependencies
+          in
+          (match (edges, candidate.retained_authority_index) with
+          | [ edge ], Some index ->
+              [%log.trace "bound broadcast source to exact selected authority edge"
+                ~provider:(Delator.Field.string unit_name)
+                ~stage:(Delator.Field.string "provider-group-source-binding")
+                ~route:(Delator.Field.string "selected-authority-closure")
+                ~member_kind:
+                  (Delator.Field.string
+                     (Retained_broadcast_private.kind_name identity.kind))
+                ~decision:(Delator.Field.string "accepted")];
+              Ok
+                {
+                  Imported_callable.broadcast_source_reference = source;
+                  broadcast_source_identity = identity;
+                  broadcast_source_edge = Some edge;
+                  broadcast_source_authority_index = Some index;
+                }
+          | [], (Some _ | None) | _ :: _ :: _, (Some _ | None)
+          | [ _ ], None ->
+              Error "broadcast source lacks one exact selected authority edge")
+      | [], (Some _ | None) | _ :: _ :: _, (Some _ | None) | [ _ ], None ->
+          Error "broadcast source does not resolve through one selected authority"
+  in
+  let implementation_triggers =
+    Typedtree_broadcast_private.declaration_triggers broadcast_scan
+  and implementation_groups = Typedtree_broadcast_private.groups broadcast_scan in
+  let identity_for_target target =
+    let kind =
+      if target.Typedtree_broadcast_private.target_group then
+        Retained_broadcast_private.Group
+      else Retained_broadcast_private.Declaration
+    in
+    let local_path =
+      if kind = Retained_broadcast_private.Declaration then
+        if List.mem_assoc target.target_id implementation_triggers then
+          let prefix = "broadcast:" in
+          Some
+            (unit_name ^ "."
+            ^ String.sub target.target_id (String.length prefix)
+                (String.length target.target_id - String.length prefix))
+        else None
+      else
+        implementation_groups
+        |> List.find_opt (fun group ->
+               String.equal group.Typedtree_broadcast_private.group_id
+                 target.target_id)
+        |> Option.map (fun (group : Typedtree_broadcast_private.group) ->
+               unit_name ^ "." ^ group.group_path)
+    in
+    let candidates =
+      match local_path with
+      | Some canonical_path ->
+          List.filter
+            (fun (identity : Retained_broadcast_private.identity) ->
+              identity.kind = kind
+              && String.equal identity.canonical_path canonical_path
+              && target.target_interface_uid = Some identity.compiler_uid)
+            local_identities
+      | None ->
+          List.filter
+            (fun (identity : Retained_broadcast_private.identity) ->
+              identity.kind = kind
+              && String.equal identity.compiler_uid target.target_uid
+              && String.equal identity.canonical_path target.target_path)
+            (imported_declaration_identities @ imported_group_identities)
+    in
+    match candidates with
+    | [ identity ] -> Ok identity
+    | [] -> Error "implementation broadcast group has an unknown retained member"
+    | _ :: _ :: _ ->
+        Error "implementation broadcast group has an ambiguous retained member"
+  in
+  let declaration_members =
+    List.filter
+      (fun member ->
+        member.Retained_broadcast_private.identity.kind
+        = Retained_broadcast_private.Declaration)
+      interface_members
+  in
+  let rec prepare_declarations prepared = function
+    | [] -> Ok (List.rev prepared)
+    | member :: rest ->
+        let identity = member.Retained_broadcast_private.identity in
+        let matching =
+          root_callables root
+          |> List.filter (fun (callable : public_callable) ->
+                 String.equal identity.canonical_path
+                   (unit_name ^ "."
+                  ^ callable.definition.Sst.function_id.function_name))
+        in
+        let* callable =
+          match matching with
+          | [ callable ] -> Ok callable
+          | [] ->
+              Error
+                "retained broadcast declaration has no completed implementation definition"
+          | _ :: _ :: _ ->
+              Error
+                "retained broadcast declaration has ambiguous implementation authority"
+        in
+        let definition = callable.definition in
+        let declaration_id =
+          "broadcast:" ^ definition.Sst.function_id.function_name
+        in
+        let* trigger_span =
+          match List.assoc_opt declaration_id implementation_triggers with
+          | Some [ location ] ->
+              Ok
+                (Diagnostic.span_of_location
+                   ~fallback_file:implementation.source_file location)
+          | Some ([] | _ :: _ :: _) | None ->
+              Error
+                "retained broadcast declaration lacks exactly one authenticated trigger"
+        in
+        let* kind =
+          Typedtree_adapter_private.Public.Broadcast.authenticate_definition
+            ~theorem_id:declaration_id ~trigger_span definition
+        in
+        let* signature =
+          Parametric_interface_provider_private.signature ~definition
+            ~parameter_kinds:
+              (parameter_kinds implementation
+                 ~canonical_path:identity.canonical_path definition)
+            ~parameter_modes:callable.parameter_modes
+            ~result_mode:callable.result_mode ~provider_completion
+        in
+        let* () =
+          match
+            Typedtree_broadcast_private.declaration_identity broadcast_scan
+              declaration_id
+          with
+          | Some (_, Some uid) when String.equal uid identity.compiler_uid ->
+              [%log.trace "correlated provider declaration compiler identity"
+                ~provider:(Delator.Field.string unit_name)
+                ~route:(Delator.Field.string "provider-interface")
+                ~stage:(Delator.Field.string "signature-admission")
+                ~correlation:
+                  (Delator.Field.string
+                     (Retained_broadcast_private.correlation identity))
+                ~decision:(Delator.Field.string "correlated")];
+              Ok ()
+          | Some _ | None ->
+              Error
+                "retained broadcast declaration compiler identity does not match its implementation"
+        in
+        let broadcast_trust =
+          match kind with
+          | Broadcast_declaration_private.Proved_lemma ->
+              Retained_broadcast_private.Proved
+          | Broadcast_declaration_private.Trusted_axiom ->
+              Retained_broadcast_private.Trusted
+        in
+        [%log.debug "admitted completed provider broadcast declaration"
+          ~provider:(Delator.Field.string unit_name)
+          ~route:(Delator.Field.string "provider-interface")
+          ~stage:(Delator.Field.string "signature-admission")
+          ~member_kind:(Delator.Field.string "declaration")
+          ~trust_class:
+            (Delator.Field.string
+               (match broadcast_trust with
+               | Retained_broadcast_private.Proved -> "proved"
+               | Retained_broadcast_private.Trusted -> "trusted"))
+          ~correlation:
+            (Delator.Field.string
+               (Retained_broadcast_private.correlation identity))
+          ~decision:(Delator.Field.string "accepted")];
+        prepare_declarations
+          ({
+             Imported_callable.broadcast_identity = identity;
+             broadcast_definition = definition;
+             broadcast_signature = signature;
+             broadcast_trigger_span = trigger_span;
+             broadcast_trust;
+           }
+          :: prepared)
+          rest
+  in
+  let* broadcast_declarations =
+    match prepare_declarations [] declaration_members with
+    | Ok declarations -> Ok declarations
+    | Error reason -> broadcast_error reason
+  in
+  let group_members =
+    List.filter
+      (fun member ->
+        member.Retained_broadcast_private.identity.kind
+        = Retained_broadcast_private.Group)
+      interface_members
+  in
+  let rec prepare_groups prepared = function
+    | [] -> Ok (List.rev prepared)
+    | member :: rest ->
+        let identity = member.Retained_broadcast_private.identity in
+        let matching =
+          List.filter
+            (fun group ->
+              String.equal identity.canonical_path
+                (unit_name ^ "." ^ group.Typedtree_broadcast_private.group_path)
+              && group.group_interface_uid = Some identity.compiler_uid)
+            implementation_groups
+        in
+        let* implementation_group =
+          match matching with
+          | [ group ] -> Ok group
+          | [] -> Error "retained broadcast group has no implementation group"
+          | _ :: _ :: _ ->
+              Error "retained broadcast group has ambiguous implementation authority"
+        in
+        let* () =
+          if implementation_group.group_interface_uid = Some identity.compiler_uid
+          then Ok ()
+          else
+              Error
+                "retained broadcast group compiler identity does not match its implementation"
+        in
+        let* interface_sources =
+          List.fold_left
+            (fun result source ->
+              let* sources = result in
+              let* identity = identity_for_source source in
+              let* binding = source_binding source identity in
+              Ok (binding :: sources))
+            (Ok []) member.source_members
+        in
+        let interface_members =
+          List.map
+            (fun source -> source.Imported_callable.broadcast_source_identity)
+            interface_sources
+        in
+        let* interface_set =
+          match Retained_broadcast_private.canonical_set interface_members with
+          | Ok set -> Ok set
+          | Error _ ->
+              Error
+                "retained broadcast interface group contains a duplicate member"
+        in
+        let* implementation_members =
+          List.fold_left
+            (fun result target ->
+              let* identities = result in
+              let* identity = identity_for_target target in
+              Ok (identity :: identities))
+            (Ok []) implementation_group.group_targets
+        in
+        let* implementation_set =
+          match
+            Retained_broadcast_private.canonical_set implementation_members
+          with
+          | Ok set -> Ok set
+          | Error _ ->
+              Error
+                "retained broadcast implementation group contains a duplicate member"
+        in
+        let* () =
+          if
+            List.compare Retained_broadcast_private.compare_identity
+              interface_set implementation_set
+            = 0
+          then Ok ()
+          else
+            ( [%log.debug "rejected retained broadcast exact member set"
+                ~provider:(Delator.Field.string unit_name)
+                ~route:(Delator.Field.string "provider-interface")
+                ~stage:(Delator.Field.string "exact-set-reconciliation")
+                ~member_kind:(Delator.Field.string "group")
+                ~interface_count:(Delator.Field.int (List.length interface_set))
+                ~implementation_count:
+                  (Delator.Field.int (List.length implementation_set))
+                ~decision:(Delator.Field.string "rejected")
+                ~reason_class:(Delator.Field.string "full-identity-set-mismatch")];
+            Error
+              "retained broadcast interface and implementation group member sets differ"
+            )
+        in
+        [%log.debug "reconciled provider broadcast group exact set"
+          ~provider:(Delator.Field.string unit_name)
+          ~route:(Delator.Field.string "provider-interface")
+          ~stage:(Delator.Field.string "exact-set-reconciliation")
+          ~member_kind:(Delator.Field.string "group")
+          ~set_cardinality:(Delator.Field.int (List.length interface_set))
+          ~correlation:
+            (Delator.Field.string
+               (Retained_broadcast_private.correlation identity))
+          ~decision:(Delator.Field.string "accepted")];
+        prepare_groups
+          ({
+             Imported_callable.broadcast_group_identity = identity;
+             broadcast_members = interface_set;
+             broadcast_sources = List.rev interface_sources;
+           }
+          :: prepared)
+          rest
+  in
+  let* broadcast_groups =
+    match prepare_groups [] group_members with
+    | Ok groups -> Ok groups
+    | Error reason -> broadcast_error reason
   in
   let types =
     let rank_domains =
@@ -805,141 +1550,17 @@ let rec provider_of_root root =
              rank_profile_digest;
            })
   in
-  if exported_broadcasts <> declared_broadcasts then
-    (let missing =
-       List.filter (fun path -> not (List.mem path exported_broadcasts))
-         declared_broadcasts
-     in
-     [%log.warn "provider broadcast interface mismatch"
-       ~unit_name:(Delator.Field.string unit_name)
-       ~declared:(Delator.Field.int (List.length declared_broadcasts))
-       ~authenticated:(Delator.Field.int (List.length exported_broadcasts))
-       ~missing:(Delator.Field.string (String.concat "," missing))];
-    Error
-      (Printf.sprintf
-         "The interface exports broadcast proof%s %s, but the implementation does not define matching [@@verocaml.broadcast] proof%s."
-         (if List.length missing = 1 then "" else "s")
-         (String.concat ", " (List.map (Printf.sprintf "%S") missing))
-         (if List.length missing = 1 then "" else "s"))
-    )
-  else
-  let implementation_broadcast_groups =
-    Typedtree_broadcast_private.groups broadcast_scan
-  in
-  let target_path prefix target_id =
-    if String.starts_with ~prefix target_id then
-      Some
-        (String.sub target_id (String.length prefix)
-           (String.length target_id - String.length prefix))
-    else None
-  in
-  let canonical_broadcast_target
-      (target : Typedtree_broadcast_private.target) =
-    if target.target_group then
-      match
-        List.find_opt
-          (fun (group : Typedtree_broadcast_private.group) ->
-            String.equal group.group_id target.target_id)
-          implementation_broadcast_groups
-      with
-      | Some group -> Ok (unit_name ^ "." ^ group.group_path)
-      | None -> (
-          match target_path "broadcast-group:" target.target_id with
-          | Some path -> Ok path
-          | None ->
-              Error
-                "An exported broadcast group contains an unresolved group target. Rebuild the provider and its dependencies together.")
-    else
-      match
-        List.find_opt
-          (fun (callable : Imported_callable.provider_callable) ->
-            Option.is_some callable.broadcast_trigger_span
-            && String.equal
-                 ("broadcast:"
-                 ^ callable.definition.Sst.function_id.function_name)
-                 target.target_id)
-          callables
-      with
-      | Some callable -> Ok callable.resolved_path
-      | None -> (
-          match target_path "broadcast:" target.target_id with
-          | Some path -> Ok path
-          | None ->
-              Error
-                "An exported broadcast group contains an unresolved proof target. Rebuild the provider and its dependencies together.")
-  in
-  let rec canonical_broadcast_targets canonical = function
-    | [] -> Ok (List.rev canonical)
-    | target :: rest ->
-        let* path = canonical_broadcast_target target in
-        canonical_broadcast_targets (path :: canonical) rest
-  in
-  let rec prepare_broadcast_groups prepared = function
-    | [] -> Ok (List.rev prepared)
-    | (group : Cmt_input.interface_broadcast_group) :: rest ->
-        let resolved_path = unit_name ^ "." ^ group.group_path in
-        let* implementation_group =
-          match
-            List.filter
-              (fun (candidate : Typedtree_broadcast_private.group) ->
-                String.equal candidate.group_path group.group_path)
-              implementation_broadcast_groups
-          with
-          | [ implementation_group ] -> Ok implementation_group
-          | [] ->
-              Error
-                (Printf.sprintf
-                   "The interface exports broadcast group %S, but the implementation does not define it."
-                   group.group_path)
-          | _ :: _ :: _ ->
-              Error
-                (Printf.sprintf
-                   "The implementation defines broadcast group %S more than once."
-                   group.group_path)
-        in
-        let* target_paths =
-          canonical_broadcast_targets [] implementation_group.group_targets
-        in
-        let* () =
-          if List.length target_paths = List.length group.group_targets then
-            Ok ()
-          else
-            Error
-              (Printf.sprintf
-                 "Broadcast group %S has different interface and implementation membership."
-                 group.group_path)
-        in
-        let* binding_uid =
-          match binding_uid implementation `Value resolved_path with
-          | Some uid -> Ok uid
-          | None ->
-              Error
-                (Printf.sprintf
-                   "The exported broadcast group %S is missing from the compiled interface. Rebuild the library with the matching VeroCaml PPX."
-                   group.group_path)
-        in
-        [%log.trace "captured provider broadcast group identity"
-          ~unit_name:(Delator.Field.string unit_name)
-          ~path:(Delator.Field.string resolved_path)
-          ~value_uid:(Delator.Field.string binding_uid)
-          ~interface_targets:
-            (Delator.Field.int (List.length group.group_targets))
-          ~implementation_targets:
-            (Delator.Field.int (List.length target_paths))
-          ~canonical_targets:
-            (Delator.Field.string (String.concat "," target_paths))];
-        prepare_broadcast_groups
-          ({
-             Imported_callable.resolved_path;
-             binding_uid;
-             target_paths;
-           }
-          :: prepared)
-          rest
-  in
-  let* broadcast_groups =
-    prepare_broadcast_groups [] implementation.interface_broadcast_groups
-  in
+  [%log.debug "prepared authenticated provider exports"
+    ~provider:(Delator.Field.string unit_name)
+    ~stage:(Delator.Field.string "environment-sealing")
+    ~callable_count:(Delator.Field.int (List.length callables))
+    ~external_specification_count:
+      (Delator.Field.int (List.length external_specifications))
+    ~broadcast_declaration_count:
+      (Delator.Field.int (List.length broadcast_declarations))
+    ~broadcast_group_count:(Delator.Field.int (List.length broadcast_groups))
+    ~type_count:(Delator.Field.int (List.length types))
+    ~decision:(Delator.Field.string "prepared")];
   let description =
   {
     Imported_callable.unit_name = unit_name;
@@ -948,22 +1569,61 @@ let rec provider_of_root root =
     family_digest = root_family_digest root;
     import_digest = root_import_digest root;
     callables;
+    broadcast_declarations;
     broadcast_groups;
     types;
+    logical_sorts = implementation.Cmt_input.interface_logical_sorts;
     external_specifications;
   }
   in
-  [%log.debug "prepared provider broadcast exports"
-    ~unit_name:(Delator.Field.string unit_name)
-    ~declarations:(Delator.Field.int (List.length exported_broadcasts))
-    ~groups:(Delator.Field.int (List.length broadcast_groups))];
-  Imported_callable.seal_provider
-    ~provider_completion ~implementation
-    ~program:(Sst_validation.program semantic_snapshot)
-    ~direct_dependencies description
+  match
+    Imported_callable.seal_provider_with_diagnostic
+      ~provider_completion ~implementation
+      ~program:(Sst_validation.program semantic_snapshot)
+      ~direct_dependencies description
+  with
+  | Ok provider -> Ok provider
+  | Error seal_error ->
+      if Imported_callable.seal_error_is_internal seal_error then
+        internal_error ~unit_name
+          (Imported_callable.seal_error_message seal_error)
+      else
+        error ~unit_name
+          ?diagnostic:(Imported_callable.seal_error_diagnostic seal_error)
+          (Imported_callable.seal_error_message seal_error)
+
+let provider_of_root
+    (root [@delator.field (fun root -> root_unit_name root)]) =
+  let[@log_value.info] _unit_name = root_unit_name root in
+  let result = provider_of_root_internal root in
+  (match result with
+  | Ok _ ->
+      [%log.info "completed retained broadcast provider authority"
+        ~provider:(Delator.Field.string (_unit_name [@log_value.info]))
+        ~stage:(Delator.Field.string "provider-authority")
+        ~route:(Delator.Field.string "provider-environment")
+        ~direct_dependency_count:
+          (Delator.Field.int (List.length (root_dependencies root)))
+        ~decision:(Delator.Field.string "accepted")]
+  | Error _ ->
+      [%log.debug "rejected retained broadcast provider authority"
+        ~provider:(Delator.Field.string (_unit_name [@log_value.debug]))
+        ~stage:(Delator.Field.string "provider-authority")
+        ~route:(Delator.Field.string "provider-environment")
+        ~direct_dependency_count:
+          (Delator.Field.int (List.length (root_dependencies root)))
+        ~decision:(Delator.Field.string "rejected")
+        ~reason_class:(Delator.Field.string "authority-reconciliation")]);
+  result
+[@@delator.instrument]
+[@@delator.level debug]
+[@@delator.no_exn_log]
 
 let rec seal_roots sealed = function
-  | [] -> Imported_callable.create (List.rev sealed)
+  | [] -> (
+      match Imported_callable.create (List.rev sealed) with
+      | Ok environment -> Ok environment
+      | Error message -> error message)
   | root :: rest -> (
       match provider_of_root root with
       | Error _ as error -> error
@@ -971,14 +1631,22 @@ let rec seal_roots sealed = function
 
 let imported_environment_of_roots roots = seal_roots [] roots
 
-let imported_environment (environment : environment) =
+let imported_environment_authenticated (environment : environment) =
   require_environment environment;
   imported_environment_of_roots
     (List.map (fun handle -> Handle_root handle) environment.handles)
 
-let imported_environment_of_staged staged =
+let imported_environment_of_staged_authenticated staged =
   imported_environment_of_roots
     (List.map (fun dependency -> Staged_root dependency) staged)
+
+let imported_environment environment =
+  imported_environment_authenticated environment
+  |> Result.map_error (fun error -> error.message)
+
+let imported_environment_of_staged staged =
+  imported_environment_of_staged_authenticated staged
+  |> Result.map_error (fun error -> error.message)
 
 
 let provenance environment =

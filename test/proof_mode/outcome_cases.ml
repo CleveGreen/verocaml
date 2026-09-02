@@ -23,7 +23,8 @@ let require_kinds function_name kinds expectation =
 
 let source_case ~name ~module_name ~source expectation =
   let input =
-    Fixture.single_source ~module_name ~source ~libraries:[ "verocaml.ghost" ]
+    Fixture.single_source ~module_name ~source
+      ~libraries:[ "verocaml.vstd"; "verocaml.ghost" ]
   in
   Suite.case ~name ~expectation (run_fixture input)
 
@@ -67,12 +68,12 @@ let caller (cond : bool) =
 |vero}
 
 let positive_recursive_source =
-  {vero|let positive (x : int) : unit =
+  {vero|let positive (x : Vstd.Int.t) : unit =
   [%verocaml.requires x > 0];
   ()
 [@@verocaml.proof]
 
-let rec induct (n : int) : unit =
+let rec induct (n : Vstd.Int.t) : unit =
   [%verocaml.requires n >= 0];
   [%verocaml.ensures fun result -> n >= 0];
   [%verocaml.decreases n];
@@ -82,7 +83,7 @@ let rec induct (n : int) : unit =
     positive n)
 [@@verocaml.proof]
 
-let use_induct (n : int) : unit =
+let use_induct (n : Vstd.Int.t) : unit =
   [%verocaml.requires n >= 0];
   induct n
 [@@verocaml.proof]
@@ -94,7 +95,7 @@ let run_recursive (n : int) =
 |vero}
 
 let recursive_bool_parameter_source =
-  {vero|let rec bool_induct (n : int) (flag : bool) : unit =
+  {vero|let rec bool_induct (n : Vstd.Int.t) (flag : bool) : unit =
   [%verocaml.requires n >= 0];
   [%verocaml.decreases n];
   if n = 0 then () else bool_induct (n - 1) (not flag)
@@ -102,7 +103,7 @@ let recursive_bool_parameter_source =
 |vero}
 
 let recursive_negative_source =
-  {vero|let rec negative (n : int) : unit =
+  {vero|let rec negative (n : Vstd.Int.t) : unit =
   [%verocaml.requires n >= 0];
   [%verocaml.decreases -1];
   if n = 0 then () else negative (n - 1)

@@ -3,66 +3,123 @@
  (modules vstd_consumer)
  (libraries verocaml.vstd verocaml.ghost)
  (flags (:standard -w -A -alert -all))
- (preprocess (pps vero_ppx_driver)))
+ (preprocess (pps verocaml.ppx -- --verocaml-retained)))
 
 (library
  (name ambient_vstd_consumer)
  (modules ambient_vstd_consumer)
  (libraries verocaml.vstd verocaml.ghost)
  (flags (:standard -w -A -alert -all))
- (preprocess (pps vero_ppx_driver)))
+ (preprocess (pps verocaml.ppx)))
 
 (library
  (name imported_generic_axiom_consumer)
  (modules imported_generic_axiom_consumer)
  (libraries verocaml.vstd verocaml.ghost)
  (flags (:standard -w -A -alert -all -open Vstd))
- (preprocess (pps vero_ppx_driver)))
+ (preprocess (pps verocaml.ppx -- --verocaml-retained)))
 
 (library
  (name imported_broadcast_group_consumer)
  (modules imported_broadcast_group_consumer)
  (libraries verocaml.vstd verocaml.ghost)
  (flags (:standard -w -A -alert -all -open Vstd))
- (preprocess (pps vero_ppx_driver)))
+ (preprocess (pps verocaml.ppx -- --verocaml-retained)))
 
 (library
  (name vstd_broadcast_forwarder)
  (modules vstd_broadcast_forwarder)
  (libraries verocaml.vstd verocaml.ghost)
  (flags (:standard -w -A -alert -all))
- (preprocess (pps vero_ppx_driver)))
+ (preprocess (pps verocaml.ppx -- --verocaml-retained)))
+
+(include vstd_broadcast_forwarder.verocaml.inc)
 
 (library
  (name imported_broadcast_declaration_consumer)
  (modules imported_broadcast_declaration_consumer)
  (libraries verocaml.vstd verocaml.ghost)
  (flags (:standard -w -A -alert -all -open Vstd))
- (preprocess (pps vero_ppx_driver)))
+ (preprocess (pps verocaml.ppx -- --verocaml-retained)))
 
 (library
  (name forwarded_broadcast_group_consumer)
  (modules forwarded_broadcast_group_consumer)
  (libraries vstd_broadcast_forwarder verocaml.vstd verocaml.ghost)
  (flags (:standard -w -A -alert -all -open Vstd))
- (preprocess (pps vero_ppx_driver)))
+ (preprocess (pps verocaml.ppx -- --verocaml-retained)))
 
 (library
  (name selected_broadcast_group_consumer)
  (modules selected_broadcast_group_consumer)
  (libraries vstd_broadcast_forwarder verocaml.vstd verocaml.ghost)
  (flags (:standard -w -A -alert -all -open Vstd))
- (preprocess (pps vero_ppx_driver)))
+ (preprocess (pps verocaml.ppx -- --verocaml-retained)))
 
-(cram
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
  (deps
-  ../../src/verocaml.exe
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (flags (:standard -opaque))
+ (libraries outcome_test_support))
+
+(rule
+ (targets
+  vstd-integration-outcome-cases.result-report
+  vstd-integration-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
   .vstd_consumer.objs/byte/vstd_consumer.cmt
   .ambient_vstd_consumer.objs/byte/ambient_vstd_consumer.cmt
   .imported_generic_axiom_consumer.objs/byte/imported_generic_axiom_consumer.cmt
   .imported_broadcast_group_consumer.objs/byte/imported_broadcast_group_consumer.cmt
-  .vstd_broadcast_forwarder.objs/byte/vstd_broadcast_forwarder.cmt
   .imported_broadcast_declaration_consumer.objs/byte/imported_broadcast_declaration_consumer.cmt
   .forwarded_broadcast_group_consumer.objs/byte/forwarded_broadcast_group_consumer.cmt
   .selected_broadcast_group_consumer.objs/byte/selected_broadcast_group_consumer.cmt
-  (alias ../../library/all)))
+  vstd_consumer.ml
+  ambient_vstd_consumer.ml
+  imported_generic_axiom_consumer.ml
+  imported_broadcast_group_consumer.ml
+  imported_broadcast_declaration_consumer.ml
+  forwarded_broadcast_group_consumer.ml
+  selected_broadcast_group_consumer.ml
+  vstd_broadcast_forwarder.ml
+  vstd_broadcast_forwarder.mli
+  ../../library/seq.ml
+  ../../library/seq.mli
+  ../../library/int.ml
+  ../../library/int.mli
+  (alias ../../library/all)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   vstd-integration-outcome-cases.result-report
+   vstd-integration-outcome-cases.failure-archive)))
+
+(rule
+ (alias vstd-integration-outcome-check)
+ (deps
+  (:report vstd-integration-outcome-cases.result-report)
+  (:archive vstd-integration-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
+(alias
+ (name runtest)
+ (deps
+  (alias vstd-integration-outcome-check)))

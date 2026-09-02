@@ -49,12 +49,12 @@ A basic inductive proof is just a recursive OCaml proof function. The recursive
 call establishes the induction hypothesis for =upper - 1=:
 
 #+BEGIN_SRC ocaml
-let rec triangular n =
+let rec triangular (n : Vstd.Int.t) =
   [%verocaml.decreases n];
   if n <= 0 then 0 else n + triangular (n - 1)
 [@@verocaml.spec] [@@verocaml.revealed]
 
-let rec triangular_growth lower upper =
+let rec triangular_growth (lower : Vstd.Int.t) (upper : Vstd.Int.t) =
   [%verocaml.requires 0 <= lower && lower <= upper];
   [%verocaml.ensures fun _ -> triangular lower + (upper - lower) <= triangular upper];
   [%verocaml.decreases upper - lower];

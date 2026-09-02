@@ -660,20 +660,22 @@ let test_bridge_capability_cleanup_and_isolation config =
   in
   let trivial = obligation (Vir.Boolean_constant true) in
   Z3_bridge.reset_counters ();
-  Z3_bridge.solve_vir
-    ~requires:[ Logic_ir.Nonlinear_integer_arithmetic ]
-    direct_config trivial
-  |> expect_bridge_error "unsupported capability" (function
-       | Z3_bridge.Unsupported_features
-           [ Logic_ir.Nonlinear_integer_arithmetic ] -> true
-       | _ -> false);
-  let unsupported = Z3_bridge.counters () in
-  assert_true "unsupported capability translated before rejection"
-    (unsupported.capability_resolutions = 1
-    && unsupported.translations = 0
-    && unsupported.contexts_created = 0
-    && unsupported.solvers_created = 0
-    && unsupported.contexts_cleaned = 0);
+  (match
+     Z3_bridge.solve_vir
+       ~requires:[ Logic_ir.Nonlinear_integer_arithmetic ]
+       direct_config trivial
+   with
+  | Ok Z3_bridge.Verified -> ()
+  | Ok _ -> fail "nonlinear capability returned an unexpected outcome"
+  | Error _ -> fail "nonlinear capability was rejected");
+  let nonlinear = Z3_bridge.counters () in
+  assert_true "nonlinear capability did not reach a balanced solver"
+    (nonlinear.capability_resolutions = 1
+    && nonlinear.translations = 1
+    && nonlinear.contexts_created = 1
+    && nonlinear.solvers_created = 1
+    && nonlinear.solver_resets = 1
+    && nonlinear.contexts_cleaned = 1);
   let wrong_sort = symbol 99 "wrong_sort" Vir.Integer in
   Z3_bridge.solve_vir direct_config
     (obligation (Vir.Boolean_symbol wrong_sort))
@@ -682,9 +684,9 @@ let test_bridge_capability_cleanup_and_isolation config =
        | _ -> false);
   let malformed = Z3_bridge.counters () in
   assert_true "malformed VIR reached context creation"
-    (malformed.translations = 1
-    && malformed.contexts_created = 0
-    && malformed.solvers_created = 0);
+    (malformed.translations = 2
+    && malformed.contexts_created = 1
+    && malformed.solvers_created = 1);
   Z3_bridge.solve_vir ~controlled:Z3_bridge.Force_unknown direct_config trivial
   |> (function
        | Ok (Z3_bridge.Inconclusive _) -> ()
@@ -699,14 +701,14 @@ let test_bridge_capability_cleanup_and_isolation config =
   ignore (solve_direct config trivial);
   let final = Z3_bridge.counters () in
   assert_true "direct contexts were mixed, leaked, or not reset"
-    (final.contexts_created = 4
-    && final.solvers_created = 4
-    && final.solver_resets = 4
-    && final.contexts_cleaned = 4
+    (final.contexts_created = 5
+    && final.solvers_created = 5
+    && final.solver_resets = 5
+    && final.contexts_cleaned = 5
     && final.contexts_live = 0
     && final.maximum_contexts_live = 1
     && final.selected_logics
-       = [ "AUFLIA"; "AUFLIA"; "AUFLIA"; "AUFLIA" ])
+       = [ "AUFNIA"; "AUFLIA"; "AUFLIA"; "AUFLIA"; "AUFLIA" ])
 
 let quantified_query () =
   let builder = Logic_ir.create () in
@@ -833,7 +835,7 @@ let run_unit () =
   test_quantifier_profile config;
   print_endline
     "solver backend unit checks: smt.ml/direct-Z3 parity, ordinary-aggregate-int, \
-     explicit-named-sort, typed AUFLIA, projection, capability preflight, \
+     explicit-named-sort, typed AUFLIA/AUFNIA, projection, capability preflight, \
      cleanup, isolation, Z3 4.15.2"
 
 let run_timeout_smoke () =

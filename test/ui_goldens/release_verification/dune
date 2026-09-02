@@ -1,8 +1,0 @@
-(cram
- (alias ui-goldens-check)
- (deps
-  ../../release_verification/fixtures/pure_verified.ml
-  ../../../src/verocaml.exe
-  ../../../ppx/vero_ppx.exe
-  ../../../runtime/vero_ghost.cma
-  ../../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))

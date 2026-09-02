@@ -13,8 +13,9 @@ let usage =
   "usage: verocaml verify FILE.ml|FILE.cmt|DIRECTORY [--solver z3] [--timeout-ms N] \
    [--rlimit N] [--threads N] [--dependency FILE.cmt]... [--dump-sst FILE] \
    [--dump-vir FILE]\n\
-  \       verocaml verify-project --root FILE.cmt FILE.cmi [--root FILE.cmt \
-   FILE.cmi]... [--dependency FILE.cmt FILE.cmi]... [--solver z3] \
+  \       verocaml verify-project --root FILE.cmt FILE.cmi [FILE.cmti FILE.vri] \
+   [--root FILE.cmt FILE.cmi [FILE.cmti FILE.vri]]... \
+   [--dependency FILE.cmt FILE.cmi [FILE.cmti FILE.vri]]... [--solver z3] \
    [--timeout-ms N] [--rlimit N] [--threads N]"
 
 type message =
@@ -101,9 +102,9 @@ let message = function
       Printf.sprintf "dependency CMT %S rejected [%s]: %s" filename
         diagnostic.code diagnostic.message
   | Project_inventory_required ->
-      "verify-project requires at least one --root FILE.cmt FILE.cmi entry"
+      "verify-project requires at least one --root CMT CMI [CMTI VRI] entry"
   | Project_entry_requires flag ->
-      Printf.sprintf "%s requires FILE.cmt FILE.cmi" flag
+      Printf.sprintf "%s requires CMT CMI or CMT CMI CMTI VRI" flag
 
 let span (value : Diagnostic.span) =
   Printf.sprintf "%s:%d:%d-%d:%d" value.file value.start_pos.line
@@ -145,6 +146,7 @@ let operation = function
   | Verifier_service.Add -> "add"
   | Subtract -> "subtract"
   | Negate -> "negate"
+  | Multiply -> "multiply"
   | Multiply_constant value -> Printf.sprintf "multiply-constant(%s)" value
   | Successor -> "successor"
   | Predecessor -> "predecessor"

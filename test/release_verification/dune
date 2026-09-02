@@ -44,11 +44,6 @@
  (action
   (run %{validator} %{report} %{archive})))
 
-(cram
- (alias release-verification-specialist-check)
- (runtest_alias false)
- (deps release_verification_tool.exe))
-
 (alias
  (name release-verification-check)
  (deps

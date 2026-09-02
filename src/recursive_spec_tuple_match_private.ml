@@ -34,7 +34,7 @@ let exact_tuple_type typ components component_type =
              declared_label = actual_label
              && same_type declared_type (component_type component))
            declared components
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Aggregate _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Aggregate _
   | Sst.Parameter _ | Sst.Application _ ->
       false
 
@@ -70,7 +70,8 @@ let plan (expression : Sst.expression) (pattern : Sst.pattern) =
           Error Tuple_nesting_mismatch
       | _, _ -> (
           match expression.typ with
-          | Sst.Int | Sst.Bool | Sst.Aggregate _ | Sst.Application _ ->
+          | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Aggregate _
+          | Sst.Application _ ->
               Ok ({ expression; pattern } :: leaves)
           | Sst.Unit | Sst.Tuple _ | Sst.Parameter _ ->
               Error Unsupported_leaf_type)

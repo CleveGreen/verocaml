@@ -1,13 +1,13 @@
 type node = Empty | Node of int * node
 
-let rec spec_repeat (value : int) (n : int) (node : node) : node =
+let rec spec_repeat (value : int) (n : Vstd.Int.t) (node : node) : node =
   [%verocaml.decreases n];
   if n <= 0 then node
   else spec_repeat value (n - 1) (Node (value, node))
 [@@verocaml.spec]
 [@@verocaml.opaque]
 
-let rec spec_size (node : node) : int =
+let rec spec_size (node : node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0

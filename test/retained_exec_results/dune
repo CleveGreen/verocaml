@@ -72,19 +72,6 @@
  (action
   (run %{validator} %{report} %{archive})))
 
-(cram
- (alias retained-exec-results-specialist-check)
- (runtest_alias false)
- (deps
-  (glob_files fixtures/*.ml)
-  (glob_files fixtures/*.mli)
-  retained_exec_results_tool.ml
-  retained_exec_results_tool.exe
-  ../../src/verocaml.exe
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
-
 (alias
  (name retained-exec-results-check)
  (deps

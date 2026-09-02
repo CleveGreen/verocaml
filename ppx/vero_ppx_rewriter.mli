@@ -1,1 +1,3 @@
-val make : string list -> Ast_mapper.mapper
+type entrypoint = Implementation | Interface
+
+val make : ?entrypoint:entrypoint -> string list -> Ast_mapper.mapper

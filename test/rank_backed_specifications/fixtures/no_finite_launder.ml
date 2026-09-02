@@ -4,7 +4,7 @@ type stack = { top : int node }
 let identity (stack : stack) : stack = stack
 [@@verocaml.spec]
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0

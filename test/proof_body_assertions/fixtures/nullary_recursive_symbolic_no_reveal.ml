@@ -1,6 +1,6 @@
 type 'a node = Empty | Node of 'a * 'a node
 
-let rec spec_index_alt_imp (idx : int) (nodes : int node) : int node =
+let rec spec_index_alt_imp (idx : Vstd.Int.t) (nodes : int node) : int node =
   [%verocaml.decreases nodes];
   match nodes with
   | Empty -> Empty
@@ -9,7 +9,7 @@ let rec spec_index_alt_imp (idx : int) (nodes : int node) : int node =
       else spec_index_alt_imp (idx - 1) rest
 [@@verocaml.spec] [@@verocaml.opaque]
 
-let rec spec_other (idx : int) (nodes : int node) : int node =
+let rec spec_other (idx : Vstd.Int.t) (nodes : int node) : int node =
   [%verocaml.decreases nodes];
   match nodes with
   | Empty -> Empty
@@ -17,7 +17,7 @@ let rec spec_other (idx : int) (nodes : int node) : int node =
       if idx <= 0 then Node (value, Empty) else spec_other (idx - 1) rest
 [@@verocaml.spec] [@@verocaml.opaque]
 
-let rec spec_revealed_default (idx : int) (nodes : int node) : int node =
+let rec spec_revealed_default (idx : Vstd.Int.t) (nodes : int node) : int node =
   [%verocaml.decreases nodes];
   match nodes with
   | Empty -> Empty
@@ -26,14 +26,14 @@ let rec spec_revealed_default (idx : int) (nodes : int node) : int node =
       else spec_revealed_default (idx - 1) rest
 [@@verocaml.spec] [@@verocaml.revealed]
 
-let removed_reveal (idx : int) (nodes : int node [@finite]) =
+let removed_reveal (idx : Vstd.Int.t) (nodes : int node [@finite]) =
   match nodes with
   | Empty ->
       [%verocaml.assert spec_index_alt_imp idx nodes = Empty]
   | Node _ -> ()
 [@@verocaml.proof]
 
-let late_reveal (idx : int) (nodes : int node [@finite]) =
+let late_reveal (idx : Vstd.Int.t) (nodes : int node [@finite]) =
   match nodes with
   | Empty ->
       [%verocaml.assert spec_index_alt_imp idx nodes = Empty];
@@ -43,7 +43,7 @@ let late_reveal (idx : int) (nodes : int node [@finite]) =
 
 let sibling_reveal
     (take_left : bool)
-    (idx : int)
+    (idx : Vstd.Int.t)
     (nodes : int node [@finite]) =
   if take_left then
     [%verocaml.reveal_with_fuel (spec_index_alt_imp, 2)]
@@ -56,7 +56,7 @@ let sibling_reveal
     | Node _ -> ()
 [@@verocaml.proof]
 
-let wrong_callee_reveal (idx : int) (nodes : int node [@finite]) =
+let wrong_callee_reveal (idx : Vstd.Int.t) (nodes : int node [@finite]) =
   [%verocaml.reveal_with_fuel (spec_other, 2)];
   match nodes with
   | Empty ->
@@ -64,14 +64,14 @@ let wrong_callee_reveal (idx : int) (nodes : int node [@finite]) =
   | Node _ -> ()
 [@@verocaml.proof]
 
-let synthetic_only (idx : int) (nodes : int node [@finite]) =
+let synthetic_only (idx : Vstd.Int.t) (nodes : int node [@finite]) =
   match nodes with
   | Empty ->
       [%verocaml.assert spec_index_alt_imp idx nodes = Empty]
   | Node _ -> ()
 [@@verocaml.proof]
 
-let zero_fuel (idx : int) (nodes : int node [@finite]) =
+let zero_fuel (idx : Vstd.Int.t) (nodes : int node [@finite]) =
   [%verocaml.reveal_with_fuel (spec_index_alt_imp, 0)];
   match nodes with
   | Empty ->
@@ -79,7 +79,7 @@ let zero_fuel (idx : int) (nodes : int node [@finite]) =
   | Node _ -> ()
 [@@verocaml.proof]
 
-let revealed_default (idx : int) (nodes : int node [@finite]) =
+let revealed_default (idx : Vstd.Int.t) (nodes : int node [@finite]) =
   match nodes with
   | Empty ->
       [%verocaml.assert spec_revealed_default idx nodes = Empty]

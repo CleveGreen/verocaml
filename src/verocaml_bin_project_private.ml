@@ -1,7 +1,9 @@
 open Verocaml_bin_render
 
 type options = {
-  inventory : (Verifier_service.scope_role * string * string) list;
+  inventory :
+    (Verifier_service.scope_role * string * string * string option * string option)
+    list;
   timeout_ms : int;
   rlimit : int option;
   threads : int;
@@ -27,13 +29,38 @@ let parse_positive_decimal_int flag value =
   else Error (render_message (Positive_integer flag))
 
 let parse ~default_threads argv : parsed =
+  let rec expand_manifest seen reversed = function
+    | [] -> Ok (List.rev reversed)
+    | "--inventory" :: filename :: rest when not seen -> (
+        match Verocaml_bin_inventory_private.read filename with
+        | Error message -> Error message
+        | Ok entries ->
+            let arguments =
+              entries
+              |> List.concat_map
+                   (fun (entry : Verocaml_bin_inventory_private.entry) ->
+                     [
+                       (match entry.role with Root -> "--root" | Dependency -> "--dependency");
+                       entry.cmt;
+                       entry.cmi;
+                       Option.value ~default:"-" entry.cmti;
+                       Option.value ~default:"-" entry.vri;
+                     ])
+            in
+            expand_manifest true reversed (arguments @ rest))
+    | "--inventory" :: _ when seen ->
+        Error (render_message (Option_once "--inventory"))
+    | "--inventory" :: [] ->
+        Error (render_message (Option_requires ("--inventory", "FILE")))
+    | argument :: rest -> expand_manifest seen (argument :: reversed) rest
+  in
   let rec loop inventory timeout_ms timeout_seen rlimit rlimit_seen threads
       threads_seen solver_seen = function
     | [] ->
         if
           not
             (List.exists
-               (fun (role, _, _) -> role = Verifier_service.Scope_root)
+               (fun (role, _, _, _, _) -> role = Verifier_service.Scope_root)
                inventory)
         then Error (render_message Project_inventory_required)
         else
@@ -44,6 +71,18 @@ let parse ~default_threads argv : parsed =
               rlimit;
               threads = Option.value ~default:(default_threads ()) threads;
             }
+    | (("--root" | "--dependency") as flag) :: cmt :: cmi :: cmti :: vri :: rest
+      when not (String.starts_with ~prefix:"--" cmt)
+           && not (String.starts_with ~prefix:"--" cmi)
+           && not (String.starts_with ~prefix:"--" cmti)
+           && not (String.starts_with ~prefix:"--" vri) ->
+        let role =
+          if String.equal flag "--root" then Verifier_service.Scope_root
+          else Scope_dependency
+        in
+        let optional value = if String.equal value "-" then None else Some value in
+        loop ((role, cmt, cmi, optional cmti, optional vri) :: inventory) timeout_ms
+          timeout_seen rlimit rlimit_seen threads threads_seen solver_seen rest
     | (("--root" | "--dependency") as flag) :: cmt :: cmi :: rest
       when not (String.starts_with ~prefix:"--" cmt)
            && not (String.starts_with ~prefix:"--" cmi) ->
@@ -51,7 +90,7 @@ let parse ~default_threads argv : parsed =
           if String.equal flag "--root" then Verifier_service.Scope_root
           else Scope_dependency
         in
-        loop ((role, cmt, cmi) :: inventory) timeout_ms timeout_seen rlimit
+        loop ((role, cmt, cmi, None, None) :: inventory) timeout_ms timeout_seen rlimit
           rlimit_seen threads threads_seen solver_seen rest
     | (("--root" | "--dependency") as flag) :: _ ->
         Error (render_message (Project_entry_requires flag))
@@ -92,20 +131,83 @@ let parse ~default_threads argv : parsed =
     | argument :: _ -> Error (render_message (Unexpected_argument argument))
   in
   match Array.to_list argv with
-  | _ :: "verify-project" :: arguments ->
-      loop [] default_timeout_ms false None false None false false arguments
+  | _ :: "verify-project" :: arguments -> (
+      match expand_manifest false [] arguments with
+      | Error _ as error -> error
+      | Ok arguments ->
+          loop [] default_timeout_ms false None false None false false arguments)
   | _ -> Error Verocaml_bin_render.usage
 
 let load_inventory inventory =
+  let invocation_directory = Sys.getcwd () in
+  let canonical path =
+    let path =
+      if Filename.is_relative path then Filename.concat invocation_directory path
+      else path
+    in
+    try Ok (Unix.realpath path) with Unix.Unix_error _ -> Error path
+  in
+  let canonical_entry (role, cmt, cmi, cmti, vri) =
+    match
+      (canonical cmt, canonical cmi,
+       Option.fold ~none:(Ok None)
+         ~some:(fun path -> Result.map Option.some (canonical path)) cmti,
+       Option.fold ~none:(Ok None)
+         ~some:(fun path -> Result.map Option.some (canonical path)) vri)
+    with
+    | Ok canonical_cmt, Ok canonical_cmi, Ok cmti, Ok vri ->
+        Ok (role, cmt, cmi, canonical_cmt, canonical_cmi, cmti, vri)
+    | _ -> Error ()
+  in
+  let inventory = List.map canonical_entry inventory in
+  if List.exists Result.is_error inventory then (
+    [%log.warn "rejected incomplete retained artifact inventory"
+      ~stage:(Delator.Field.string "inventory-preflight")
+      ~route:(Delator.Field.string "verify-project")
+      ~decision:(Delator.Field.string "rejected")
+      ~reason_class:(Delator.Field.string "missing-artifact")];
+    prerr_endline
+      (dependency_error ~unit_name:(Some "inventory")
+         ~message:"complete artifact inventory contains a missing artifact");
+    Error ())
+  else
+  let inventory = List.filter_map Result.to_option inventory in
+  [%log.debug "canonicalized complete retained artifact inventory"
+    ~stage:(Delator.Field.string "inventory-preflight")
+    ~route:(Delator.Field.string "verify-project")
+    ~candidate_count:(Delator.Field.int (List.length inventory))
+    ~decision:(Delator.Field.string "inspect")];
+  let artifact_directories =
+    inventory
+    |> List.concat_map (fun (_, _, _, cmt, cmi, cmti, vri) ->
+           List.map Filename.dirname
+             (cmt :: cmi :: Option.to_list cmti @ Option.to_list vri))
+    |> List.fold_left
+         (fun directories directory ->
+           if List.mem directory directories then directories
+           else directories @ [ directory ])
+         []
+  in
   let rec load loaded = function
-    | [] -> Ok (List.rev loaded)
-    | (role, cmt, cmi) :: rest -> (
-        match Cmt_input.load_with_interface ~cmt ~cmi () with
+    | [] ->
+        [%log.info "completed retained artifact inventory validation"
+          ~stage:(Delator.Field.string "inventory-load")
+          ~route:(Delator.Field.string "verify-project")
+          ~candidate_count:(Delator.Field.int (List.length loaded))
+          ~decision:(Delator.Field.string "accepted")];
+        Ok (List.rev loaded)
+    | (role, display_cmt, display_cmi, cmt, cmi, cmti, vri) :: rest -> (
+        match
+          Cmt_input.load_with_interface ~cmt ~cmi ?cmti ?vri
+            ~artifact_directories ()
+        with
         | Error diagnostic ->
             prerr_endline (Verocaml_bin_render.frontend_error diagnostic);
             Error ()
         | Ok implementation ->
-            load ((role, cmt, cmi, implementation) :: loaded) rest)
+            load
+              ((role, display_cmt, display_cmi, implementation) :: loaded)
+              rest)
   in
   load [] inventory
 

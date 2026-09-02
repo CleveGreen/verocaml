@@ -47,7 +47,7 @@ type 'a node =
 
 type 'a stack = {
   top : 'a node;
-  length : int;
+  length : Vstd.Int.t;
 }
 
 let spec_is_empty a =
@@ -56,7 +56,7 @@ let spec_is_empty a =
     | Node _ -> false
 [@@verocaml.spec]
 
-let rec spec_node_len (node : 'a node) : int =
+let rec spec_node_len (node : 'a node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
     | Empty -> 0
@@ -160,4 +160,3 @@ let lemma_spec_eq_iff (a : 'a node [@finite]) (b : 'a node [@finite]) =
     ()
   end else node_eq_refl a
 [@@verocaml.proof]
-

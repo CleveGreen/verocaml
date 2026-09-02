@@ -1,7 +1,7 @@
 type 'a node = Empty | Node of 'a * 'a node
 type stack = { top : int node; length : int }
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0

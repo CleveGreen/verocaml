@@ -69,11 +69,13 @@ let vir_aggregate_type_of_sst descriptors = function
                 ^ ">";
               aggregate_type_arguments = arguments })
           (Parametric_adt.find descriptors constructor)
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ -> None
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Parameter _ ->
+      None
 let symbol_of_binding parametric_adts (binding : Sst.binding) =
   let sort =
     match binding.typ with
-    | Sst.Int -> Vir.Integer
+    | Sst.Int | Sst.Mathematical_int -> Vir.Integer
     | Sst.Bool -> Vir.Boolean
     | Sst.Aggregate type_id ->
         Vir.Aggregate
@@ -104,7 +106,7 @@ let quantifier_value parametric_adts (binding : Sst.binding) =
   in
   let value =
     match binding.typ with
-    | Sst.Int -> Integer (Vir.Integer_symbol symbol)
+    | Sst.Int | Sst.Mathematical_int -> Integer (Vir.Integer_symbol symbol)
     | Sst.Bool -> Boolean (Vir.Boolean_symbol symbol)
     | Sst.Application _ when Parametric_type.is_spec_function binding.typ ->
         Function
@@ -132,22 +134,17 @@ let quantifier_value parametric_adts (binding : Sst.binding) =
     | Sst.Unit | Sst.Tuple _ -> assert false
   in
   (symbol, value)
-let bounded_quantifier_body kind binder body =
-  match binder.Vir.sort with
-  | Vir.Integer ->
-      let range =
-        match Vir.integer_range (Vir.Integer_symbol binder) with
-        | [] -> Vir.Boolean_constant true
-        | first :: rest ->
-            List.fold_left
-              (fun combined term -> Vir.Boolean_and (combined, term))
-              first rest
-      in
-      (match kind with
-      | Logic_quantifier_private.Forall ->
-          Vir.Boolean_or (Vir.Boolean_not range, body)
-      | Logic_quantifier_private.Exists -> Vir.Boolean_and (range, body))
-  | Vir.Boolean | Vir.Aggregate _ | Vir.Parametric _ -> body
+let bounded_quantifier_body kind binder_type binder body =
+  Spec_function_type_private.quantifier_body
+    {
+      integer_range =
+        (fun () -> Vir.integer_range (Vir.Integer_symbol binder));
+      truth = Vir.Boolean_constant true;
+      conjunction = (fun left right -> Vir.Boolean_and (left, right));
+      disjunction = (fun left right -> Vir.Boolean_or (left, right));
+      negation = (fun term -> Vir.Boolean_not term);
+    }
+    kind binder_type body
 let initial_environment parametric_adts parameters =
   List.map
     (fun parameter ->
@@ -157,7 +154,8 @@ let initial_environment parametric_adts parameters =
           let symbol = symbol_of_binding parametric_adts binding in
           ( binding.id,
             match binding.typ with
-            | Sst.Int -> Integer (Vir.Integer_symbol symbol)
+            | Sst.Int | Sst.Mathematical_int ->
+                Integer (Vir.Integer_symbol symbol)
             | Sst.Bool -> Boolean (Vir.Boolean_symbol symbol)
             | Sst.Aggregate type_id ->
                 Aggregate
@@ -218,7 +216,7 @@ let vir_aggregate_type (type_id : Sst.type_id) =
   }
 let selector_range parametric_adts typ =
   match typ with
-  | Sst.Int -> Vir.Integer
+  | Sst.Int | Sst.Mathematical_int -> Vir.Integer
   | Sst.Bool -> Vir.Boolean
   | Sst.Aggregate type_id -> Vir.Aggregate (vir_aggregate_type type_id)
   | Sst.Parameter binder -> Vir.Parametric binder
@@ -274,7 +272,8 @@ let selected_argument parametric_adts aggregate constructor index typ =
       index typ
   in
   match typ with
-  | Sst.Int -> Integer (Vir.Integer_selector (selector, aggregate))
+  | Sst.Int | Sst.Mathematical_int ->
+      Integer (Vir.Integer_selector (selector, aggregate))
   | Sst.Bool -> Boolean (Vir.Boolean_selector (selector, aggregate))
   | Sst.Aggregate type_id ->
       Aggregate
@@ -298,7 +297,8 @@ let selected_field parametric_adts aggregate field typ =
     field_selector parametric_adts aggregate.Vir.aggregate_type field typ
   in
   match typ with
-  | Sst.Int -> Integer (Vir.Integer_selector (selector, aggregate))
+  | Sst.Int | Sst.Mathematical_int ->
+      Integer (Vir.Integer_selector (selector, aggregate))
   | Sst.Bool -> Boolean (Vir.Boolean_selector (selector, aggregate))
   | Sst.Aggregate type_id ->
       Aggregate
@@ -517,6 +517,15 @@ let rec translate parametric_adts environment (expression : Sst.expression) =
   | Sst.Int_constant value -> Ok (Integer (Vir.Integer_constant value))
   | Sst.Bool_constant value -> Ok (Boolean (Vir.Boolean_constant value))
   | Sst.Variable { binding; _ } -> lookup expression.span environment binding
+  | Sst.Lift_runtime_int operand ->
+      [%log.trace "lower recursive-spec runtime-integer lift"
+        ~stage:(Delator.Field.string "termination-term-translation")
+        ~source_type:(Delator.Field.string "int")
+        ~target_type:(Delator.Field.string "mathematical-int")
+        ~decision:(Delator.Field.string "erase-representation-preserving-lift")];
+      let* operand = recurse operand in
+      let* operand = integer expression.span operand in
+      Ok (Integer operand)
   | Sst.Checked_arithmetic (operation, operands) ->
       let* operands =
         List.fold_left
@@ -533,6 +542,8 @@ let rec translate parametric_adts environment (expression : Sst.expression) =
         | Sst.Add, [ left; right ] -> Vir.Integer_add (left, right)
         | Sst.Subtract, [ left; right ] -> Vir.Integer_subtract (left, right)
         | Sst.Negate, [ value ] -> Vir.Integer_negate value
+        | Sst.Multiply, [ left; right ] ->
+            Vir.Integer_multiply (left, right)
         | Sst.Multiply_constant coefficient, [ value ] ->
             Vir.Integer_multiply_constant (coefficient, value)
         | Sst.Successor, [ value ] ->
@@ -701,7 +712,8 @@ let rec translate parametric_adts environment (expression : Sst.expression) =
       let* quantifier =
         Vir.make_boolean_quantifier
           ~sort_of_type:(function
-            | Parametric_type.Int -> Ok Vir.Integer
+            | Parametric_type.Int | Parametric_type.Mathematical_int ->
+                Ok Vir.Integer
             | Bool -> Ok Vir.Boolean
             | Parameter binder -> Ok (Vir.Parametric binder)
             | Application _ as typ
@@ -719,7 +731,10 @@ let rec translate parametric_adts environment (expression : Sst.expression) =
             (Logic_quantifier_private.singleton
                quantifier.quantifier_metadata)
           ~binders:[ binder ]
-          ~body:(bounded_quantifier_body kind binder body) ~trigger
+          ~body:
+            (bounded_quantifier_body kind quantifier.quantifier_binder.typ
+               binder body)
+          ~trigger
         |> Result.map_error (fun message ->
                { span = expression.span; message })
       in
@@ -1246,14 +1261,7 @@ let default_activations definitions proof_index =
       else None)
     definitions
 
-let prepare program =
-  let* validated =
-    match Sst_validation.validate program with
-    | Ok validated -> Ok validated
-    | Error error ->
-        fail error.Sst_validation.span "%s"
-          (Sst_validation.error_to_string error)
-  in
+let prepare_validated validated =
   let* termination =
     match Termination.prepare (Termination.analyze validated) with
     | Ok plan -> Ok plan
@@ -1344,7 +1352,30 @@ let prepare program =
       (Ok []) obligations
     |> Result.map List.rev
   in
+  [%log.debug
+    "prepared recursive specification unfolding from retained validation authority"
+    ~stage:(Delator.Field.string "recursive-specification-unfolding")
+    ~validation_authority:(Delator.Field.string "retained")
+    ~definition_count:(Delator.Field.int (List.length definitions))
+    ~termination_obligation_count:
+      (Delator.Field.int (List.length obligations))
+    ~decision:(Delator.Field.string "prepared")];
   Ok { validated; termination; definitions; obligations }
+
+let prepare program =
+  [%log.debug
+    "starting recursive specification unfolding with local SST validation"
+    ~stage:(Delator.Field.string "recursive-specification-unfolding")
+    ~validation_authority:(Delator.Field.string "local")
+    ~decision:(Delator.Field.string "started")];
+  let* validated =
+    match Sst_validation.validate program with
+    | Ok validated -> Ok validated
+    | Error error ->
+        fail error.Sst_validation.span "%s"
+          (Sst_validation.error_to_string error)
+  in
+  prepare_validated validated
 
 let validated_program prepared = prepared.validated
 let termination_plan prepared = prepared.termination

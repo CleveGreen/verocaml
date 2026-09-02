@@ -55,16 +55,6 @@
  (action
   (run %{validator} %{report} %{archive})))
 
-(cram
- (alias logical-adt-schema-specialist-check)
- (runtest_alias false)
- (deps
-  (glob_files fixtures/*.ml)
-  logical_adt_schema_tool.exe
-  ../../src/verocaml.exe
-  ../../ppx/vero_ppx.exe
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
-
 (alias
  (name logical-adt-schema-check)
  (deps

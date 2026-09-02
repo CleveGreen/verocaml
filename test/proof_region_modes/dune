@@ -20,17 +20,6 @@
    %{targets}
    (echo "let ready = ()"))))
 
-(cram
- (deps
-  (glob_files fixtures/*.ml)
-  mutate_carrier.exe
-  proof_region_modes_tool.exe
-  ../../src/verocaml.exe
-  ../../verocaml.install
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
-
 (alias
  (name proof-region-modes-check)
  (deps

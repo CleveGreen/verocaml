@@ -20,6 +20,11 @@ val prepared_cmt :
 val lower_single_source :
   module_name:string -> source:string -> libraries:string list -> dune_project
 
+val retained_providers :
+  environment:Project_environment.t ->
+  libraries:string list ->
+  (Cmt_input.implementation list, Failure.t) result
+
 val run :
   environment:Project_environment.t ->
   workspace:string ->

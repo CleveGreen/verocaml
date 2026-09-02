@@ -143,22 +143,51 @@ let public_invariant_digest (invariant : public_invariant) =
 let public_invariant_operations (invariant : public_invariant) =
   invariant.Environment.public_operations
 
-let load_inputs ~dependency_files ~consumer_file ~consumer_error =
+let load_inputs
+    ~dependency_files:
+      (dependency_files
+        [@delator.field (fun files -> string_of_int (List.length files))])
+    ~consumer_file:(consumer_file [@delator.skip])
+    ~consumer_error:(consumer_error [@delator.skip]) =
   let rec load_dependencies loaded = function
-    | [] -> Ok (List.rev loaded)
+    | [] ->
+        [%log.debug "completed interface specification dependency loading"
+          ~stage:(Delator.Field.string "interface-input-load")
+          ~input_role:(Delator.Field.string "dependency")
+          ~dependency_count:(Delator.Field.int (List.length loaded))
+          ~decision:(Delator.Field.string "accepted")];
+        Ok (List.rev loaded)
     | filename :: rest -> (
         match Cmt_input.load filename with
         | Ok dependency -> load_dependencies (dependency :: loaded) rest
         | Error diagnostic ->
-            Environment.error
-              (Printf.sprintf "dependency CMT %S rejected [%s]: %s" filename
-                 diagnostic.code diagnostic.message))
+            [%log.warn "rejected interface specification dependency input"
+              ~stage:(Delator.Field.string "interface-input-load")
+              ~input_role:(Delator.Field.string "dependency")
+              ~dependency_ordinal:(Delator.Field.int (List.length loaded))
+              ~dependency_count:(Delator.Field.int (List.length dependency_files))
+              ~diagnostic_code:(Delator.Field.string diagnostic.Diagnostic.code)
+              ~decision:(Delator.Field.string "rejected")
+              ~reason_class:(Delator.Field.string "artifact-load")];
+            Environment.error ~diagnostic
+              (Printf.sprintf "dependency CMT %S rejected" filename))
   in
   match Cmt_input.load consumer_file with
-  | Error diagnostic -> consumer_error diagnostic
+  | Error diagnostic ->
+      [%log.warn "rejected interface specification consumer input"
+        ~stage:(Delator.Field.string "interface-input-load")
+        ~input_role:(Delator.Field.string "consumer")
+        ~dependency_count:(Delator.Field.int (List.length dependency_files))
+        ~diagnostic_code:(Delator.Field.string diagnostic.Diagnostic.code)
+        ~decision:(Delator.Field.string "rejected")
+        ~reason_class:(Delator.Field.string "artifact-load")];
+      consumer_error diagnostic
   | Ok consumer ->
       Result.map (fun dependencies -> (consumer, dependencies))
         (load_dependencies [] dependency_files)
+[@@delator.instrument]
+[@@delator.level debug]
+[@@delator.no_exn_log]
 
 let authentication_consumer_error consumer_file diagnostic =
   Environment.error

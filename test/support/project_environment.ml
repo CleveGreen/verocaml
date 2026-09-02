@@ -30,6 +30,18 @@ let tool_path environment = environment.tool_path
 let library_set_digest environment = environment.library_set_digest
 let library_names environment = List.map (fun library -> library.name) environment.libraries
 
+let rec parent count path =
+  if count <= 0 then path else parent (count - 1) (Filename.dirname path)
+
+let library_root library =
+  let depth = List.length (String.split_on_char '.' library.name) in
+  parent depth (Filename.dirname library.artifact)
+
+let ocaml_path environment =
+  environment.package_root
+  :: List.map library_root environment.libraries
+  |> List.sort_uniq String.compare |> String.concat ":"
+
 let split_once separator value =
   match String.index_opt value separator with
   | None -> (value, "")

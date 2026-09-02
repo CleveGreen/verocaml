@@ -1,7 +1,7 @@
 type node = Empty | Node of int * node
 type pair = Pair of node * node
 
-let rec spec_len (xs : node) : int =
+let rec spec_len (xs : node) : Vstd.Int.t =
   [%verocaml.decreases xs];
   match xs with Empty -> 0 | Node (_, tail) -> 1 + spec_len tail
 [@@verocaml.spec] [@@verocaml.revealed]

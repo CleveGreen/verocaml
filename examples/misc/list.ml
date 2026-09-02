@@ -13,7 +13,7 @@ let rec equal (left : 'a vlist) (right : 'a vlist) : bool =
 [@@verocaml.spec]
 [@@verocaml.revealed]
 
-let rec list_length (value : 'a vlist) : int =
+let rec list_length (value : 'a vlist) : Vstd.Int.t =
   [%verocaml.decreases value];
   match value with Nil -> 0 | Cons (_, tail) -> 1 + list_length tail
 [@@verocaml.spec]
@@ -78,7 +78,7 @@ let bool_sound
   equal_sound left right
 [@@verocaml.proof]
 
-let stack_wf (contents : int vlist) (length : int) : bool =
+let stack_wf (contents : int vlist) (length : Vstd.Int.t) : bool =
   int_length_control contents = length
 [@@verocaml.spec]
 
@@ -89,7 +89,7 @@ let spec_push_front (value : int) (contents : int vlist) : int vlist =
 let push_front_preserves_length
     (value : int)
     (contents : int vlist [@finite])
-    (length : int) : unit =
+    (length : Vstd.Int.t) : unit =
   [%verocaml.requires stack_wf contents length];
   [%verocaml.ensures
     fun _result ->
@@ -199,14 +199,15 @@ end
 
 let nonnegative (value : int) : bool = value >= 0 [@@verocaml.spec]
 
-let tracked_successor (value : int [@tracked]) : (int [@tracked]) =
+let tracked_successor
+    (value : Vstd.Int.t [@tracked]) : (Vstd.Int.t [@tracked]) =
   [%verocaml.requires value >= 0];
   [%verocaml.ensures fun result -> result = value + 1];
   let[@tracked] next = (((value [@tracked]) + 1) [@tracked]) in
   (next [@tracked])
 [@@verocaml.proof]
 
-let mode_observation source =
+let mode_observation (source : int) =
   [%verocaml.requires nonnegative source];
   [%verocaml.ensures fun result -> result = source];
   let[@tracked] tracked = (source [@tracked]) in

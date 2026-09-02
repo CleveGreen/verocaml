@@ -36,7 +36,10 @@ type lowering_state = {
 }
 
 type mixed_call_argument =
-  | Lowered_call_argument of Sst.call_argument
+  | Lowered_call_argument of {
+      argument : Sst.call_argument;
+      source : Typedtree.expression;
+    }
   | Pending_callback_argument of {
       shape : Callback_shape_private.t;
       label : string option;

@@ -525,6 +525,11 @@ let rec fresh_value state ~source_name ~role ~span ~project = function
       let term = Vir.Integer_symbol symbol in
       let state = with_assumptions state (Vir.integer_range term) in
       Ok (Integer_value term, state)
+  | Sst.Mathematical_int ->
+      let symbol, state =
+        fresh_symbol state ~source_name ~sort:Integer ~role ~span ~project
+      in
+      Ok (Integer_value (Vir.Integer_symbol symbol), state)
   | Sst.Bool ->
       let symbol, state =
         fresh_symbol state ~source_name ~sort:Boolean ~role ~span ~project
@@ -665,13 +670,10 @@ let selected_value state aggregate make_selector path typ =
         })
       path typ
   in
-  let rec ranges = function
-    | Integer_value term -> Vir.integer_range term
-    | Tuple_value values -> List.concat_map ranges values
-    | Unit_value | Boolean_value _ | Aggregate_value _ | Parametric_value _ | Function_value _ ->
-        []
-  in
-  Ok (value, with_assumptions state (ranges value))
+  Ok
+    ( value,
+      with_assumptions state
+        (Logical_spec_evaluation_private.ranges_of_value typ value) )
 let select_field state aggregate field typ =
   selected_value state aggregate (field_selector field) [] typ
 type owned_tree_breadcrumb =
@@ -841,7 +843,7 @@ let ranges_of_value = Logical_spec_evaluation_private.ranges_of_value
 let bind_scalar state (binding : Sst.binding) value =
   let sort =
     match binding.typ with
-    | Sst.Int -> Some Vir.Integer
+    | Sst.Int | Sst.Mathematical_int -> Some Vir.Integer
     | Sst.Bool -> Some Vir.Boolean
     | Sst.Parameter binder -> Some (Vir.Parametric binder)
     | Sst.Unit | Sst.Tuple _ | Sst.Aggregate _ | Sst.Application _ -> None
@@ -902,7 +904,9 @@ let bind_scalar state (binding : Sst.binding) value =
       in
       let assumptions =
         match alias with
-        | Integer_value term -> equation :: Vir.integer_range term
+        | Integer_value term when binding.typ = Sst.Int ->
+            equation :: Vir.integer_range term
+        | Integer_value _ -> [ equation ]
         | Boolean_value _ | Parametric_value _ | Function_value _ -> [ equation ]
         | Unit_value | Tuple_value _ | Aggregate_value _ -> assert false
       in
@@ -1009,7 +1013,10 @@ let rec bind_pattern_direct ?(parametric_adts = []) function_name environment
                 bind_pattern_direct ~parametric_adts function_name environment
                   pattern selected
               in
-              Ok (environment, ranges @ ranges_of_value selected @ nested_ranges))
+              Ok
+                ( environment,
+                  ranges @ ranges_of_value pattern.typ selected
+                  @ nested_ranges ))
             (Ok (environment, []))
             fields
       | _ ->
@@ -1306,6 +1313,7 @@ let arithmetic_operation = function
   | Sst.Add -> Vir.Add
   | Sst.Subtract -> Vir.Subtract
   | Sst.Negate -> Vir.Negate
+  | Sst.Multiply -> Vir.Multiply
   | Sst.Multiply_constant value -> Vir.Multiply_constant value
   | Sst.Successor -> Vir.Successor
   | Sst.Predecessor -> Vir.Predecessor
@@ -1324,6 +1332,8 @@ let arithmetic_term function_name span operation arguments =
   | Sst.Add, [ left; right ] -> Ok (Vir.Integer_add (left, right))
   | Sst.Subtract, [ left; right ] -> Ok (Vir.Integer_subtract (left, right))
   | Sst.Negate, [ value ] -> Ok (Vir.Integer_negate value)
+  | Sst.Multiply, [ left; right ] ->
+      Ok (Vir.Integer_multiply (left, right))
   | Sst.Multiply_constant constant, [ value ] ->
       Ok (Vir.Integer_multiply_constant (constant, value))
   | Sst.Successor, [ value ] ->
@@ -1539,7 +1549,8 @@ let emit_closed_invariant_goal ?(verified_assumptions = []) context handle
       Ok (emitted, state)
 let invariant_for_typ environment = function
   | Sst.Aggregate type_id -> Type_invariant.find_for_type environment type_id
-  | Sst.Unit | Sst.Int | Sst.Bool | Sst.Tuple _ | Sst.Parameter _
+  | Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Tuple _
+  | Sst.Parameter _
   | Sst.Application _ ->
       None
 let boolean_and terms =
@@ -1681,7 +1692,8 @@ let query_rank_domain ~parametric_adts ~rank_domains ~type_definitions typ =
                  (fun domain ->
                    List.mem aggregate (Vir.rank_domain_component domain))
                  rank_domains))
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Parameter _ -> Ok None
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Parameter _ ->
+        Ok None
     | Sst.Tuple components ->
         List.fold_left
           (fun result (_, typ) ->
@@ -1781,7 +1793,9 @@ let rank_free_type context typ =
 let finite_result_rank context span typ =
   match typ with
   | Sst.Application _ | Sst.Aggregate _ -> rank_domain_for_type context span typ
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ -> Ok None
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Parameter _ ->
+      Ok None
 let authenticated_logical_application validated typ =
   Logical_adt_encoding_private.authenticates_application
     ~descriptors:(Sst_validation.program validated).Sst.parametric_adts typ
@@ -1904,7 +1918,21 @@ let authenticate_exact_source_mode registry ~facts ~callable ~value
             ~mode ~typ ~rank
         with
         | Ok receipt -> Ok (receipt, mode)
-        | Error _ -> authenticate rest)
+        | Error (reason [@log_value.trace]) ->
+            [%log.trace "finite receipt authentication attempt failed"
+              ~stage:(Delator.Field.string "finite-receipt-authentication")
+              ~instance_mode:
+                (Delator.Field.string
+                   (match mode with
+                   | Sst.Exec_instance -> "exec"
+                   | Sst.Tracked_instance -> "tracked"
+                   | Sst.Ghost_instance -> "ghost"))
+              ~value_type:(Delator.Field.string (Parametric_type.to_string typ))
+              ~available_receipts:(Delator.Field.int (List.length facts))
+              ~reason_class:
+                (Delator.Field.string (reason [@log_value.trace]))
+              ~decision:(Delator.Field.string "try-next-mode")];
+            authenticate rest)
   in
   authenticate modes
 let authorize_finite_formal_call context ~callee_definition ~arguments
@@ -2477,7 +2505,7 @@ module Immutable_fact_integration = struct
         |> List.concat
     | (Sst.Aggregate _ | Sst.Application _), Aggregate_value aggregate ->
         [ (typ, aggregate) ]
-    | (Sst.Unit | Sst.Bool | Sst.Int | Sst.Parameter _), _
+    | (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Parameter _), _
     | Sst.Tuple _, _
     | Sst.Aggregate _, _
     | Sst.Application _, _ ->
@@ -2571,13 +2599,23 @@ module Immutable_fact_integration = struct
     | Some domain -> (
         let* registry, _ = finite_registry context span in
         let* rank = finite_rank_snapshot context span domain in
-        if
-          not
-            (List.exists
-               (fun receipt ->
-                 Finite_value_registry.receipt_matches_value receipt parent)
-               state.finite_receipts)
-        then Ok state
+        let parent_receipt_count =
+          List.fold_left
+            (fun count receipt ->
+              if Finite_value_registry.receipt_matches_value receipt parent then
+                count + 1
+              else count)
+            0 state.finite_receipts
+        in
+        if parent_receipt_count = 0 then (
+          [%log.trace "finite field selection has no parent receipt"
+            ~stage:(Delator.Field.string "finite-field-selection")
+            ~result_type:(Delator.Field.string (Parametric_type.to_string typ))
+            ~available_receipts:
+              (Delator.Field.int (List.length state.finite_receipts))
+            ~matching_parent_receipts:(Delator.Field.int 0)
+            ~decision:(Delator.Field.string "leave-unissued")];
+          Ok state)
         else
           let* selector =
             match child.Vir.aggregate_desc with
@@ -2602,7 +2640,17 @@ module Immutable_fact_integration = struct
               ~facts:state.finite_receipts ~parent ~child ~selector ~span ~mode
               ~typ ~rank ~provenance
           with
-          | Ok receipt -> Ok (with_finite_receipt state receipt)
+          | Ok receipt ->
+              [%log.trace "issued finite child receipt from field selection"
+                ~stage:(Delator.Field.string "finite-field-selection")
+                ~result_type:
+                  (Delator.Field.string (Parametric_type.to_string typ))
+                ~available_receipts:
+                  (Delator.Field.int (List.length state.finite_receipts))
+                ~matching_parent_receipts:
+                  (Delator.Field.int parent_receipt_count)
+                ~decision:(Delator.Field.string "issued")];
+              Ok (with_finite_receipt state receipt)
           | Error message ->
               error context.function_ref.function_name span
                 (Malformed_sst message))
@@ -2620,7 +2668,7 @@ module Immutable_fact_integration = struct
             derive_finite_selected context span state ~parent ~mode ~typ value
               ~provenance)
           (Ok state) components values
-    | (Sst.Unit | Sst.Bool | Sst.Int | Sst.Parameter _), _
+    | (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Parameter _), _
     | Sst.Tuple _, _
     | Sst.Aggregate _, _
     | Sst.Application _, _ ->
@@ -2879,7 +2927,8 @@ let variant_tag_domain function_name span type_definitions parametric_adts
         |> Option.map Parametric_adt.type_id
         |> Option.value ~default:aggregate_type
     | Sst.Aggregate type_id -> type_id
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ ->
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+    | Sst.Parameter _ ->
         aggregate_type
   in
   if aggregate.aggregate_type.aggregate_type_index <> expected_type.type_index
@@ -3003,7 +3052,7 @@ let rec pattern_condition_and_bindings function_name type_definitions
             in
             loop (condition :: conditions)
               (List.rev_append nested bindings)
-              (ranges_of_value selected :: nested_ranges :: ranges)
+              (ranges_of_value pattern.typ selected :: nested_ranges :: ranges)
               rest
       in
       loop [] [] [] fields
@@ -3041,7 +3090,7 @@ let rec pattern_condition_and_bindings function_name type_definitions
             in
             loop (index + 1) (condition :: conditions)
               (List.rev_append nested bindings)
-              (ranges_of_value selected :: nested_ranges :: ranges)
+              (ranges_of_value pattern.typ selected :: nested_ranges :: ranges)
               rest
       in
       let* condition, bindings, ranges = loop 0 [] [] [] arguments in
@@ -3470,7 +3519,8 @@ let owned_contents_carrier_from_root context assumptions root fields =
                 if definition.field_id = field then
                   match definition.field_type with
                   | Sst.Aggregate type_id -> Some type_id
-                  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _
+                  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                  | Sst.Tuple _
                   | Sst.Parameter _ | Sst.Application _ ->
                       None
                 else None)
@@ -3832,6 +3882,210 @@ let logical_spec_call_target context callee =
                (Sst_validation.find_model context.validated
                   definition.function_id)))
   | Some _ | None -> Logical_spec_evaluation_private.Unsupported
+let immutable_field context field =
+  List.exists
+    (fun (definition : Sst.type_definition) ->
+      match definition.type_kind with
+      | Sst.Record_definition fields
+      | Sst.Variant_definition [ { Sst.constructor_fields = fields; _ } ] ->
+          List.exists
+            (fun definition ->
+              definition.Sst.field_id = field
+              && Finite_value_registry.Finite_domain.immutable_field definition)
+            fields
+      | Sst.Variant_definition _ -> false)
+    context.type_definitions
+let derive_immutable_field_selection context expression state field aggregate
+    value =
+  if not (immutable_field context field) then Ok state
+  else
+    let* mode = expression_instance_mode context expression in
+    [%log.trace "propagated finite authority through immutable field selection"
+      ~stage:(Delator.Field.string "finite-field-selection")
+      ~field_name:(Delator.Field.string field.Sst.field_name)
+      ~result_type:
+        (Delator.Field.string (Parametric_type.to_string expression.Sst.typ))
+      ~instance_mode:
+        (Delator.Field.string
+           (match mode with
+           | Sst.Exec_instance -> "exec"
+           | Sst.Tracked_instance -> "tracked"
+           | Sst.Ghost_instance -> "ghost"))
+      ~decision:(Delator.Field.string "derive-selected-receipt")];
+    Immutable_fact_integration.derive_finite_selected context expression.span
+      state ~parent:aggregate ~mode ~typ:expression.typ value
+      ~provenance:Finite_value_registry.Immutable_record_field
+let construction_selector descriptors parametric aggregate make_selector path typ =
+  let rec needs_parametric_selector = function
+    | Sst.Parameter _ | Sst.Application _ -> true
+    | Sst.Tuple components ->
+        List.exists
+          (fun (_, component) -> needs_parametric_selector component)
+          components
+    | Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Aggregate _ ->
+        false
+  in
+  if parametric || needs_parametric_selector typ then
+    selected_parametric_value_without_state
+      ~aggregate_type:
+        (Logical_spec_evaluation_private.vir_aggregate_type_of_sst descriptors)
+      aggregate
+      (fun path sort -> selector_domain aggregate (make_selector path sort))
+      path typ
+  else selected_value_without_state aggregate make_selector path typ
+let logical_construction_assumptions context (expression : Sst.expression)
+    rooted children =
+  let descriptors = (Sst_validation.program context.validated).parametric_adts in
+  let parametric = Symbolic_parametric_private.is_application expression.typ in
+  let select = construction_selector descriptors parametric rooted in
+  let rec selector_equations make_selector index equations sources children =
+    match (sources, children) with
+    | [], [] -> Ok (List.rev equations)
+    | source :: sources, ((child_expression : Sst.expression), value) :: children ->
+        let selected =
+          select (make_selector source index) [] child_expression.typ
+        in
+        (match equality selected value with
+        | Some equation ->
+            selector_equations make_selector (index + 1)
+              (equation :: equations) sources children
+        | None ->
+            error context.function_ref.function_name expression.span
+              (Malformed_sst
+                 "logical construction child type/value mismatch"))
+    | [], _ :: _ | _ :: _, [] ->
+        error context.function_ref.function_name expression.span
+          (Malformed_sst "logical construction child arity mismatch")
+  in
+  match expression.expression_desc with
+  | Sst.Record_value { fields; _ } ->
+      selector_equations
+        (fun (field, _) _ -> field_selector field)
+        0 [] fields children
+  | Sst.Constructor_value { constructor; arguments } ->
+      let* equations =
+        selector_equations
+          (fun _ index -> argument_selector constructor index)
+          0 [] arguments children
+      in
+      let tag =
+        Vir.Integer_compare
+          ( Vir.Equal,
+            Vir.Aggregate_tag (rooted.aggregate_type, rooted),
+            Vir.Integer_constant (Z.of_int constructor.constructor_index) )
+      in
+      Ok (tag :: equations)
+  | _ ->
+      error context.function_ref.function_name expression.span
+        (Malformed_sst "logical construction observer received a non-construction")
+let observe_logical_construction context state (expression : Sst.expression)
+    children aggregate =
+  let classify () =
+    match expression.expression_desc with
+    | Sst.Record_value { record_type; fields } ->
+        let immutable =
+          match
+            List.find_opt
+              (fun (definition : Sst.type_definition) ->
+                same_type_id definition.type_id record_type)
+              context.type_definitions
+          with
+          | Some { type_kind = Sst.Record_definition definitions; _ } ->
+              List.for_all
+                Finite_value_registry.Finite_domain.immutable_field definitions
+              && List.length definitions = List.length fields
+          | Some { type_kind = Sst.Variant_definition _; _ } | None -> false
+        in
+        Some
+          (immutable, Finite_value_registry.Record_construction record_type)
+    | Sst.Constructor_value { constructor; arguments } ->
+        let immutable =
+          match
+            List.find_opt
+              (fun (definition : Sst.type_definition) ->
+                same_type_id definition.type_id constructor.constructor_type)
+              context.type_definitions
+          with
+          | Some { type_kind = Sst.Variant_definition constructors; _ } -> (
+              match
+                List.find_opt
+                  (fun (definition : Sst.constructor_definition) ->
+                    same_constructor_id definition.constructor_id constructor)
+                  constructors
+              with
+              | Some definition ->
+                  List.for_all
+                    Finite_value_registry.Finite_domain.immutable_field
+                    definition.constructor_fields
+                  && List.length definition.constructor_fields
+                     = List.length arguments
+              | None -> false)
+          | Some { type_kind = Sst.Record_definition _; _ } | None -> false
+        in
+        Some
+          ( immutable,
+            Finite_value_registry.Constructor_construction constructor )
+    | _ -> None
+  in
+  match classify () with
+  | None -> Ok (aggregate, state)
+  | Some (immutable, shape) ->
+      let* domain = rank_domain_for_type context expression.span expression.typ in
+      (match domain with
+      | None ->
+          [%log.trace "observed unranked logical aggregate construction"
+            ~stage:(Delator.Field.string "finite-logical-construction")
+            ~shape:
+              (Delator.Field.string
+                 (match shape with
+                 | Finite_value_registry.Record_construction _ -> "record"
+                 | Finite_value_registry.Constructor_construction _ ->
+                     "constructor"))
+            ~result_type:
+              (Delator.Field.string (Parametric_type.to_string expression.typ))
+            ~child_count:(Delator.Field.int (List.length children))
+            ~decision:(Delator.Field.string "retain-direct-construction")];
+          Ok (aggregate, state)
+      | Some _ ->
+          let* rooted, state =
+            fresh_value state ~source_name:"logical.construction"
+              ~role:Vir.Local ~span:expression.span ~project:false expression.typ
+          in
+          let* rooted =
+            match rooted with
+            | Aggregate_value rooted -> Ok rooted
+            | Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _
+            | Parametric_value _ | Function_value _ ->
+                error context.function_ref.function_name expression.span
+                  (Malformed_sst
+                     "ranked logical construction did not materialize an aggregate")
+          in
+          let* assumptions =
+            logical_construction_assumptions context expression rooted children
+          in
+          let state = with_assumptions state assumptions in
+          [%log.trace "materialized ranked logical aggregate construction"
+            ~stage:(Delator.Field.string "finite-logical-construction")
+            ~shape:
+              (Delator.Field.string
+                 (match shape with
+                 | Finite_value_registry.Record_construction _ -> "record"
+                 | Finite_value_registry.Constructor_construction _ ->
+                     "constructor"))
+            ~result_type:
+              (Delator.Field.string (Parametric_type.to_string expression.typ))
+            ~child_count:(Delator.Field.int (List.length children))
+            ~shape_assumption_count:
+              (Delator.Field.int (List.length assumptions))
+            ~immutable:(Delator.Field.bool immutable)
+            ~decision:
+              (Delator.Field.string
+                 "materialize-with-shape-facts-and-issue")];
+          let* state =
+            Immutable_fact_integration.issue_finite_construction context
+              expression state rooted children immutable shape
+          in
+          Ok (rooted, state))
 let logical_evaluation_callbacks context ~aggregate_type ~option_instance ~evaluate_recursive ~error =
   Logical_spec_evaluation_private.
     {
@@ -3841,7 +4095,11 @@ let logical_evaluation_callbacks context ~aggregate_type ~option_instance ~evalu
       environment = (fun (state : state) -> state.environment);
       with_environment = (fun (state : state) environment -> { state with environment });
       assume = with_assumptions;
-      observe_field_read = (fun _ state _ _ _ -> state);
+      observe_field_read =
+        (fun context state expression field aggregate value ->
+          derive_immutable_field_selection context expression state field
+            aggregate value);
+      observe_construction = observe_logical_construction;
       enter_definition =
         (fun context definition ->
           {
@@ -3895,20 +4153,6 @@ let authenticated_construction context (expression : Sst.expression) =
       expression.typ
   in
   Ok (descriptors, aggregate_type, Symbolic_parametric_private.is_application expression.typ)
-let construction_selector descriptors parametric aggregate make_selector path typ =
-  let rec needs_parametric_selector = function
-    | Sst.Parameter _ | Sst.Application _ -> true
-    | Sst.Tuple components ->
-        List.exists (fun (_, component) -> needs_parametric_selector component) components
-    | Sst.Unit | Sst.Int | Sst.Bool | Sst.Aggregate _ -> false
-  in
-  if parametric || needs_parametric_selector typ then
-    selected_parametric_value_without_state
-      ~aggregate_type:(Logical_spec_evaluation_private.vir_aggregate_type_of_sst descriptors)
-      aggregate
-      (fun path sort -> selector_domain aggregate (make_selector path sort))
-      path typ
-  else selected_value_without_state aggregate make_selector path typ
 let requires_owned_construction_equality context descriptors parametric typ
     construction_equality =
   Option.is_none construction_equality
@@ -4200,7 +4444,8 @@ let view function_name disposition definition type_arguments arguments
   let* () =
     match
       Parametric_lowering_private.validate_sst_direct_call ~definition
-        ~type_arguments ~actual_result:expression.typ ~call_span:expression.span
+        ~logical:true ~type_arguments ~actual_result:expression.typ
+        ~call_span:expression.span
         ~arguments
     with
     | Ok () -> Ok ()
@@ -4459,7 +4704,8 @@ let evaluate_quantifier evaluate context (expression : Sst.expression) kind
       match
         Vir.make_boolean_quantifier
           ~sort_of_type:(function
-            | Parametric_type.Int -> Ok Vir.Integer
+            | Parametric_type.Int | Parametric_type.Mathematical_int ->
+                Ok Vir.Integer
             | Bool -> Ok Vir.Boolean
             | Parameter binder -> Ok (Vir.Parametric binder)
             | Application _ as typ
@@ -4507,6 +4753,7 @@ let logical_expression evaluate context (expression : Sst.expression) state =
         quantifier state
   | Sst.Callback_call _ | Sst.Callback_requires _ | Sst.Callback_ensures _ ->
       callback_expression evaluate context expression state
+  | Sst.Lift_runtime_int _
   | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
   | Sst.Variable _ | Sst.Tuple_value _ | Sst.Record_value _
   | Sst.Constructor_value _ | Sst.Field_read _ | Sst.Field_write _
@@ -4548,6 +4795,26 @@ let rec evaluate context expression state =
           paths =
             [ { value = Integer_value (Vir.Integer_constant value); state } ];
         }
+  | Sst.Lift_runtime_int operand ->
+      if not context.logical then
+        error function_name expression.span
+          (Malformed_sst "runtime integer lift reached executable evaluation")
+      else
+        let* evaluated = evaluate context operand state in
+        let* paths =
+          List.fold_left
+            (fun result path ->
+              let* paths = result in
+              match path.value with
+              | Integer_value _ -> Ok (path :: paths)
+              | Unit_value | Boolean_value _ | Tuple_value _
+              | Aggregate_value _ | Parametric_value _ | Function_value _ ->
+                  error function_name expression.span
+                    (Malformed_sst
+                       "runtime integer lift operand is not an integer"))
+            (Ok []) evaluated.paths
+        in
+        Ok { evaluated with paths = List.rev paths }
   | Sst.Bool_constant value ->
       Ok
         {
@@ -5185,33 +5452,9 @@ let rec evaluate context expression state =
                               Ok (value, state))
                       | None, _ -> Ok (value, state)
                     in
-                    let immutable =
-                      List.exists
-                        (fun (definition : Sst.type_definition) ->
-                          match definition.type_kind with
-                          | Sst.Record_definition fields
-                          | Sst.Variant_definition
-                              [ { Sst.constructor_fields = fields; _ } ] ->
-                              List.exists
-                                (fun definition ->
-                                  definition.Sst.field_id = field
-                                  && Finite_value_registry.Finite_domain
-                                     .immutable_field definition)
-                                fields
-                          | Sst.Variant_definition _ -> false)
-                        context.type_definitions
-                    in
                     let* state =
-                      if not immutable then Ok state
-                      else
-                        let* mode =
-                          expression_instance_mode context expression
-                        in
-                        Immutable_fact_integration.derive_finite_selected
-                          context expression.span state ~parent:aggregate ~mode
-                          ~typ:expression.typ value
-                          ~provenance:
-                            Finite_value_registry.Immutable_record_field
+                      derive_immutable_field_selection context expression state
+                        field aggregate value
                     in
                     Ok { obligations = []; paths = [ { value; state } ] }
                 | _ ->
@@ -7206,7 +7449,8 @@ let rec evaluate context expression state =
                           }
                         in
                         Ok (Aggregate_value application, state)
-                    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ ->
+                    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                    | Sst.Tuple _ ->
                         fresh_value state
                           ~source_name:
                             (definition.function_id.function_name
@@ -7621,12 +7865,13 @@ let rec evaluate context expression state =
                        incr aggregate_recursive_rank_route_observations
                    | Sst.Bool ->
                        incr aggregate_recursive_argument_route_observations
-                   | Sst.Int | Sst.Unit | Sst.Tuple _ | Sst.Aggregate _
+                   | Sst.Int | Sst.Mathematical_int | Sst.Unit | Sst.Tuple _
+                   | Sst.Aggregate _
                    | Sst.Parameter _ | Sst.Application _ ->
                        ());
                 let* value, caller_state =
                   match result_type with
-                  | Sst.Int ->
+                  | Sst.Int | Sst.Mathematical_int ->
                       Ok
                         ( Integer_value
                             (recursive_integer_application callee type_arguments
@@ -8953,10 +9198,20 @@ let rec evaluate context expression state =
                     let measure_context =
                       {
                         spec_context with
-                        logical = false;
+                        logical = true;
                         old_environment = None;
                       }
                     in
+                    [%log.trace "evaluating recursive decreases measure in logical context"
+                      ~stage:(Delator.Field.string "termination-measure-evaluation")
+                      ~caller:
+                        (Delator.Field.string
+                           context.current_callable.function_name)
+                      ~callee:(Delator.Field.string callee.function_name)
+                      ~measure_sort:
+                        (Delator.Field.string
+                           (Parametric_type.to_string measure.payload.typ))
+                      ~decision:(Delator.Field.string "logical")];
                     let* evaluated =
                       evaluate_contexts
                         (fun state ->
@@ -10023,7 +10278,8 @@ let rec evaluate context expression state =
                     (Malformed_sst
                        "use_type_invariant has no authenticated exact-type \
                         handle"))
-          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
+          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+          | Sst.Parameter _
           | Sst.Application _ ->
               error function_name expression.span
                 (Malformed_sst
@@ -10341,7 +10597,14 @@ and evaluate_permitted_formula context identity state formula_root permit =
   let function_name = context.function_ref.function_name in
   let before = Option.map Verification_session.counters context.verification_session in
   let callbacks = logical_evaluation_callbacks context ~aggregate_type:(vir_aggregate_type_of_sst state.parametric_adts) ~option_instance:(Parametric_adt.option_instance state.parametric_adts) ~evaluate_recursive:(fun _ recursive _ -> error function_name recursive.Sst.span (Malformed_sst "strict invariant-contract permit exposed recursive escape")) ~error:(fun span message -> { function_name; span; unsupported = Malformed_sst message }) in
-  let callbacks = { callbacks with Logical_spec_evaluation_private.observe_field_read = (fun context state field _ value -> observe_formula_model_field context state field value) } in
+  let callbacks =
+    {
+      callbacks with
+      Logical_spec_evaluation_private.observe_field_read =
+        (fun context state _expression field _ value ->
+          Ok (observe_formula_model_field context state field value));
+    }
+  in
   Logical_spec_capability_private.For_testing.note_evaluation identity;
   let* value, state = Logical_spec_evaluation_private.evaluate_invariant_contract permit ~validated:context.validated ~root_identity:identity callbacks context formula_root state in
   let after = Option.map Verification_session.counters context.verification_session in
@@ -11224,7 +11487,7 @@ let lower_summary ?imports ?verification_session
             (fun state ->
               let current_environment = state.environment in
               let* measured =
-                evaluate runtime_context measure.payload
+                evaluate logical_context measure.payload
                   { state with environment = entry_environment }
               in
               let* paths =
@@ -12167,7 +12430,8 @@ let invariant_cell_transition_prerequisites invariants
       | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
       | Sst.Variable _ | Sst.Tuple_value _ | Sst.Record_value _
       | Sst.Constructor_value _ | Sst.Field_read _ | Sst.Field_write _
-      | Sst.Shared_scalar_field_write _ | Sst.Checked_arithmetic _
+      | Sst.Shared_scalar_field_write _ | Sst.Lift_runtime_int _
+      | Sst.Checked_arithmetic _
       | Sst.Boolean_not _ | Sst.Boolean_binary _ | Sst.Compare _
       | Sst.Let_mutable _ | Sst.Mutable_read _ | Sst.Mutable_write _ | Sst.Let _
       | Sst.Sequence _ | Sst.If _ | Sst.Match _ | Sst.Use_type_invariant _
@@ -12186,7 +12450,8 @@ let invariant_cell_transition_prerequisites invariants
     | Sst.Shared_scalar_field_write _ | Sst.Owned_tree_nested_write _
     | Sst.Owned_tree_rebase _ | Sst.Let_mutable _ | Sst.Mutable_read _
     | Sst.Mutable_write _ | Sst.Let _ | Sst.Sequence _ | Sst.If _
-    | Sst.Match _ | Sst.Checked_arithmetic _ | Sst.Compare _
+    | Sst.Match _ | Sst.Lift_runtime_int _ | Sst.Checked_arithmetic _
+    | Sst.Compare _
     | Sst.Boolean_not _ | Sst.Boolean_binary _ | Sst.Direct_call _
     | Sst.Callback_call _ | Sst.Callback_requires _ | Sst.Callback_ensures _
     | Sst.Optional_absent | Sst.Optional_present _ | Sst.Optional_forward _
@@ -12296,7 +12561,8 @@ let finite_result_eligible validated rank_domains type_definitions descriptor =
       | Sst.Recursive_spec_definition _ | Sst.Proof_body _
       | Sst.External_specification _ | Sst.Trusted_external_spec_target _
       | Sst.Trusted_external_body _ | Sst.Symbolic_declaration _ ),
-      ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Aggregate _
+      ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Aggregate _
       | Sst.Parameter _ | Sst.Application _ ),
       (Sst.Exec_instance | Sst.Tracked_instance | Sst.Ghost_instance) ) ->
       false
@@ -12462,6 +12728,7 @@ let rec finite_authority_use context visited environment
     List.map visit expressions |> combine_finite_authority_uses
   in
   match expression.expression_desc with
+  | Sst.Lift_runtime_int operand -> visit operand
   | Sst.Variable { binding; _ } ->
       ( Option.value ~default:false (List.assoc_opt binding.id environment),
         false )
@@ -12651,6 +12918,7 @@ let rec finite_demand_analyze context caller environment
     List.map visit expressions |> combine_finite_origin_analyses
   in
   match expression.expression_desc with
+  | Sst.Lift_runtime_int operand -> visit operand
   | Sst.Variable { binding; _ } ->
       let origins, reconstructed =
         Option.value ~default:([], []) (List.assoc_opt binding.id environment)
@@ -12901,7 +13169,8 @@ let transition_predecessor_analysis ~validated ~invariants descriptors =
             | Sst.Recursive_spec_definition _ | Sst.Proof_body _
             | Sst.External_specification _ | Sst.Trusted_external_spec_target _
             | Sst.Trusted_external_body _ | Sst.Symbolic_declaration _ ),
-            ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Aggregate _
+            ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+            | Sst.Aggregate _
             | Sst.Parameter _ | Sst.Application _ ),
             (Sst.Exec_instance | Sst.Tracked_instance | Sst.Ghost_instance) ) ->
             false)
@@ -13054,6 +13323,9 @@ let transition_predecessor_analysis ~validated ~invariants descriptors =
         expressions
     in
     match expression.expression_desc with
+    | Sst.Lift_runtime_int operand ->
+        analyze caller (path @ [ "lift-runtime-int" ]) branch_depth
+          environment operand
     | Sst.Variable _ -> Ok (None, environment, [])
     | Sst.Direct_call
         { call_form = Sst.Exec_call; callee; arguments; recursive = false; _ }
@@ -13499,7 +13771,8 @@ let prepare_program ~imports ~session ~validated ~invariants
               when Option.is_some
                      (Type_invariant.find_for_type invariants type_id) ->
                 Some edge
-            | ( ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Aggregate _
+            | ( ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                | Sst.Tuple _ | Sst.Aggregate _
                 | Sst.Parameter _ | Sst.Application _ ),
                 (Sst.Exec_instance | Sst.Tracked_instance | Sst.Ghost_instance)
               ) ->

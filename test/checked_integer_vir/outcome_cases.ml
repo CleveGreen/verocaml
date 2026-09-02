@@ -80,7 +80,40 @@ let arithmetic_counterexamples_case =
   Suite.case ~name:"checked-operation-kinds-and-counterexamples" ~expectation
     (run_fixture input)
 
+let general_multiplication_source =
+  {|
+[@@@verocaml.verify]
+let unguarded_product (left : int) (right : int) = left * right
+|}
+
+let general_multiplication_counterexample_case =
+  let input =
+    Fixture.single_source ~module_name:"General_multiplication"
+      ~source:general_multiplication_source ~libraries:[ "verocaml.ghost" ]
+  in
+  let operation bound =
+    Outcome.Obligation_kind_exists
+      {
+        function_name = "unguarded_product";
+        kind = Outcome.Arithmetic_safety (Outcome.Multiply, bound);
+      }
+  in
+  Suite.case ~name:"general-multiplication-emits-checked-bounds"
+    ~expectation:
+      (Expectation.empty |> Expectation.status Outcome.Counterexample
+      |> Expectation.require_unit "General_multiplication"
+           Outcome.Unit_counterexample
+      |> Expectation.require_named_fact "obligation-kind:unguarded_product"
+           (operation Outcome.Lower)
+      |> Expectation.require_named_fact "obligation-kind:unguarded_product"
+           (operation Outcome.Upper))
+    (run_fixture input)
+
 let () =
   Suite.run_cli ~suite_path ~manifest:Integration_environment.manifest
     ~expected_environment:Integration_environment.expected
-    [ guarded_add_case; arithmetic_counterexamples_case ]
+    [
+      guarded_add_case;
+      arithmetic_counterexamples_case;
+      general_multiplication_counterexample_case;
+    ]

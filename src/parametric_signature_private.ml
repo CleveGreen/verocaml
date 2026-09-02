@@ -151,6 +151,7 @@ let rec expression_dump substitutions (expression : Sst.expression) =
     | Sst.Bool_constant value -> "bool:" ^ string_of_bool value
     | Sst.Unit_constant -> "unit"
     | Sst.Variable { binding; _ } -> Printf.sprintf "var#%d" binding.id
+    | Sst.Lift_runtime_int operand -> "lift-int(" ^ recurse operand ^ ")"
     | Sst.Tuple_value values -> "tuple(" ^ children (List.map snd values) ^ ")"
     | Sst.Record_value { record_type; fields } ->
         Printf.sprintf "record:%s#%d(%s)" record_type.type_name
@@ -471,6 +472,56 @@ let infer_partial_type_arguments signature ~actual_types ~actual_labels
     Parametric_lowering_private.infer_type_arguments ~binders:signature.binders
       ~formals:(List.rev formals) ~actuals:(List.rev actuals)
       ~formal_result:signature.result_type ~actual_result
+
+let infer_partial_type_arguments_from_logical_actuals signature ~actual_types
+    ~actual_labels =
+  if
+    List.length actual_types <> List.length signature.formals
+    || actual_labels
+       <> List.map (fun (formal : formal) -> formal.label) signature.formals
+  then Error "retained call formal label/default vector mismatch"
+  else
+    let formals, actuals, labels =
+      List.fold_left2
+        (fun (formals, actuals, labels) (formal : formal) actual ->
+          match actual with
+          | None -> (formals, actuals, labels)
+          | Some actual ->
+              ( formal.typ :: formals,
+                actual :: actuals,
+                formal.label :: labels ))
+        ([], [], []) signature.formals actual_types
+    in
+    Parametric_lowering_private
+    .infer_labeled_type_arguments_from_logical_actuals
+      ~binders:signature.binders ~formal_types:(List.rev formals)
+      ~formal_labels:(List.rev labels) ~actual_types:(List.rev actuals)
+      ~actual_labels:(List.rev labels)
+
+let infer_partial_type_arguments_for_logical_call signature ~actual_types
+    ~actual_labels ~actual_result =
+  if
+    List.length actual_types <> List.length signature.formals
+    || actual_labels
+       <> List.map (fun (formal : formal) -> formal.label) signature.formals
+  then Error "retained call formal label/default vector mismatch"
+  else
+    let formals, actuals, labels =
+      List.fold_left2
+        (fun (formals, actuals, labels) (formal : formal) actual ->
+          match actual with
+          | None -> (formals, actuals, labels)
+          | Some actual ->
+              ( formal.typ :: formals,
+                actual :: actuals,
+                formal.label :: labels ))
+        ([], [], []) signature.formals actual_types
+    in
+    Parametric_lowering_private.infer_labeled_type_arguments_for_logical_call
+      ~binders:signature.binders ~formal_types:(List.rev formals)
+      ~formal_labels:(List.rev labels) ~actual_types:(List.rev actuals)
+      ~actual_labels:(List.rev labels) ~formal_result:signature.result_type
+      ~actual_result
 
 let map_pattern_types = Sst.map_pattern_types
 let map_expression_types = Sst.map_expression_types

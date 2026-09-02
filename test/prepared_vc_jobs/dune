@@ -20,16 +20,6 @@
    %{targets}
    (echo "let ready = ()"))))
 
-(cram
- (deps
-  prepared_vc_jobs_tool.exe
-  (glob_files ../proof_body_assertions/fixtures/*.ml)
-  (glob_files ../private_receipt/fixtures/*.ml)
-  ../../src/verocaml.exe
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
-
 (alias
  (name prepared-vc-jobs-check)
  (deps
@@ -38,6 +28,7 @@
 (rule
  (targets
   integration_environment.ml
+  semantic_integration_environment.ml
   integration-library-environment.manifest)
  (deps
   (:environment_module ../outcome_framework/integration_environment.ml)
@@ -45,12 +36,36 @@
  (action
   (progn
    (copy %{environment_module} integration_environment.ml)
+   (copy %{environment_module} semantic_integration_environment.ml)
    (copy %{manifest} integration-library-environment.manifest))))
 
 (executable
  (name outcome_process_cases)
  (modules outcome_process_cases integration_environment)
  (libraries outcome_test_support))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases semantic_integration_environment)
+ (libraries outcome_test_support))
+
+(rule
+ (targets
+  prepared-vc-jobs-outcome-cases.result-report
+  prepared-vc-jobs-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  prepared_vc_jobs_tool.exe
+  (glob_files ../proof_body_assertions/fixtures/*.ml)
+  (glob_files ../private_receipt/fixtures/*.ml)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   prepared-vc-jobs-outcome-cases.result-report
+   prepared-vc-jobs-outcome-cases.failure-archive)))
 
 (rule
  (targets
@@ -76,7 +91,17 @@
  (action
   (run %{validator} %{report} %{archive})))
 
+(rule
+ (alias prepared-vc-jobs-semantic-outcome-check)
+ (deps
+  (:report prepared-vc-jobs-outcome-cases.result-report)
+  (:archive prepared-vc-jobs-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
 (alias
  (name runtest)
  (deps
-  (alias prepared-vc-jobs-outcome-check)))
+  (alias prepared-vc-jobs-outcome-check)
+  (alias prepared-vc-jobs-semantic-outcome-check)))

@@ -1,6 +1,8 @@
+open Vstd
+
 type int_list = Nil | Cons of int * int_list
 
-let rec sum (xs : int_list) : int =
+let rec sum (xs : int_list) : Int.t =
   [%verocaml.decreases xs];
   match xs with Nil -> 0 | Cons (head, tail) -> head + sum tail
 [@@verocaml.spec] [@@verocaml.revealed]

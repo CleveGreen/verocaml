@@ -30,6 +30,7 @@
 (executable
  (name outcome_cases)
  (modules outcome_cases integration_environment)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
  (libraries outcome_test_support verocaml_core))
 
 (rule
@@ -55,11 +56,6 @@
   (:validator ../support/report_validator.exe))
  (action
   (run %{validator} %{report} %{archive})))
-
-(cram
- (alias solver-backend-specialist-check)
- (runtest_alias false)
- (deps solver_backend_tool.exe))
 
 (alias
  (name solver-backend-check)

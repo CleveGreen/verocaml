@@ -115,6 +115,8 @@ type top_function = {
     parametric_type_binders : (int * Parametric_type.binder) list;
   proof_capture_hints : (Location.t * Types.type_expr) list;
   builtin_assertions : planned_builtin_assertion list;
+  mutable semantic_parameters : (Sst.typ * string option) list option;
+  mutable semantic_result_type : Sst.typ option;
 }
 
 val source_definition_body : top_function -> Typedtree.expression option

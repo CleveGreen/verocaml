@@ -5,7 +5,7 @@ type stack = {
   length : int;
 }
 
-let rec spec_node_len (node : node) : int =
+let rec spec_node_len (node : node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -13,7 +13,7 @@ let rec spec_node_len (node : node) : int =
 [@@verocaml.spec] [@@verocaml.revealed]
 
 let spec_push_front value stack =
-  { top = Node (value, stack.top); length = stack.length + 1 }
+  Node (value, stack.top)
 [@@verocaml.spec]
 
 let spec_tail_len stack =
@@ -30,7 +30,7 @@ let verified (choose : bool) =
     let joined = if choose then alias else alias in
     spec_node_len joined = 2
     && spec_tail_len stack = 1
-    && spec_node_len (spec_push_front 3 stack).top = 3];
+    && spec_node_len (spec_push_front 3 stack) = 3];
   ()
 
 let local_exec_chain () =

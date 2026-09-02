@@ -21,13 +21,20 @@ val admissible_capture_type :
   aggregate:(Parametric_type.type_id -> bool) -> Sst.typ -> bool
 
 type 'error lambda_services = {
+  pattern_type : Typedtree.pattern -> (Sst.typ, 'error) result;
   lower_pattern :
+    expected:Sst.typ ->
     (Ident.t * Sst.binding) list ->
     Typedtree.pattern ->
     (Sst.pattern * (Ident.t * Sst.binding) list, 'error) result;
   lower_expression :
     (Ident.t * Sst.binding) list ->
     Typedtree.expression ->
+    (Sst.expression, 'error) result;
+  adapt_result :
+    Location.t ->
+    expected:Sst.typ ->
+    Sst.expression ->
     (Sst.expression, 'error) result;
   admit_capture : Sst.binding -> bool;
   parameter_label : Typedtree.arg_label -> string option;
@@ -48,10 +55,23 @@ val lower_lambda :
 type 'error application_services = {
   normalize : Typedtree.expression -> (Sst.typ, 'error) result;
   lower : Typedtree.expression -> (Sst.expression, 'error) result;
+  adapt_argument :
+    Location.t ->
+    expected:Sst.typ ->
+    Sst.expression ->
+    (Sst.expression, 'error) result;
   parameter_label : Typedtree.arg_label -> string option;
   span : Location.t -> Diagnostic.span;
   higher_order_error : Location.t -> 'error;
 }
+
+val apply_lowered :
+  'error application_services ->
+  application:Typedtree.expression ->
+  result_type:Sst.typ ->
+  function_:Sst.expression ->
+  arguments:(Typedtree.arg_label * Typedtree.apply_arg) list ->
+  (Sst.expression, 'error) result
 
 val lower_application :
   'error application_services ->
@@ -64,6 +84,10 @@ val lower_application :
 
 val lower_symbolic_application :
   invalid:(string -> 'error) ->
+  adapt_argument:
+    (expected:Sst.typ ->
+    Sst.expression ->
+    (Sst.expression, 'error) result) ->
   span:Diagnostic.span ->
   declaration:Symbolic_application_private.declaration ->
   result_type:Sst.typ ->
@@ -99,8 +123,18 @@ type call = {
   recursive : bool;
 }
 
+type semantic_signature = {
+  formal_types : Sst.typ list;
+  formal_labels : string option list;
+  formal_result : Sst.typ;
+}
+
 val direct_call :
   invalid:(string -> 'error) ->
+  adapt_argument:
+    (expected:Sst.typ ->
+    Sst.expression ->
+    (Sst.expression, 'error) result) ->
   span:Diagnostic.span ->
   result_type:Sst.typ ->
   actuals:(string option * Sst.expression) list ->
@@ -148,9 +182,15 @@ val exact_callback_callee :
   find:(Ident.t -> 'a option) -> Typedtree.expression -> bool
 
 val source_signature :
+  ?semantic_signature:semantic_signature ->
+  ?explicit_parameter_type:
+    (Typedtree.pattern -> (Sst.typ option, 'error) result) ->
+  ?explicit_result_type:
+    (Typedtree.expression -> (Sst.typ option, 'error) result) ->
   lower:(Location.t -> Types.type_expr -> (Sst.typ, 'error) result) ->
   optional_carrier:
-    (Location.t -> Sst.typ -> (Sst.typ, 'error) result) ->
+    (Location.t -> Sst.typ -> Sst.typ -> (Sst.typ, 'error) result) ->
+  parameter_error:(Location.t -> string -> 'error) ->
   Typedtree.expression ->
   (Sst.typ list * string option list * Sst.typ, 'error) result option
 

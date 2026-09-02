@@ -155,11 +155,39 @@ let is_application_id = is_apply_id
 
 let make_application ~arrow ~function_ ~argument ~label ~span =
   match Spec_function_type_private.classify arrow with
-  | None -> Error "specification-function application has no canonical arrow"
+  | None ->
+      [%log.debug "rejected specification-function application"
+        ~stage:(Delator.Field.string "specification-function-application")
+        ~application_shape:
+          (Delator.Field.map
+             [ ("arrow", Delator.Field.string (Parametric_type.to_string arrow));
+               ( "function",
+                 Delator.Field.string
+                   (Parametric_type.to_string function_.Sst.typ) );
+               ( "argument",
+                 Delator.Field.string
+                   (Parametric_type.to_string argument.Sst.typ) );
+               ("label", Delator.Field.string (Option.value ~default:"_" label))
+             ])
+        ~reason:(Delator.Field.string "non-canonical-arrow")
+        ~decision:(Delator.Field.string "rejected")];
+      Error "specification-function application has no canonical arrow"
   | Some view
     when Parametric_type.equal function_.Sst.typ arrow
          && Parametric_type.equal argument.Sst.typ view.domain
          && Option.equal String.equal label view.label ->
+      [%log.trace "constructed specification-function application"
+        ~stage:(Delator.Field.string "specification-function-application")
+        ~application_shape:
+          (Delator.Field.map
+             [ ("arrow", Delator.Field.string (Parametric_type.to_string arrow));
+               ( "domain",
+                 Delator.Field.string (Parametric_type.to_string view.domain) );
+               ( "range",
+                 Delator.Field.string (Parametric_type.to_string view.range) );
+               ("label", Delator.Field.string (Option.value ~default:"_" label))
+             ])
+        ~decision:(Delator.Field.string "accepted")];
       Ok
         {
           Sst.expression_desc =
@@ -178,7 +206,40 @@ let make_application ~arrow ~function_ ~argument ~label ~span =
           typ = view.range;
           span;
         }
-  | Some _ -> Error "specification-function application type mismatch"
+  | Some (view [@log_value.debug]) ->
+      [%log.debug "rejected specification-function application"
+        ~stage:(Delator.Field.string "specification-function-application")
+        ~application_shape:
+          (Delator.Field.map
+             [ ("arrow", Delator.Field.string (Parametric_type.to_string arrow));
+               ( "function",
+                 Delator.Field.string
+                   (Parametric_type.to_string function_.Sst.typ) );
+               ( "expected_argument",
+                 Delator.Field.string
+                   (Parametric_type.to_string
+                      (view [@log_value.debug]).domain) );
+               ( "actual_argument",
+                 Delator.Field.string
+                   (Parametric_type.to_string argument.Sst.typ) );
+               ( "expected_label",
+                 Delator.Field.string
+                   (Option.value ~default:"_"
+                      (view [@log_value.debug]).label) );
+               ("actual_label", Delator.Field.string (Option.value ~default:"_" label))
+             ])
+        ~function_matches:(Delator.Field.bool (Parametric_type.equal function_.typ arrow))
+        ~argument_matches:
+          (Delator.Field.bool
+             (Parametric_type.equal argument.typ
+                (view [@log_value.debug]).domain))
+        ~label_matches:
+          (Delator.Field.bool
+             (Option.equal String.equal label
+                (view [@log_value.debug]).label))
+        ~reason:(Delator.Field.string "type-mismatch")
+        ~decision:(Delator.Field.string "rejected")];
+      Error "specification-function application type mismatch"
 
 let application expression =
   match expression.Sst.expression_desc with
@@ -287,7 +348,7 @@ let exact_owned_contents_construction ~owned_tree_prerequisite
       when binding.typ = expression.typ
            &&
            match expression.typ with
-           | Sst.Unit | Sst.Bool | Sst.Int -> true
+           | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> true
            | Sst.Tuple _ | Sst.Aggregate _ | Sst.Parameter _ | Sst.Application _
              ->
                false ->
@@ -331,7 +392,8 @@ let exact_owned_contents_construction ~owned_tree_prerequisite
     | Sst.Owned_tree_rebase _ | Sst.Let_mutable _ | Sst.Mutable_write _
     | Sst.Reveal _ | Sst.Reveal_with_fuel _ | Sst.Use_type_invariant _
     | Sst.Local_assert _ | Sst.Proof_region _ | Sst.Optional_absent
-    | Sst.Optional_present _ | Sst.Optional_forward _ ->
+    | Sst.Optional_present _ | Sst.Optional_forward _
+    | Sst.Lift_runtime_int _ ->
         None
   in
   match
@@ -406,7 +468,8 @@ let authenticate_rank1_recursion ~descriptor
       Parametric_adt_lowering_private.authenticate_direct_recursion ~descriptor
         ~definition:{ definition with parameters; body }
         ~measure:(Sst.map_expression_types expand measure)
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Aggregate _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Aggregate _
   | Sst.Parameter _ | Sst.Application _ ->
       Error "not a rank-1 function-parametric recursive specification"
 

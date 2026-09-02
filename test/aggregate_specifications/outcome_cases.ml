@@ -28,7 +28,7 @@ let project_input ~project_name fixtures =
         contents =
           Printf.sprintf
             "(library\n (name %s)\n (wrapped false)\n (modules %s)\n \
-             (libraries verocaml.ghost)\n (flags (:standard -ppx \"verocaml-ppx \
+             (libraries verocaml.vstd verocaml.ghost)\n (flags (:standard -ppx \"verocaml-ppx \
              --keep-ghost\")))\n"
             project_name (String.concat " " modules);
       };
@@ -44,7 +44,7 @@ let project_input ~project_name fixtures =
   Fixture.dune_project
     {
       files;
-      libraries = [ "verocaml.ghost" ];
+      libraries = [ "verocaml.vstd"; "verocaml.ghost" ];
       targets = [ "@all" ];
       selected_units = modules;
     }

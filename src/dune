@@ -25,8 +25,16 @@
  (wrapped false)
  (modules
   diagnostic
+  rewrite_private
+  logical_sort_private
+  integer_narrowing_private
+  mathematical_int_constant_private
+  sst_expression_rewrite_private
+  mathematical_int_rewrite_private
+  local_logical_call_rewrite_private
   parametric_type
   spec_function_type_private
+  symbolic_application_collision_testing_private
   symbolic_application_private
   parametric_adt
   parametric_rank_domain_private
@@ -36,11 +44,14 @@
   external_specification_validation_private
   retained_exec_result_private
   retained_callable_summary_private
+  retained_broadcast_private
+  retained_interface_authority_private
   parametric_interface_lowering_private
   parametric_interface_provider_private
   parametric_lowering_private
   parametric_adt_lowering_private
   parametric_function_selection_private
+  external_type_specification_marker_private
   int_bounds
   cmt_input
   finite_formal_requirement
@@ -140,8 +151,16 @@
   verification_solver_private
   verification_driver_private)
  (private_modules
-  parametric_type
+ parametric_type
+  rewrite_private
+  logical_sort_private
+  integer_narrowing_private
+  mathematical_int_constant_private
+  sst_expression_rewrite_private
+  mathematical_int_rewrite_private
+  local_logical_call_rewrite_private
   spec_function_type_private
+  symbolic_application_collision_testing_private
   symbolic_application_private
   parametric_adt
   parametric_rank_domain_private
@@ -151,11 +170,14 @@
   external_specification_validation_private
   retained_exec_result_private
   retained_callable_summary_private
+  retained_broadcast_private
+  retained_interface_authority_private
   parametric_interface_lowering_private
   parametric_interface_provider_private
   parametric_lowering_private
   parametric_adt_lowering_private
   parametric_function_selection_private
+  external_type_specification_marker_private
   parametric_sst_validation_private
   parametric_logic_private
   finite_formal_requirement
@@ -244,8 +266,8 @@
   smtml
   zarith
   z3
-  parallel.kernel
-  parallel.scheduler)
+ parallel.kernel
+ parallel.scheduler)
  (preprocess
   (pps delator.ppx -- --static-level=%{env:DELATOR_STATIC_LEVEL=info})))
 
@@ -255,6 +277,7 @@
  (modules
   verocaml_bin
   verocaml_bin_dune_private
+  verocaml_bin_inventory_private
   verocaml_bin_render
   verocaml_bin_trusted_external_private
   verocaml_bin_project_private)
@@ -267,3 +290,11 @@
  (public_name verocaml)
  (modules verocaml)
  (libraries verocaml_bin_private))
+
+(executable
+ (name verocaml_retained_interface)
+ (public_name verocaml-retained-interface)
+ (modules verocaml_retained_interface)
+ (libraries verocaml_core unix delator)
+ (preprocess
+  (pps delator.ppx -- --static-level=%{env:DELATOR_STATIC_LEVEL=info})))

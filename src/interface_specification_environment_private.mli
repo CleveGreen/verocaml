@@ -98,7 +98,13 @@ type staged_dependency = {
 }
 
 val process_issuer : unit ref
-val error : ?unit_name:string -> ?diagnostic:Diagnostic.t -> string -> ('a, error) result
+val error :
+  ?unit_name:string ->
+  ?diagnostic:Diagnostic.t ->
+  ?internal:bool ->
+  string ->
+  ('a, error) result
+
 val internal_error : ?unit_name:string -> string -> ('a, error) result
 val error_is_internal : error -> bool
 val error_to_string : error -> string
@@ -107,8 +113,24 @@ val require_handle : handle -> unit
 val require_environment : environment -> unit
 val handle_is_authentic : handle -> bool
 val same_function_id : Sst.function_id -> Sst.function_id -> bool
+val exact_import :
+  owner:Cmt_input.implementation ->
+  dependency:Cmt_input.implementation ->
+  Cmt_input.import ->
+  bool
+val exact_imports :
+  Cmt_input.implementation -> Cmt_input.implementation -> bool
+val retained_authority_identity_is_exact : Cmt_input.implementation -> bool
 val unique_handles : handle list -> handle list
 val construct_handle : staged_dependency -> handle list -> handle list -> handle
+val preflight_broadcast_implementations :
+  dependencies:Cmt_input.implementation list ->
+  consumer:Cmt_input.implementation ->
+  (unit, error) result
 val imported_environment : environment -> (Imported_callable.environment, string) result
 val imported_environment_of_staged : staged_dependency list -> (Imported_callable.environment, string) result
+val imported_environment_authenticated :
+  environment -> (Imported_callable.environment, error) result
+val imported_environment_of_staged_authenticated :
+  staged_dependency list -> (Imported_callable.environment, error) result
 val provenance : environment -> provenance list

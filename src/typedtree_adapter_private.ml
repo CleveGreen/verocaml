@@ -323,6 +323,14 @@ module Public = struct
   open Callback_contract_private
   open Callback_call_private
   open Sst_callback_private
+  let semantic_signature_for function_ =
+    match (function_.semantic_parameters, function_.semantic_result_type) with
+    | Some parameters, Some formal_result ->
+        let formal_types, formal_labels = List.split parameters in
+        Some
+          ({ formal_types; formal_labels; formal_result }
+            : Typedtree_spec_function_private.semantic_signature)
+    | None, _ | _, None -> None
   let authenticate_proof_region =
     Typedtree_logical_builtin_private.authenticate_proof_region
   let authenticate_local_assertion =
@@ -510,7 +518,9 @@ module Public = struct
       match root_definition.result_type with
       | Sst.Aggregate _ -> true
       | Sst.Application _ as typ -> parametric_application typ
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ -> false
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Parameter _ ->
+          false
     in
     let member id =
       List.find_opt
@@ -535,7 +545,8 @@ module Public = struct
       @
       match root_definition.result_type with
       | Sst.Aggregate type_id -> [ type_id ]
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Parameter _
       | Sst.Application _ ->
           [])
       |> List.sort_uniq compare
@@ -562,7 +573,7 @@ module Public = struct
       | Sst.Constructor_owner constructor -> constructor.Sst.constructor_type
     in
     let rec collect_type visiting collected = function
-      | Sst.Unit | Sst.Bool | Sst.Int -> Some collected
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> Some collected
       | Sst.Application (constructor, _) as typ -> (
           match
             ( Parametric_adt.find program.parametric_adts constructor,
@@ -665,7 +676,7 @@ module Public = struct
             false
     in
     let admitted_type = function
-      | Sst.Int | Sst.Bool -> true
+      | Sst.Int | Sst.Mathematical_int | Sst.Bool -> true
       | typ when Parametric_type.is_spec_function typ -> true
       | Sst.Aggregate type_id -> root_aggregate_type type_id
       | Sst.Application _ as typ -> parametric_application typ
@@ -678,7 +689,9 @@ module Public = struct
           Parametric_adt.find program.parametric_adts constructor
           |> Option.fold ~none:false ~some:(fun descriptor ->
               Parametric_adt.type_id descriptor = type_id)
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ -> false
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Parameter _ ->
+          false
     in
     let rec validate_pattern (pattern : Sst.pattern) =
       if not (admitted_type pattern.Sst.typ) then
@@ -765,7 +778,7 @@ module Public = struct
         | Sst.Spec_definition body
           when body.stage = Sst.Logical
                && (match definition.result_type with
-                 | Sst.Int | Sst.Bool -> true
+                 | Sst.Int | Sst.Mathematical_int | Sst.Bool -> true
                  | Sst.Aggregate _ ->
                      aggregate_extension && admitted_type definition.result_type
                  | Sst.Application _ as typ ->
@@ -787,7 +800,8 @@ module Public = struct
                     when binding.typ = pattern.typ && admitted_type binding.typ
                     -> (
                       match binding.typ with
-                      | Sst.Int | Sst.Bool -> parameters rest
+                      | Sst.Int | Sst.Mathematical_int | Sst.Bool ->
+                          parameters rest
                       | typ when Parametric_type.is_spec_function typ ->
                           parameters rest
                       | (Sst.Aggregate _ | Sst.Application _)
@@ -885,6 +899,13 @@ module Public = struct
       else
         match expression.expression_desc with
         | Sst.Int_constant _ | Sst.Bool_constant _ -> Ok ()
+        | Sst.Lift_runtime_int operand
+          when expression.typ = Sst.Mathematical_int
+               && operand.typ = Sst.Int
+               && (match operand.expression_desc with
+                  | Sst.Lift_runtime_int _ -> false
+                  | _ -> true) ->
+            validate_expression ~owner operand
         | Sst.Variable { binding; use_uniqueness = Sst.Definitely_aliased }
           when binding.typ = expression.typ ->
             Ok ()
@@ -1018,7 +1039,8 @@ module Public = struct
                 recursive_helper_error
                   "recursive helper call is imported or lacks direct-source \
                    authority")
-        | Sst.Unit_constant | Sst.Variable _ | Sst.Tuple_value _
+        | Sst.Unit_constant | Sst.Lift_runtime_int _ | Sst.Variable _
+        | Sst.Tuple_value _
         | Sst.Record_value _ | Sst.Constructor_value _ | Sst.Field_write _
         | Sst.Shared_scalar_field_write _ | Sst.Owned_tree_nested_write _
         | Sst.Owned_tree_rebase _ | Sst.Let_mutable _ | Sst.Mutable_read _
@@ -1389,6 +1411,8 @@ module Public = struct
             let expression_desc =
               match expression.Sst.expression_desc with
               | (Sst.Int_constant _ | Sst.Bool_constant _) as desc -> desc
+              | Sst.Lift_runtime_int operand ->
+                  Sst.Lift_runtime_int (clone operand)
               | Sst.Variable { binding; use_uniqueness } ->
                   let binding =
                     Option.value ~default:binding
@@ -1680,15 +1704,15 @@ module Public = struct
     type_id : Sst.type_id;
     declaration : type_declaration;
   }
-  type external_type_specification =
-    | Ordinary_type
-    | Authenticated_external_type
-    | Malformed_external_type
+  type logical_sort_specification =
+    | Ordinary_logical_type
+    | Authenticated_logical_sort
+    | Malformed_logical_sort
 
-  let external_type_specification declaration =
-    let public_name = "verocaml.external_type_specification" in
+  let logical_sort_specification declaration =
+    let public_name = "verocaml.logical_sort" in
     let retained_name =
-      "verocaml.internal.external_type_specification.v1"
+      "verocaml.internal.logical_sort.mathematical_int.v1"
     in
     let relevant =
       List.filter
@@ -1698,14 +1722,14 @@ module Public = struct
         declaration.typ_attributes
     in
     match relevant with
-    | [] -> Ordinary_type
+    | [] -> Ordinary_logical_type
     | [ attribute ]
       when String.equal attribute.attr_name.txt retained_name
            && attribute.attr_loc.loc_ghost
            && attribute.attr_name.loc.loc_ghost
            && attribute.attr_payload = Parsetree.PStr [] ->
-        Authenticated_external_type
-    | _ -> Malformed_external_type
+        Authenticated_logical_sort
+    | _ -> Malformed_logical_sort
   type constrained_module = {
     module_name : string;
     module_id : Ident.t;
@@ -1732,10 +1756,15 @@ module Public = struct
     imported_signature : Parametric_signature_private.t;
     imported_broadcast_trigger_span : Diagnostic.span option;
   }
+  type imported_broadcast_declaration = {
+    imported_broadcast_identity : Retained_broadcast_private.identity;
+    imported_broadcast_definition : Sst.function_definition;
+    imported_broadcast_trigger_span : Diagnostic.span;
+    imported_broadcast_trust : Retained_broadcast_private.trust;
+  }
   type imported_broadcast_group = {
-    imported_broadcast_group_path : string;
-    imported_broadcast_group_uid : string;
-    imported_broadcast_target_paths : string list;
+    imported_broadcast_group_identity : Retained_broadcast_private.identity;
+    imported_broadcast_members : Retained_broadcast_private.identity list;
   }
   type imported_type = {
     imported_type_path : string;
@@ -1761,8 +1790,10 @@ module Public = struct
   type imported_environment = {
     allow_public_parametric_signatures : bool;
     imported_callables : imported_callable list;
+    imported_broadcast_declarations : imported_broadcast_declaration list;
     imported_broadcast_groups : imported_broadcast_group list;
     imported_types : imported_type list;
+    imported_logical_sorts : Logical_sort_private.t list;
     imported_rank_domains : imported_rank_domain list;
     external_target_specifications :
       External_target_specification_private.environment option;
@@ -1771,8 +1802,10 @@ module Public = struct
     {
       allow_public_parametric_signatures = false;
       imported_callables = [];
+      imported_broadcast_declarations = [];
       imported_broadcast_groups = [];
       imported_types = [];
+      imported_logical_sorts = [];
       imported_rank_domains = [];
       external_target_specifications = None;
     }
@@ -1796,6 +1829,7 @@ module Public = struct
     mutable contract_carriers : Callback_contract_private.carrier list;
     mutable logical_ghost_depth : int;
     mutable function_result_type : Types.type_expr option;
+    mutable function_result_semantic_type : Sst.typ option;
     mutable owned_tree_cursors : (int * Sst.owned_tree_cursor) list;
     mutable owned_tree_observation_paths :
       (int * Sst.binding * int * Sst.owned_tree_path_step list) list;
@@ -1833,7 +1867,8 @@ module Public = struct
         aggregates.definitions
     in
     let rec deeply_immutable visiting = function
-      | Sst.Unit | Sst.Bool | Sst.Int -> (true, false, false)
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int ->
+          (true, false, false)
       | Sst.Parameter _ -> (false, false, false)
       | Sst.Application (constructor, arguments) -> (
           match Parametric_adt.find descriptors constructor with
@@ -1973,77 +2008,219 @@ module Public = struct
         false
   let compiler_type_name typ =
     Format.asprintf "%a" Printtyp.type_expr typ
+  let available_logical_sorts context =
+    let local =
+      match context.proof_capture_artifact with
+      | Some artifact
+        when authenticate_logical_builtin_artifact artifact
+               ~source_file:context.source_file ->
+          artifact.proof_capture_implementation.Cmt_input.interface_logical_sorts
+      | Some _ | None -> []
+    in
+    List.sort_uniq Logical_sort_private.compare
+      (local @ context.imported.imported_logical_sorts)
+
+  type 'a authenticated_resolution =
+    | Resolution_absent
+    | Resolution_exact of 'a
+    | Resolution_ambiguous of int
+    | Resolution_identity_mismatch of int
+
+  let logical_sort_for_path context path =
+    let path_name = Path.name path in
+    let normalized_path_name =
+      Path.name (normalized_type_path context.typing_environment path)
+    in
+    let path_uid = type_uid context.typing_environment path in
+    let candidates = available_logical_sorts context in
+    let path_matches descriptor =
+      String.equal descriptor.Logical_sort_private.type_path path_name
+      || String.equal descriptor.type_path normalized_path_name
+    in
+    let uid_matches descriptor =
+      Option.fold ~none:false ~some:(String.equal descriptor.Logical_sort_private.type_uid)
+        path_uid
+    in
+    let related =
+      List.filter
+        (fun descriptor -> path_matches descriptor || uid_matches descriptor)
+        candidates
+    in
+    let matches =
+      List.filter
+        (fun descriptor -> path_matches descriptor && uid_matches descriptor)
+        related
+    in
+    match (matches, related) with
+    | [ descriptor ], [ _ ] ->
+        [%log.trace "resolved authenticated base logical sort"
+          ~stage:(Delator.Field.string "logical-sort-resolution")
+          ~role:(Delator.Field.string "mathematical-int")
+          ~provider:(Delator.Field.string descriptor.provider_origin)
+          ~route_class:
+            (Delator.Field.string
+               (if String.equal descriptor.type_path path_name then "direct"
+                else if String.equal descriptor.type_path normalized_path_name
+                then "normalized"
+                else "compiler-uid"))
+          ~decision:(Delator.Field.string "accepted")];
+        Resolution_exact descriptor
+    | [], [] -> Resolution_absent
+    | [ _ ], [] ->
+        [%log.error "logical-sort exact match escaped related identity set"
+          ~stage:(Delator.Field.string "logical-sort-resolution")
+          ~decision:(Delator.Field.string "rejected")
+          ~reason_class:(Delator.Field.string "resolver-invariant")];
+        Resolution_identity_mismatch 0
+    | [], _ :: _ ->
+        [%log.warn "rejected partial base logical-sort compiler identity"
+          ~stage:(Delator.Field.string "logical-sort-resolution")
+          ~role:(Delator.Field.string "mathematical-int")
+          ~candidate_count:(Delator.Field.int (List.length related))
+          ~path_identity_present:
+            (Delator.Field.bool (List.exists path_matches related))
+          ~uid_identity_present:
+            (Delator.Field.bool (List.exists uid_matches related))
+          ~decision:(Delator.Field.string "rejected")
+          ~reason_class:
+            (Delator.Field.string "path-uid-identity-mismatch")];
+        Resolution_identity_mismatch (List.length related)
+    | [ _ ], _ :: _ :: _ | _ :: _ :: _, _ ->
+        [%log.warn "rejected ambiguous base logical-sort route"
+          ~stage:(Delator.Field.string "logical-sort-resolution")
+          ~role:(Delator.Field.string "mathematical-int")
+          ~candidate_count:(Delator.Field.int (List.length related))
+          ~decision:(Delator.Field.string "rejected")
+          ~reason_class:(Delator.Field.string "ambiguous-route")];
+        Resolution_ambiguous (List.length related)
+  let logical_sort_for_integer_literal_callable context path value_uid =
+    let path_name = Path.name path in
+    let candidates = available_logical_sorts context in
+    let path_matches descriptor =
+      String.equal descriptor.Logical_sort_private.integer_literal_path path_name
+    in
+    let uid_matches descriptor =
+      String.equal descriptor.Logical_sort_private.integer_literal_uid value_uid
+    in
+    let related =
+      List.filter
+        (fun descriptor -> path_matches descriptor || uid_matches descriptor)
+        candidates
+    in
+    let matches =
+      List.filter
+        (fun descriptor -> path_matches descriptor && uid_matches descriptor)
+        related
+    in
+    match (matches, related) with
+    | [ descriptor ], [ _ ] -> Resolution_exact descriptor
+    | [], [] -> Resolution_absent
+    | [ _ ], [] ->
+        [%log.error
+          "logical integer literal exact match escaped related identity set"
+          ~stage:(Delator.Field.string "logical-integer-literal-constructor")
+          ~decision:(Delator.Field.string "rejected")
+          ~reason_class:(Delator.Field.string "resolver-invariant")];
+        Resolution_identity_mismatch 0
+    | [], _ :: _ ->
+        [%log.warn "rejected partial logical integer literal constructor compiler identity"
+          ~stage:(Delator.Field.string "logical-integer-literal-constructor")
+          ~candidate_count:(Delator.Field.int (List.length related))
+          ~path_identity_present:
+            (Delator.Field.bool (List.exists path_matches related))
+          ~uid_identity_present:
+            (Delator.Field.bool (List.exists uid_matches related))
+          ~decision:(Delator.Field.string "rejected")
+          ~reason_class:
+            (Delator.Field.string "path-uid-identity-mismatch")];
+        Resolution_identity_mismatch (List.length related)
+    | [ _ ], _ :: _ :: _ | _ :: _ :: _, _ ->
+        [%log.warn "rejected ambiguous logical integer literal constructor route"
+          ~stage:(Delator.Field.string "logical-integer-literal-constructor")
+          ~candidate_count:(Delator.Field.int (List.length related))
+          ~decision:(Delator.Field.string "rejected")
+          ~reason_class:(Delator.Field.string "ambiguous-route")];
+        Resolution_ambiguous (List.length related)
+  let source_application context path =
+    match logical_sort_for_path context path with
+    | Resolution_exact descriptor ->
+        Spec_function_type_private.Logical_sort_application descriptor
+    | Resolution_ambiguous _ ->
+        Spec_function_type_private.Ambiguous_logical_sort_application
+    | Resolution_identity_mismatch _ ->
+        Spec_function_type_private.Conflicting_logical_sort_identity
+    | Resolution_absent -> (
+        match
+          Parametric_adt_lowering_private.find_by_path
+            context.aggregates.parametric_adts path
+        with
+        | Some item ->
+            Spec_function_type_private.Parametric_application item.descriptor
+        | None -> (
+            match find_local_type_by_path path context.aggregates.local_types with
+            | Some local when local.declaration.typ_params = [] ->
+                Spec_function_type_private.Aggregate_application local.type_id
+            | Some _ -> Spec_function_type_private.Polymorphic_application
+            | None ->
+                let path_name = Path.name path in
+                let normalized_path_name =
+                  Path.name
+                    (normalized_type_path context.typing_environment path)
+                in
+                let path_uid = type_uid context.typing_environment path in
+                let imported_matches =
+                  List.filter
+                    (fun imported ->
+                      let target_match =
+                        match imported.imported_parametric_descriptor with
+                        | Some descriptor -> (
+                            match Parametric_adt.provenance descriptor with
+                            | Parametric_adt.External _ ->
+                                let constructor =
+                                  Parametric_adt.type_constructor descriptor
+                                in
+                                String.equal constructor.constructor_path
+                                  path_name
+                                || String.equal constructor.constructor_path
+                                     normalized_path_name
+                                || Option.fold ~none:false
+                                     ~some:
+                                       (String.equal
+                                          (Parametric_adt.compiler_uid
+                                             descriptor))
+                                     path_uid
+                            | Parametric_adt.Local _ -> false)
+                        | None -> false
+                      in
+                      target_match
+                      || String.equal imported.imported_type_path path_name
+                      || String.equal imported.imported_type_path
+                           normalized_path_name
+                      || Option.fold ~none:false
+                           ~some:(String.equal imported.imported_type_uid)
+                           path_uid)
+                    context.imported.imported_types
+                in
+                match imported_matches with
+                | [ { imported_parametric_descriptor = Some descriptor; _ } ] ->
+                    Spec_function_type_private.Parametric_application descriptor
+                | [ imported ] ->
+                    Spec_function_type_private.Aggregate_application
+                      imported.imported_type_definition.type_id
+                | [] -> Spec_function_type_private.Unsupported_application
+                | _ :: _ :: _ ->
+                    Spec_function_type_private.Unsupported_application))
   let normalized_type_with_substitutions context substitutions location typ =
     let binders =
       Option.fold ~none:[]
         ~some:(fun function_ -> function_.parametric_type_binders)
         context.current_function
     in
-    let resolve path =
-      match
-        Parametric_adt_lowering_private.find_by_path
-          context.aggregates.parametric_adts path
-      with
-      | Some item ->
-          Spec_function_type_private.Parametric_application item.descriptor
-      | None -> (
-          match find_local_type_by_path path context.aggregates.local_types with
-          | Some local when local.declaration.typ_params = [] ->
-              Spec_function_type_private.Aggregate_application local.type_id
-          | Some _ -> Spec_function_type_private.Polymorphic_application
-          | None -> (
-              let path_name = Path.name path in
-              let normalized_path_name =
-                Path.name
-                  (normalized_type_path context.typing_environment path)
-              in
-              let path_uid = type_uid context.typing_environment path in
-              let imported_matches =
-                List.filter
-                  (fun imported ->
-                    let target_match =
-                      match imported.imported_parametric_descriptor with
-                      | Some descriptor -> (
-                          match Parametric_adt.provenance descriptor with
-                          | Parametric_adt.External _ ->
-                              let constructor =
-                                Parametric_adt.type_constructor descriptor
-                              in
-                              String.equal constructor.constructor_path
-                                path_name
-                              || String.equal constructor.constructor_path
-                                   normalized_path_name
-                              || Option.fold ~none:false
-                                   ~some:
-                                     (String.equal
-                                        (Parametric_adt.compiler_uid descriptor))
-                                   path_uid
-                          | Parametric_adt.Local _ -> false)
-                      | None -> false
-                    in
-                    target_match
-                    || String.equal imported.imported_type_path path_name
-                    || String.equal imported.imported_type_path
-                         normalized_path_name
-                    || Option.fold ~none:false
-                         ~some:(String.equal imported.imported_type_uid)
-                         path_uid)
-                  context.imported.imported_types
-              in
-              match imported_matches with
-              | [ { imported_parametric_descriptor = Some descriptor; _ } ] ->
-                  Spec_function_type_private.Parametric_application descriptor
-              | [ imported ] ->
-                  Spec_function_type_private.Aggregate_application
-                    imported.imported_type_definition.type_id
-              | [] -> Spec_function_type_private.Unsupported_application
-              | _ :: _ :: _ ->
-                  Spec_function_type_private.Unsupported_application))
-    in
     let source_type = compiler_type_name typ in
     match
       Spec_function_type_private.lower_compiler_type ~substitutions ~binders
-        ~logical:(symbolic_context_is_logical context) ~resolve typ
+        ~logical:(symbolic_context_is_logical context)
+        ~resolve:(source_application context) typ
     with
     | Ok typ -> Ok typ
     | Error Parametric_lowering_private.Polymorphic_source_type ->
@@ -2061,7 +2238,10 @@ module Public = struct
                   source_type))
     | Error Parametric_lowering_private.Higher_order_source_type ->
         [%log.debug "source type lowering rejected a higher-order type"
-          ~source_type:(Delator.Field.string source_type)];
+          ~source_type:(Delator.Field.string source_type)
+          ~logical_context:
+            (Delator.Field.bool (symbolic_context_is_logical context))
+          ~decision:(Delator.Field.string "rejected")];
         Error
           (Diagnostic.make
              (Diagnostic.Unsupported_construct Diagnostic.Higher_order_function)
@@ -2090,7 +2270,294 @@ module Public = struct
         context.current_function
     in
     normalized_type_with_substitutions context substitutions location typ
-  let optional_carrier context location payload =
+  let normalized_explicit_core_type context core_type =
+    let unsupported location message =
+      Error
+        (Diagnostic.make
+           (Diagnostic.Unsupported_construct Diagnostic.Unsupported_type)
+           (span context location)
+        |> Diagnostic.with_message message)
+    in
+    let rec lower core_type =
+      match core_type.ctyp_desc with
+      | Ttyp_constr (path, _, arguments) -> (
+          match source_application context path with
+          | Spec_function_type_private.Logical_sort_application _ ->
+              if arguments = [] then Ok Sst.Mathematical_int
+              else
+                unsupported core_type.ctyp_loc
+                  "A logical-sort alias cannot take type arguments."
+          | Spec_function_type_private.Ambiguous_logical_sort_application ->
+              unsupported core_type.ctyp_loc
+                "This type resolves to multiple authenticated logical-sort declarations. Remove the conflicting specification-library dependency."
+          | Spec_function_type_private.Conflicting_logical_sort_identity ->
+              unsupported core_type.ctyp_loc
+                "This logical-sort type has conflicting compiler path and UID evidence. Rebuild the specification library and this consumer together."
+          | Spec_function_type_private.Parametric_application descriptor ->
+              let* arguments =
+                List.fold_left
+                  (fun result argument ->
+                    let* lowered = result in
+                    let* argument = lower argument in
+                    Ok (argument :: lowered))
+                  (Ok []) arguments
+                |> Result.map List.rev
+              in
+              Parametric_adt.application descriptor arguments
+              |> Result.map_error (fun _ ->
+                     Diagnostic.make
+                       (Diagnostic.Unsupported_construct
+                          Diagnostic.Unsupported_type)
+                       (span context core_type.ctyp_loc)
+                     |> Diagnostic.with_message
+                          "The explicit parametric type application does not match its authenticated descriptor.")
+          | Spec_function_type_private.Aggregate_application type_id ->
+              if arguments = [] then Ok (Sst.Aggregate type_id)
+              else
+                unsupported core_type.ctyp_loc
+                  "A non-parametric aggregate cannot take type arguments."
+          | Spec_function_type_private.Polymorphic_application ->
+              unsupported core_type.ctyp_loc
+                "The explicit type application has unsupported polymorphic arguments."
+          | Spec_function_type_private.Unsupported_application ->
+              normalized_type context core_type.ctyp_loc core_type.ctyp_type)
+      | Ttyp_tuple components ->
+          List.fold_left
+            (fun result (label, component) ->
+              let* lowered = result in
+              let* component = lower component in
+              Ok ((label, component) :: lowered))
+            (Ok []) components
+          |> Result.map (fun components ->
+                 Sst.Tuple (List.rev components))
+      | Ttyp_arrow (label, domain, range) ->
+          let* domain = lower domain in
+          let* range = lower range in
+          Spec_function_type_private.lower_arrow
+            ~logical:(symbolic_context_is_logical context)
+            label domain range
+          |> Result.map_error (fun _ ->
+                 Diagnostic.make
+                   (Diagnostic.Unsupported_construct
+                      Diagnostic.Higher_order_function)
+                   (span context core_type.ctyp_loc))
+      | Ttyp_alias (typ, _, _) | Ttyp_open (_, _, typ) | Ttyp_quote typ
+      | Ttyp_splice typ ->
+          lower typ
+      | Ttyp_poly ([], typ) -> lower typ
+      | Ttyp_var _ | Ttyp_unboxed_tuple _ | Ttyp_object _ | Ttyp_class _
+      | Ttyp_variant _ | Ttyp_poly (_ :: _, _) | Ttyp_package _
+      | Ttyp_of_kind _ | Ttyp_call_pos ->
+          normalized_type context core_type.ctyp_loc core_type.ctyp_type
+    in
+    lower core_type
+  let normalized_constraint_types context location core_types =
+    let rec lower lowered = function
+      | [] -> (
+          match List.sort_uniq Parametric_type.compare lowered with
+          | [ typ ] -> Ok (Some typ)
+          | [] -> Ok None
+          | _ :: _ :: _ ->
+              Error
+                (Diagnostic.make
+                   (Diagnostic.Unsupported_construct Diagnostic.Unsupported_type)
+                   (span context location)
+                |> Diagnostic.with_message
+                     "The explicit type constraints at this expression boundary disagree."))
+      | core_type :: rest -> (
+          match normalized_explicit_core_type context core_type with
+          | Error _ as error -> error
+          | Ok typ -> lower (typ :: lowered) rest)
+    in
+    lower [] core_types
+  let explicit_expression_type context expression =
+    expression.exp_extra
+    |> List.filter_map (function
+         | Texp_constraint core_type, _, _ -> Some core_type
+         | ( Texp_coerce _ | Texp_poly _ | Texp_newtype _ | Texp_stack
+           | Texp_mode _ ), _, _ ->
+             None)
+    |> normalized_constraint_types context expression.exp_loc
+  let explicit_pattern_type context pattern =
+    pattern.pat_extra
+    |> List.filter_map (function
+         | Tpat_constraint core_type, _, _ -> Some core_type
+         | (Tpat_type _ | Tpat_open _ | Tpat_unpack), _, _ -> None)
+    |> normalized_constraint_types context pattern.pat_loc
+  let explicit_callable_result_type context function_ fallback =
+    let source = source_definition_body function_ in
+    let expression = Option.value ~default:fallback source in
+    let[@log_value.trace] route =
+      if Option.is_some source then "definition-body" else "typed-function-body"
+    in
+    [%log.trace "selected callable result constraint source"
+      ~stage:(Delator.Field.string "local-callable-semantic-signature")
+      ~function_name:
+        (Delator.Field.string function_.function_id.function_name)
+      ~route:(Delator.Field.string (route [@log_value.trace]))
+      ~decision:(Delator.Field.string "inspect-explicit-constraint")];
+    explicit_expression_type context expression
+  let normalized_pattern_type context pattern source_type =
+    match explicit_pattern_type context pattern with
+    | Error _ as error -> error
+    | Ok (Some typ) -> Ok typ
+    | Ok None -> normalized_type context pattern.pat_loc source_type
+  let apply_expression_boundary context location expected lowered =
+    match expected with
+    | expected when Parametric_type.equal expected lowered.Sst.typ ->
+        Ok lowered
+    | Sst.Mathematical_int when lowered.typ = Sst.Int ->
+        if not (symbolic_context_is_logical context) then (
+          [%log.debug "rejected logical integer at executable boundary"
+            ~stage:(Delator.Field.string "logical-sort-boundary")
+            ~source_sort:(Delator.Field.string "runtime-int")
+            ~target_sort:(Delator.Field.string "mathematical-int")
+            ~decision:(Delator.Field.string "rejected")
+            ~reason_class:(Delator.Field.string "executable-containment")];
+          Error
+            (Diagnostic.make
+               (Diagnostic.Unsupported_construct Diagnostic.Unsupported_type)
+               (span context location)
+            |> Diagnostic.with_message
+                 "Mathematical Int is ghost-only and cannot be used by executable code."))
+        else
+          let lifted =
+            match lowered.expression_desc with
+            | Sst.Int_constant _ ->
+                { lowered with Sst.typ = Sst.Mathematical_int }
+            | Sst.Lift_runtime_int _ -> lowered
+            | _ ->
+                {
+                  Sst.expression_desc = Sst.Lift_runtime_int lowered;
+                  typ = Sst.Mathematical_int;
+                  span = lowered.span;
+                }
+          in
+          [%log.trace "applied explicit runtime-to-mathematical integer boundary"
+            ~stage:(Delator.Field.string "logical-sort-boundary")
+            ~source_sort:(Delator.Field.string "runtime-int")
+            ~target_sort:(Delator.Field.string "mathematical-int")
+            ~lift_kind:
+              (Delator.Field.string
+                 (match lowered.expression_desc with
+                 | Sst.Int_constant _ -> "direct-literal"
+                 | Sst.Lift_runtime_int _ -> "existing"
+                 | _ -> "intrinsic-lift"))
+            ~decision:(Delator.Field.string "accepted")];
+          Ok lifted
+    | Sst.Int when lowered.typ = Sst.Mathematical_int ->
+        [%log.debug "rejected implicit mathematical-to-runtime integer flow"
+          ~stage:(Delator.Field.string "logical-sort-boundary")
+          ~source_sort:(Delator.Field.string "mathematical-int")
+          ~target_sort:(Delator.Field.string "runtime-int")
+          ~logical_context:
+            (Delator.Field.bool (symbolic_context_is_logical context))
+          ~decision:(Delator.Field.string "rejected")
+          ~reason_class:(Delator.Field.string "missing-narrowing-authority")];
+        Error
+          (Diagnostic.make
+             (Diagnostic.Unsupported_construct Diagnostic.Unsupported_type)
+             (span context location)
+          |> Diagnostic.with_message
+               "This logical expression evaluates to unbounded Vstd.Int.t, but an explicit `int` boundary requests a bounded runtime integer. Change that annotation to `Vstd.Int.t`, or remove it so logical inference can choose `Int`. VeroCaml never narrows `Int` to `int` implicitly; use an imported authenticated narrowing function when runtime `int` is intentional."
+          |> Diagnostic.with_hints
+               [
+                 "Change `: int` to `: Vstd.Int.t`, or remove the explicit result annotation.";
+               ])
+    | expected ->
+        Error
+          (Diagnostic.make
+             (Diagnostic.Unsupported_construct Diagnostic.Unsupported_type)
+             (span context location)
+          |> Diagnostic.with_message
+               (Printf.sprintf
+                  "The expression has semantic type %s, which cannot satisfy the explicit %s boundary."
+                  (Parametric_type.to_string lowered.typ)
+                  (Parametric_type.to_string expected)))
+  let apply_explicit_expression_boundary context expression lowered =
+    match explicit_expression_type context expression with
+    | Error _ as error -> error
+    | Ok None -> Ok lowered
+    | Ok (Some expected) ->
+        apply_expression_boundary context expression.exp_loc expected lowered
+  let reconcile_logical_results context location syntactic_type results =
+    if not (symbolic_context_is_logical context) then
+      Ok (syntactic_type, results)
+    else
+      let result_types = List.map (fun result -> result.Sst.typ) results in
+      let target =
+        if syntactic_type = Sst.Mathematical_int then
+          Sst.Mathematical_int
+        else if
+          List.exists (( = ) Sst.Mathematical_int) result_types
+          && List.for_all Parametric_type.is_integer result_types
+        then Sst.Mathematical_int
+        else
+          match List.sort_uniq Parametric_type.compare result_types with
+          | [ semantic_type ] -> semantic_type
+          | [] | _ :: _ :: _ -> syntactic_type
+      in
+      let rec adapt adapted = function
+        | [] -> Ok (target, List.rev adapted)
+        | result :: rest
+          when Parametric_type.equal result.Sst.typ target ->
+            adapt (result :: adapted) rest
+        | ({ Sst.typ = Sst.Int; _ } as result) :: rest
+          when target = Sst.Mathematical_int -> (
+            match apply_expression_boundary context location target result with
+            | Error _ as error -> error
+            | Ok result -> adapt (result :: adapted) rest)
+        | (_result [@log_value.debug]) :: _ ->
+            [%log.debug "rejected incompatible logical result branches"
+              ~stage:(Delator.Field.string "logical-result-reconciliation")
+              ~syntactic_type:
+                (Delator.Field.string
+                   (Parametric_type.to_string syntactic_type))
+              ~target_type:
+                (Delator.Field.string (Parametric_type.to_string target))
+              ~branch_type:
+                (Delator.Field.string
+                   (Parametric_type.to_string
+                      ((_result [@log_value.debug]).Sst.typ)))
+              ~branch_count:(Delator.Field.int (List.length results))
+              ~decision:(Delator.Field.string "rejected")
+              ~reason_class:
+                (Delator.Field.string "semantic-branch-type-mismatch")];
+            Error
+              (Diagnostic.make
+                 (Diagnostic.Unsupported_construct Diagnostic.Unsupported_type)
+                 (span context location)
+              |> Diagnostic.with_message
+                   "The branches of this logical expression produce incompatible semantic types. Mathematical Int is lifted only as a scalar value, never through a container.")
+      in
+      let* target, results = adapt [] results in
+      if not (Parametric_type.equal syntactic_type target) then
+        [%log.trace "reconciled logical expression result type"
+          ~stage:(Delator.Field.string "logical-result-reconciliation")
+          ~syntactic_type:
+            (Delator.Field.string (Parametric_type.to_string syntactic_type))
+          ~semantic_type:
+            (Delator.Field.string (Parametric_type.to_string target))
+          ~branch_count:(Delator.Field.int (List.length results))
+          ~decision:(Delator.Field.string "accepted")];
+      Ok (target, results)
+  let adapt_call_argument context location ~expected argument =
+    match (expected, argument.Sst.typ) with
+    | ( (Sst.Int | Sst.Mathematical_int),
+        (Sst.Int | Sst.Mathematical_int) ) ->
+        apply_expression_boundary context location expected argument
+    | _ -> Ok argument
+  let optional_parameter_type_error context location message =
+    [%log.debug "rejected inconsistent compiler parameter arrows"
+      ~stage:(Delator.Field.string "optional-carrier-authentication")
+      ~decision:(Delator.Field.string "rejected")
+      ~reason_class:(Delator.Field.string "parameter-arrow-mismatch")
+      ~detail:(Delator.Field.string message)];
+    Diagnostic.make
+      (Diagnostic.Unsupported_construct Diagnostic.Unsupported_type)
+      (span context location)
+    |> Diagnostic.with_message message
+  let optional_carrier context location carrier payload =
     let descriptors =
       List.map
         (fun item -> item.Parametric_adt_lowering_private.descriptor)
@@ -2099,9 +2566,42 @@ module Public = struct
           (fun imported -> imported.imported_parametric_descriptor)
           context.imported.imported_types
     in
-    match Parametric_adt.option_application descriptors payload with
-    | Some carrier -> Ok carrier
-    | None -> unsupported context location Diagnostic.Unsupported_type
+    match
+      Parametric_adt.authenticate_optional_carrier descriptors ~carrier ~payload
+    with
+    | Ok _instance ->
+        [%log.trace "authenticated compiler optional-arrow carrier"
+          ~stage:(Delator.Field.string "optional-carrier-authentication")
+          ~decision:(Delator.Field.string "accepted")
+          ~carrier_type:
+            (Delator.Field.string (Parametric_type.to_string carrier))
+          ~payload_type:
+            (Delator.Field.string (Parametric_type.to_string payload))
+          ~descriptor_uid:
+            (Delator.Field.string
+               (Parametric_adt.compiler_uid
+                  _instance.option_descriptor))
+          ~descriptor_count:(Delator.Field.int (List.length descriptors))];
+        Ok carrier
+    | Error _error ->
+        [%log.debug "rejected compiler optional-arrow carrier"
+          ~stage:(Delator.Field.string "optional-carrier-authentication")
+          ~decision:(Delator.Field.string "rejected")
+          ~reason_class:
+            (Delator.Field.string
+               (match _error with
+               | Parametric_adt.Missing_optional_descriptor ->
+                   "missing-exact-descriptor"
+               | Parametric_adt.Invalid_optional_descriptor ->
+                   "invalid-exact-descriptor-shape"
+               | Parametric_adt.Optional_payload_mismatch ->
+                   "compiler-payload-mismatch"))
+          ~carrier_type:
+            (Delator.Field.string (Parametric_type.to_string carrier))
+          ~payload_type:
+            (Delator.Field.string (Parametric_type.to_string payload))
+          ~descriptor_count:(Delator.Field.int (List.length descriptors))];
+        unsupported context location Diagnostic.Unsupported_type
   module Imported_specialization_for_testing = struct
     let accepts ~imported_path:_ ~definition_name:_ _argument_names = false
   end
@@ -2186,7 +2686,9 @@ module Public = struct
                     then Some (Parametric_adt.type_id descriptor)
                     else None))
         | Sst.Aggregate owner -> Some owner
-        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ -> None)
+        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+        | Sst.Parameter _ ->
+            None)
   let field_for_description context typ description =
     let owner = parametric_application_type_id context typ in
     match
@@ -2202,7 +2704,9 @@ module Public = struct
       match typ with
       | Sst.Aggregate owner -> Some owner
       | Sst.Application _ -> parametric_application_type_id context typ
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ -> None
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Parameter _ ->
+          None
     in
     match
       find_constructor_by_uid ?owner description.Types.cstr_uid
@@ -2251,7 +2755,8 @@ module Public = struct
     match root.typ with
     | Sst.Aggregate type_id ->
         List.mem type_id context.owned_tree_candidate_roots
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+    | Sst.Parameter _
     | Sst.Application _ ->
         false
   let rec shared_scalar_type_mentions owner = function
@@ -2260,7 +2765,8 @@ module Public = struct
         List.exists
           (fun (_, typ) -> shared_scalar_type_mentions owner typ)
           components
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Parameter _ | Sst.Application _ ->
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Parameter _
+    | Sst.Application _ ->
         false
   let shared_scalar_field context type_id =
     let authenticated_local_shape =
@@ -2394,7 +2900,8 @@ module Public = struct
           | Sst.Value_parameter parameter -> (
               match parameter.pattern.typ with
               | Sst.Aggregate _ -> true
-              | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
+              | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+              | Sst.Tuple _ | Sst.Parameter _
               | Sst.Application _ ->
                   false))
         parameters
@@ -2460,45 +2967,80 @@ module Public = struct
   let has_symbolic_candidate context path =
     symbolic_candidates context path <> []
     || imported_symbolic_candidates context path <> []
-  let symbolic_use_diagnostic context kind location message =
-    let classification =
-      match kind with
-      | `Authentication -> Diagnostic.Invalid_symbolic_authentication message
-      | `Declaration -> Diagnostic.Invalid_symbolic_declaration message
-      | `Application -> Diagnostic.Invalid_symbolic_application message
-    in
-    Diagnostic.make classification (span context location)
   let authenticate_symbolic_candidate context location path description =
     let local = symbolic_candidates context path in
     let imported = imported_symbolic_candidates context path in
     match (local, imported) with
     | _ :: _, _ :: _ ->
         Error
-          (symbolic_use_diagnostic context `Authentication location
-             "symbolic use resolves to both local and imported declarations")
+          (Diagnostic.make
+             (Diagnostic.Invalid_symbolic_dependency
+                {
+                  provider = Path.name path;
+                  reason = "identity conflicts with a local declaration";
+                  remedy = "remove the conflicting declaration or dependency";
+                })
+             (span context location))
     | [], [ imported ] ->
         if not (symbolic_context_is_logical context) then
           Error
-            (symbolic_use_diagnostic context `Application location
-               "symbolic declarations are unavailable to executable code")
+            (Diagnostic.make
+               (Diagnostic.Invalid_symbolic_application
+                  "symbolic value is used by executable code; move the use to a specification or proof")
+               (span context location))
+        else if
+          not
+            (String.equal imported.imported_uid
+               (compiler_uid description.Types.val_uid))
+        then
+          Error
+            (Diagnostic.make
+               (Diagnostic.Invalid_symbolic_dependency
+                  {
+                    provider = imported.imported_path;
+                    reason = "compiler identity differs from the verified interface";
+                    remedy = "rebuild the provider and consumer together";
+                  })
+               (span context location))
         else
           Symbolic_declaration_private.authenticate_imported
-            ~canonical_path:(Path.name path)
-            ~value_uid:(compiler_uid description.Types.val_uid)
-            imported.imported_definition
+            ~canonical_path:imported.imported_path
+            ~value_uid:imported.imported_uid imported.imported_definition
           |> Result.map (fun declaration ->
+                 [%log.debug "authenticated imported symbolic use"
+                   ~provider:
+                     (Delator.Field.string
+                        (match String.split_on_char '.' imported.imported_path with
+                        | provider :: _ -> provider
+                        | [] -> "dependency"))
+                   ~stage:(Delator.Field.string "typedtree-lowering")
+                   ~failure_class:(Delator.Field.string "none")];
                  (imported.imported_definition.function_id, declaration))
-          |> Result.map_error (fun message ->
-                 symbolic_use_diagnostic context `Authentication location
-                   message)
+          |> Result.map_error (fun reason ->
+                 Diagnostic.make
+                   (Diagnostic.Invalid_symbolic_dependency
+                      {
+                        provider = imported.imported_path;
+                        reason;
+                        remedy = "rebuild the provider and its dependency closure";
+                      })
+                   (span context location))
     | [], [] ->
         Error
-          (symbolic_use_diagnostic context `Authentication location
-             "symbolic use does not resolve to a declaration")
+          (Diagnostic.make
+             (Diagnostic.Invalid_symbolic_authentication
+                "symbolic use has no authenticated declaration; declare it with [%%verocaml.symbolic val ...]")
+             (span context location))
     | [], _ :: _ :: _ ->
         Error
-          (symbolic_use_diagnostic context `Authentication location
-             "symbolic use resolves to multiple imported declarations")
+          (Diagnostic.make
+             (Diagnostic.Invalid_symbolic_dependency
+                {
+                  provider = Path.name path;
+                  reason = "multiple verified providers claim this identity";
+                  remedy = "remove the conflicting dependency";
+                })
+             (span context location))
     | _ :: _, [] ->
         Typedtree_symbolic_private.authenticate_candidate
           ~logical:(symbolic_context_is_logical context)
@@ -2507,13 +3049,16 @@ module Public = struct
         |> Result.map (fun (function_, declaration) ->
                (function_.function_id, declaration))
         |> Result.map_error (fun error ->
-               let kind =
+               let classification =
                  match error.Typedtree_symbolic_private.use_error_kind with
-                 | Authentication -> `Authentication
-                 | Declaration -> `Declaration
-                 | Application -> `Application
+                 | Authentication ->
+                     Diagnostic.Invalid_symbolic_authentication error.message
+                 | Declaration ->
+                     Diagnostic.Invalid_symbolic_declaration error.message
+                 | Application ->
+                     Diagnostic.Invalid_symbolic_application error.message
                in
-               symbolic_use_diagnostic context kind error.location error.message)
+               Diagnostic.make classification (span context error.location))
   let normalize_value_path expression path =
     try
       Env.normalize_value_path (Some expression.exp_loc) expression.exp_env path
@@ -2559,6 +3104,61 @@ module Public = struct
   let string_argument = function
     | { exp_desc = Texp_constant (Const_string (value, _, _)); _ } -> Some value
     | _ -> None
+  let mathematical_integer_literal =
+    Mathematical_int_constant_private.parse_literal
+
+  let lower_logical_integer_literal context application _descriptor arguments =
+    if not (symbolic_context_is_logical context) then
+      Error
+        (Diagnostic.make
+           (Diagnostic.Unsupported_construct Diagnostic.Unsupported_type)
+           (span context application.exp_loc)
+        |> Diagnostic.with_message
+             "Mathematical Int literals are ghost-only and cannot be constructed by executable code.")
+    else
+      match arguments with
+      | [ (Nolabel, Arg (argument, _)) ] -> (
+          match Option.bind (string_argument argument) mathematical_integer_literal with
+          | Some value ->
+              [%log.debug "lowered authenticated arbitrary-precision integer literal"
+                ~stage:(Delator.Field.string "logical-integer-literal-constructor")
+                ~provider:
+                  (Delator.Field.string
+                     (_descriptor [@log_value.debug]).Logical_sort_private
+                       .provider_origin)
+                ~digit_count:
+                  (Delator.Field.int
+                     (String.length (Z.to_string (Z.abs value))))
+                ~negative:(Delator.Field.bool (Z.sign value < 0))
+                ~decision:(Delator.Field.string "accepted")];
+              Ok
+                {
+                  Sst.expression_desc = Sst.Int_constant value;
+                  typ = Sst.Mathematical_int;
+                  span = span context application.exp_loc;
+                }
+          | None ->
+              [%log.debug "rejected malformed mathematical integer literal"
+                ~stage:(Delator.Field.string "logical-integer-literal-constructor")
+                ~provider:
+                  (Delator.Field.string
+                     (_descriptor [@log_value.debug]).provider_origin)
+                ~argument_class:
+                  (Delator.Field.string
+                     (if Option.is_some (string_argument argument) then
+                        "invalid-decoded-literal"
+                      else "dynamic-or-non-string"))
+                ~decision:(Delator.Field.string "rejected")
+                ~reason_class:(Delator.Field.string "literal-grammar")];
+              Error
+                (Diagnostic.make
+                   (Diagnostic.Unsupported_construct
+                      Diagnostic.Unsupported_expression)
+                   (span context application.exp_loc)
+                |> Diagnostic.with_message
+                     "A mathematical Int literal constructor requires one literal string containing a signed decimal, binary, octal, or hexadecimal integer; underscores may appear only between digits."))
+      | _ ->
+          unsupported context application.exp_loc Diagnostic.Higher_order_call
   let one_application_argument = function
     | [ (Nolabel, Arg (argument, _)) ] -> Some argument
     | _ -> None
@@ -3176,7 +3776,8 @@ module Public = struct
             exact seen left right
         | (Types.Tvar _, Types.Tvar _) | (Types.Tunivar _, Types.Tunivar _) ->
             left_id = right_id
-        | Types.Tconstr (left, left_arguments, _), Types.Tconstr (right, right_arguments, _) ->
+        | ( Types.Tconstr (left, left_arguments, _),
+            Types.Tconstr (right, right_arguments, _) ) ->
             Path.same left right
             && List.length left_arguments = List.length right_arguments
             && List.for_all2 (exact seen) left_arguments right_arguments
@@ -3213,7 +3814,8 @@ module Public = struct
             | Some previous ->
                 if exact [] previous target then Some substitutions else None)
         | _, (Types.Tvar _ | Types.Tunivar _) -> None
-        | Types.Tconstr (source, source_arguments, _), Types.Tconstr (target, target_arguments, _)
+        | ( Types.Tconstr (source, source_arguments, _),
+            Types.Tconstr (target, target_arguments, _) )
           when Path.same source target
                && List.length source_arguments = List.length target_arguments ->
             List.fold_left2
@@ -3242,29 +3844,109 @@ module Public = struct
     let compiler_match =
       Option.is_some (compatible [] [] source_type expected_source)
     in
-    if compiler_match then Ok ()
+    let rec source_is_logical_sort seen typ =
+      let id = Types.get_id typ in
+      if List.mem id seen then false
+      else
+        match Types.get_desc typ with
+        | Types.Tconstr (path, [], _) ->
+            (match logical_sort_for_path context path with
+            | Resolution_exact _ -> true
+            | Resolution_absent | Resolution_ambiguous _
+            | Resolution_identity_mismatch _ ->
+                false)
+        | Types.Tlink typ | Types.Tsubst (typ, _) | Types.Tpoly (typ, []) ->
+            source_is_logical_sort (id :: seen) typ
+        | Types.Tvar _ | Types.Tunivar _ | Types.Tarrow _ | Types.Ttuple _
+        | Types.Tunboxed_tuple _ | Types.Tconstr _ | Types.Tobject _
+        | Types.Tfield _ | Types.Tnil | Types.Tvariant _ | Types.Tpoly _
+        | Types.Tpackage _ | Types.Tquote _ | Types.Tsplice _
+        | Types.Tof_kind _ ->
+            false
+    in
+    let rec source_is_runtime_int seen typ =
+      let id = Types.get_id typ in
+      if List.mem id seen then false
+      else
+        match Types.get_desc typ with
+        | Types.Tconstr (path, [], _) -> Path.same path Predef.path_int
+        | Types.Tlink typ | Types.Tsubst (typ, _) | Types.Tpoly (typ, []) ->
+            source_is_runtime_int (id :: seen) typ
+        | Types.Tvar _ | Types.Tunivar _ | Types.Tarrow _ | Types.Ttuple _
+        | Types.Tunboxed_tuple _ | Types.Tconstr _ | Types.Tobject _
+        | Types.Tfield _ | Types.Tnil | Types.Tvariant _ | Types.Tpoly _
+        | Types.Tpackage _ | Types.Tquote _ | Types.Tsplice _
+        | Types.Tof_kind _ ->
+            false
+    in
+    let[@log_value.debug] _correlation =
+      Parametric_type.structural_identity_digest expected
+    in
+    if compiler_match then (
+      [%log.trace "accepted retained ghost shadow type"
+        ~stage:(Delator.Field.string "retained-shadow-authentication")
+        ~decision:(Delator.Field.string "accepted-compiler-shape")
+        ~correlation:
+          (Delator.Field.string (_correlation [@log_value.debug]))];
+      Ok ())
     else
       match normalized_type context location source_type with
       | Ok actual
         when Parametric_type.equal actual expected
              || Parametric_type.alpha_equal actual expected ->
+          [%log.trace "accepted retained ghost shadow type"
+            ~stage:(Delator.Field.string "retained-shadow-authentication")
+            ~decision:(Delator.Field.string "accepted-normalized-shape")
+            ~correlation:
+              (Delator.Field.string (_correlation [@log_value.debug]))];
           Ok ()
-      | Ok _ | Error _ ->
+      | Ok Sst.Int
+        when expected = Sst.Mathematical_int
+             && source_is_logical_sort [] expected_source ->
+          [%log.trace "accepted representation-collapsed logical-sort shadow"
+            ~stage:(Delator.Field.string "retained-shadow-authentication")
+            ~source_sort:(Delator.Field.string "runtime-int-representation")
+            ~target_sort:(Delator.Field.string "mathematical-int")
+            ~decision:(Delator.Field.string "accepted-authenticated-alias")
+            ~correlation:
+              (Delator.Field.string (_correlation [@log_value.debug]))];
+          Ok ()
+      | Ok Sst.Mathematical_int
+        when expected = Sst.Int
+             && source_is_logical_sort [] source_type
+             && source_is_runtime_int [] expected_source ->
+          [%log.trace "accepted lift-contextualized runtime integer shadow"
+            ~stage:(Delator.Field.string "retained-shadow-authentication")
+            ~source_sort:(Delator.Field.string "mathematical-int-alias")
+            ~target_sort:(Delator.Field.string "runtime-int-binding")
+            ~decision:
+              (Delator.Field.string "accepted-authenticated-lift-context")
+            ~correlation:
+              (Delator.Field.string (_correlation [@log_value.debug]))];
+          Ok ()
+      | Ok _ ->
+          [%log.debug "rejected retained ghost shadow type"
+            ~stage:(Delator.Field.string "retained-shadow-authentication")
+            ~decision:(Delator.Field.string "rejected")
+            ~failure_class:(Delator.Field.string "typed-shape-mismatch")
+            ~correlation:
+              (Delator.Field.string (_correlation [@log_value.debug]))];
           unsupported context location Diagnostic.Malformed_ghost_call
-  let exact_retained_family attributes =
-    let prefix = "verocaml.internal.artifact_family." in
-    attributes
-    |> List.filter_map (fun attribute ->
-        if
-          attribute.Parsetree.attr_loc.Location.loc_ghost
-          && attribute.attr_name.loc.loc_ghost
-          && String.starts_with ~prefix attribute.attr_name.txt
-        then
-          Some
-            (String.sub attribute.attr_name.txt (String.length prefix)
-               (String.length attribute.attr_name.txt - String.length prefix))
-        else None)
-    |> fun families -> families = [ "retained-v1" ]
+      | Error _ ->
+          [%log.debug "rejected retained ghost shadow type"
+            ~stage:(Delator.Field.string "retained-shadow-authentication")
+            ~decision:(Delator.Field.string "rejected")
+            ~failure_class:(Delator.Field.string "unresolved-shadow-type")
+            ~correlation:
+              (Delator.Field.string (_correlation [@log_value.debug]))];
+          unsupported context location Diagnostic.Malformed_ghost_call
+  let exact_retained_family implementation attributes =
+    List.filter
+      (Cmt_input.authenticated_retained_family_attribute implementation)
+      attributes
+    |> function
+    | [ _ ] -> true
+    | [] | _ :: _ :: _ -> false
   let artifact_contains_function artifact function_ =
     let found = ref false in
     let default = Tast_iterator.default_iterator in
@@ -3288,8 +3970,9 @@ module Public = struct
     && Option.is_some implementation.interface_digest
     && Option.is_some implementation.source_digest
     && implementation.has_implementation_shape
-    && Cmt_input.retained_preprocessing implementation
-    && exact_retained_family function_.value_binding.vb_attributes
+    && Cmt_input.retained_ppx_artifact implementation
+    && exact_retained_family implementation
+         function_.value_binding.vb_attributes
   let proof_definition_body function_ =
     match function_.function_kind with
     | Top_spec carrier
@@ -3921,17 +4604,41 @@ module Public = struct
                else None)
              context.proof_capture_type_hints)
     | _ -> source_type
+  let rec logical_pattern_refinement source target =
+    Parametric_type.equal source target
+    ||
+    match (source, target) with
+    | Sst.Int, Sst.Mathematical_int -> true
+    | Sst.Tuple source, Sst.Tuple target
+      when List.length source = List.length target ->
+        List.for_all2
+          (fun (source_label, source) (target_label, target) ->
+            source_label = target_label
+            && logical_pattern_refinement source target)
+          source target
+    | Sst.Application (source_constructor, source_arguments),
+      Sst.Application (target_constructor, target_arguments)
+      when
+        Parametric_type.compare_constructor source_constructor target_constructor
+        = 0
+        && List.length source_arguments = List.length target_arguments ->
+        List.for_all2 logical_pattern_refinement source_arguments target_arguments
+    | ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Aggregate _ | Sst.Parameter _ | Sst.Application _ ),
+      _ ->
+        false
   type owned_tree_cursor_origin = {
     cursor_root : Sst.binding;
     cursor_root_version : int;
     cursor_path : Sst.owned_tree_path_step list;
     cursor_runtime_authority : bool;
   }
-  let rec lower_pattern_with_origin context bindings origin pattern =
+  let rec lower_pattern_with_origin ?expected_type context bindings origin
+      pattern =
     let source_pattern_type =
       hinted_source_type context pattern.pat_loc pattern.pat_type
     in
-    let normalized =
+    let source_normalized =
       match (origin, pattern.pat_desc) with
       | Some { cursor_path = path; _ }, (Tpat_var _ | Tpat_any) -> (
           match List.rev path with
@@ -3949,7 +4656,23 @@ module Public = struct
               | Some field -> Ok (Sst.Aggregate (type_id_of_field field))
               | None ->
                   normalized_type context pattern.pat_loc source_pattern_type))
-      | _ -> normalized_type context pattern.pat_loc source_pattern_type
+      | _ -> normalized_pattern_type context pattern source_pattern_type
+    in
+    let normalized =
+      match (source_normalized, expected_type) with
+      | Error _ as error, _ -> error
+      | Ok source, None -> Ok source
+      | Ok source, Some expected
+        when logical_pattern_refinement source expected ->
+          if not (Parametric_type.equal source expected) then
+            [%log.trace "refined logical pattern type from lowered value"
+              ~stage:(Delator.Field.string "logical-type-containment")
+              ~source_type:(Delator.Field.string (Sst.string_of_type source))
+              ~target_type:(Delator.Field.string (Sst.string_of_type expected))
+              ~decision:(Delator.Field.string "accepted")];
+          Ok expected
+      | Ok _, Some _ ->
+          unsupported context pattern.pat_loc Diagnostic.Unsupported_type
     in
     match normalized with
     | Error _ as error -> error
@@ -4000,17 +4723,36 @@ module Public = struct
             | Ok (`Int value) -> finish (Sst.Int_pattern value) bindings
             | Error _ as error -> error)
         | Tpat_tuple components ->
-            let rec loop lowered bindings = function
-              | [] -> finish (Sst.Tuple_pattern (List.rev lowered)) bindings
-              | (label, pattern) :: rest -> (
+            let expected_components =
+              match typ with
+              | Sst.Tuple expected
+                when
+                  List.length components = List.length expected
+                  && List.for_all2
+                       (fun (label, _) (expected_label, _) ->
+                         label = expected_label)
+                       components expected ->
+                  List.map (fun (_, typ) -> Some typ) expected
+              | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+              | Sst.Tuple _ | Sst.Aggregate _ | Sst.Parameter _
+              | Sst.Application _ ->
+                  List.map (fun _ -> None) components
+            in
+            let rec loop lowered bindings components expected =
+              match (components, expected) with
+              | [], [] ->
+                  finish (Sst.Tuple_pattern (List.rev lowered)) bindings
+              | (label, pattern) :: rest, expected_type :: expected -> (
                   match
-                    lower_pattern_with_origin context bindings None pattern
+                    lower_pattern_with_origin ?expected_type context bindings
+                      None pattern
                   with
                   | Error _ as error -> error
                   | Ok (pattern, bindings) ->
-                      loop ((label, pattern) :: lowered) bindings rest)
+                      loop ((label, pattern) :: lowered) bindings rest expected)
+              | [], _ :: _ | _ :: _, [] -> assert false
             in
-            loop [] bindings components
+            loop [] bindings components expected_components
         | Tpat_construct (_, description, [], None) -> (
             match
               boolean_or_unit_constructor description.Types.cstr_res
@@ -4129,6 +4871,65 @@ module Public = struct
     List.find_opt
       (fun (definition : Sst.field_definition) -> definition.field_id = field)
       fields
+  let instantiated_field_type context application field =
+    match application with
+    | Sst.Application (constructor, arguments) -> (
+        match
+          Parametric_adt_lowering_private.instantiate_field_type
+            context.aggregates.parametric_adts ~application field
+        with
+        | Ok typ -> Some typ
+        | Error _ ->
+            let descriptors =
+              context.imported.imported_types
+              |> List.filter_map (fun imported ->
+                     Option.bind imported.imported_parametric_descriptor
+                       (fun descriptor ->
+                         if
+                           Parametric_type.compare_constructor
+                             (Parametric_adt.type_constructor descriptor)
+                             constructor
+                           = 0
+                         then Some descriptor
+                         else None))
+            in
+            let instantiated =
+              match descriptors with
+              | [ descriptor ] ->
+                  let constructor_index =
+                    match field.Sst.field_owner with
+                    | Sst.Record_owner _ -> None
+                    | Sst.Constructor_owner constructor ->
+                        Some constructor.constructor_index
+                  in
+                  Parametric_adt.instantiate_field_by_index descriptor arguments
+                    ~constructor_index ~field_index:field.field_index
+                  |> Result.to_option
+              | [] | _ :: _ :: _ -> None
+            in
+            [%log.trace
+              "resolved imported parametric field semantic type"
+              ~stage:(Delator.Field.string "logical-field-projection")
+              ~field_name:(Delator.Field.string field.field_name)
+              ~descriptor_count:(Delator.Field.int (List.length descriptors))
+              ~decision:
+                (Delator.Field.string
+                   (if Option.is_some instantiated then "accepted"
+                    else "rejected"))
+              ~reason_class:
+                (Delator.Field.string
+                   (match descriptors with
+                   | [ _ ] -> "descriptor-instantiation"
+                   | [] -> "missing-imported-descriptor"
+                   | _ :: _ :: _ -> "ambiguous-imported-descriptor"))];
+            instantiated)
+    | Sst.Aggregate _ ->
+        Option.map
+          (fun (definition : Sst.field_definition) -> definition.field_type)
+          (field_definition context field)
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+    | Sst.Parameter _ ->
+        None
   let fields_of_owner context = function
     | Sst.Record_owner type_id -> (
         match type_definition context type_id with
@@ -4352,7 +5153,11 @@ module Public = struct
             callback_authentication_error context expression.exp_loc message
         | Ok (Some builtin) ->
             lower_logical_builtin context bindings expression builtin
-        | Ok None -> lower_expression context bindings expression)
+        | Ok None -> (
+            match lower_expression context bindings expression with
+            | Error _ as error -> error
+            | Ok lowered ->
+                apply_explicit_expression_boundary context expression lowered))
   and lower_expression context bindings expression =
     let preclassified =
       match expression.exp_desc with
@@ -4419,7 +5224,7 @@ module Public = struct
         match normalized with
         | Error _ as error -> error
         | Ok typ -> (
-            let finish expression_desc =
+            let finish_as typ expression_desc =
               Ok
                 {
                   Sst.expression_desc;
@@ -4427,7 +5232,15 @@ module Public = struct
                   span = span context expression.exp_loc;
                 }
             in
+            let finish expression_desc = finish_as typ expression_desc in
             let lower = lower_authenticated_expression context bindings in
+            let finish_sequence first second =
+              let result_type =
+                if symbolic_context_is_logical context then second.Sst.typ
+                else typ
+              in
+              finish_as result_type (Sst.Sequence (first, second))
+            in
             match expression.exp_desc with
             | Texp_function
                 {
@@ -4437,25 +5250,20 @@ module Public = struct
                   alloc_mode = _;
                   _;
                 } ->
-                Typedtree_spec_function_private.lower_lambda
-                  {
-                    lower_pattern = lower_pattern context;
-                    lower_expression =
-                      lower_authenticated_expression context;
-                    admit_capture =
-                      (fun binding ->
-                        specification_capture_type context binding.Sst.typ);
-                    parameter_label;
-                    span = span context;
-                    higher_order_error =
-                      (fun location ->
-                        Diagnostic.make
-                          (Diagnostic.Unsupported_construct
-                             Diagnostic.Higher_order_function)
-                          (span context location));
-                  }
-                  ~source_file:context.source_file ~bindings ~arrow:typ
-                  ~location:expression.exp_loc ~parameters:params ~body
+                if symbolic_context_is_logical context then
+                  lower_specification_lambda context bindings expression
+                    ~arrow:typ ~parameters:params ~body
+                else (
+                  [%log.debug "rejected specification-function value in executable code"
+                    ~stage:(Delator.Field.string "ghost-containment")
+                    ~construct:(Delator.Field.string "function-value")
+                    ~semantic_sort:
+                      (Delator.Field.string (Parametric_type.to_string typ))
+                    ~decision:(Delator.Field.string "rejected")
+                    ~reason_class:
+                      (Delator.Field.string "executable-function-value")];
+                  unsupported context expression.exp_loc
+                    Diagnostic.Higher_order_function)
             | Texp_constant constant -> (
                 match lower_constant context expression.exp_loc constant with
                 | Ok (`Int value) -> finish (Sst.Int_constant value)
@@ -4594,7 +5402,57 @@ module Public = struct
                     | None ->
                         unsupported context expression.exp_loc
                           Diagnostic.Aggregate
-                    | Some field -> finish (Sst.Field_read { record; field })))
+                    | Some field -> (
+                        match instantiated_field_type context record.typ field with
+                        | None ->
+                            [%log.debug
+                              "rejected field projection without an authenticated semantic type"
+                              ~stage:
+                                (Delator.Field.string
+                                   "logical-field-projection")
+                              ~field_name:
+                                (Delator.Field.string field.field_name)
+                              ~record_sort:
+                                (Delator.Field.string
+                                   (Parametric_type.to_string record.typ))
+                              ~decision:(Delator.Field.string "rejected")
+                              ~reason_class:
+                                (Delator.Field.string
+                                   "missing-field-type-authority")];
+                            unsupported context expression.exp_loc
+                              Diagnostic.Aggregate
+                        | Some field_type ->
+                            let projection =
+                              {
+                                Sst.expression_desc =
+                                  Sst.Field_read { record; field };
+                                typ = field_type;
+                                span = span context expression.exp_loc;
+                              }
+                            in
+                            [%log.trace
+                              "resolved field projection semantic boundary"
+                              ~stage:
+                                (Delator.Field.string
+                                   "logical-field-projection")
+                              ~field_name:
+                                (Delator.Field.string field.field_name)
+                              ~record_sort:
+                                (Delator.Field.string
+                                   (Parametric_type.to_string record.typ))
+                              ~declared_sort:
+                                (Delator.Field.string
+                                   (Parametric_type.to_string field_type))
+                              ~expression_sort:
+                                (Delator.Field.string
+                                   (Parametric_type.to_string typ))
+                              ~lift_required:
+                                (Delator.Field.bool
+                                   (field_type = Sst.Int
+                                   && typ = Sst.Mathematical_int))
+                              ~decision:(Delator.Field.string "accepted")];
+                            apply_expression_boundary context expression.exp_loc
+                              typ projection)))
             | Texp_setfield
                 ( ({
                      exp_desc =
@@ -5099,7 +5957,30 @@ module Public = struct
                 unsupported context expression.exp_loc Diagnostic.Mutation
             | Texp_tuple (components, _) ->
                 let rec loop lowered = function
-                  | [] -> finish (Sst.Tuple_value (List.rev lowered))
+                  | [] ->
+                      let lowered = List.rev lowered in
+                      let semantic_type =
+                        if symbolic_context_is_logical context then
+                          Sst.Tuple
+                            (List.map
+                               (fun (label, component) ->
+                                 (label, component.Sst.typ))
+                               lowered)
+                        else typ
+                      in
+                      if not (Parametric_type.equal typ semantic_type) then
+                        [%log.trace "refined logical tuple result type"
+                          ~stage:
+                            (Delator.Field.string "logical-type-containment")
+                          ~source_type:
+                            (Delator.Field.string (Sst.string_of_type typ))
+                          ~target_type:
+                            (Delator.Field.string
+                               (Sst.string_of_type semantic_type))
+                          ~component_count:
+                            (Delator.Field.int (List.length lowered))
+                          ~decision:(Delator.Field.string "accepted")];
+                      finish_as semantic_type (Sst.Tuple_value lowered)
                   | (label, component) :: rest -> (
                       match
                         lower_authenticated_expression context bindings
@@ -5160,7 +6041,13 @@ module Public = struct
                           body
                       with
                       | Error _ as error -> error
-                      | Ok body -> finish (Sst.Let (List.rev lowered, body)))
+                      | Ok body ->
+                          let result_type =
+                            if symbolic_context_is_logical context then body.Sst.typ
+                            else typ
+                          in
+                          finish_as result_type
+                            (Sst.Let (List.rev lowered, body)))
                   | binding :: rest -> (
                       match
                         lower_authenticated_expression context bindings
@@ -5169,8 +6056,9 @@ module Public = struct
                       | Error _ as error -> error
                       | Ok value -> (
                           match
-                            lower_pattern context current_bindings
-                              binding.vb_pat
+                            lower_pattern_with_origin
+                              ~expected_type:value.Sst.typ context
+                              current_bindings None binding.vb_pat
                           with
                           | Error _ as error -> error
                           | Ok (pattern, current_bindings) ->
@@ -5318,10 +6206,10 @@ module Public = struct
                             with
                             | Error _ as error -> error
                             | Ok tail ->
-                                finish (Sst.Sequence (retained_statement, tail))
+                                finish_sequence retained_statement tail
                             )))
-                | None -> (
-                    match ghost_call context "marker" marker with
+                    | None -> (
+                        match ghost_call context "marker" marker with
                     | Some _ ->
                         unsupported context marker.exp_loc
                           Diagnostic.Malformed_ghost_call
@@ -5332,7 +6220,7 @@ module Public = struct
                         let* tail =
                           lower_authenticated_expression context bindings tail
                         in
-                        finish (Sst.Sequence (first, tail))))
+                        finish_sequence first tail))
             | Texp_sequence
                 ( marker,
                   _,
@@ -5350,7 +6238,7 @@ module Public = struct
                           lower_authenticated_expression context bindings tail
                         with
                         | Error _ as error -> error
-                        | Ok tail -> finish (Sst.Sequence (clause, tail))))
+                        | Ok tail -> finish_sequence clause tail))
                 | None -> (
                     match ghost_call context "marker" marker with
                     | Some _ ->
@@ -5365,8 +6253,8 @@ module Public = struct
                                 _retained_tail
                             with
                             | Error _ as error -> error
-                            | Ok tail -> finish (Sst.Sequence (marker, tail)))))
-                )
+                            | Ok tail -> finish_sequence marker tail))
+                ))
             | Texp_sequence (first, _, second) -> (
                 let* first =
                   match authenticated_proof_region context first with
@@ -5378,7 +6266,7 @@ module Public = struct
                 in
                 match lower second with
                 | Error _ as error -> error
-                | Ok second -> finish (Sst.Sequence (first, second)))
+                | Ok second -> finish_sequence first second)
             | Texp_ifthenelse (condition, consequent, alternative) -> (
                 match lower condition with
                 | Error _ as error -> error
@@ -5414,7 +6302,19 @@ module Public = struct
                                       consequent_root_versions;
                                       alternative_root_versions;
                                     ];
-                                finish
+                                let* result_type, branches =
+                                  reconcile_logical_results context
+                                    expression.exp_loc typ
+                                    [ consequent; alternative ]
+                                in
+                                let consequent, alternative =
+                                  match branches with
+                                  | [ consequent; alternative ] ->
+                                      (consequent, alternative)
+                                  | [] | [ _ ] | _ :: _ :: _ :: _ ->
+                                      assert false
+                                in
+                                finish_as result_type
                                   (Sst.If
                                      (condition, consequent, Some alternative)))
                         )))
@@ -5501,7 +6401,21 @@ module Public = struct
                           context.owned_tree_root_versions <-
                             join_owned_tree_root_versions
                               (List.rev lowered_root_versions);
-                          finish (Sst.Match (scrutinee, List.rev lowered))
+                          let cases = List.rev lowered in
+                          let* result_type, bodies =
+                            reconcile_logical_results context expression.exp_loc
+                              typ
+                              (List.map
+                                 (fun (case : Sst.case) -> case.case_body)
+                                 cases)
+                          in
+                          let cases =
+                            List.map2
+                              (fun (case : Sst.case) case_body ->
+                                { case with Sst.case_body })
+                              cases bodies
+                          in
+                          finish_as result_type (Sst.Match (scrutinee, cases))
                       | case :: rest -> (
                           context.owned_tree_root_versions <-
                             branch_root_versions;
@@ -5511,8 +6425,9 @@ module Public = struct
                                 (value_pattern :> Typedtree.pattern)
                               in
                               match
-                                lower_pattern_with_origin context bindings
-                                  cursor_origin value_pattern
+                                lower_pattern_with_origin
+                                  ~expected_type:scrutinee.Sst.typ context
+                                  bindings cursor_origin value_pattern
                               with
                               | Error _ as error -> error
                               | Ok (case_pattern, case_bindings) -> (
@@ -5814,8 +6729,11 @@ module Public = struct
                             },
                           Some function_result_type ) -> (
                           match
-                            normalized_type context result_pattern.pat_loc
-                              function_result_type
+                            match context.function_result_semantic_type with
+                            | Some semantic -> Ok semantic
+                            | None ->
+                                normalized_type context result_pattern.pat_loc
+                                  function_result_type
                           with
                           | Error _ ->
                               malformed result_pattern.pat_loc
@@ -5930,7 +6848,7 @@ module Public = struct
     let bind pattern =
       match pattern.pat_desc with
       | Tpat_var (ident, name, _, _, _) -> (
-          match normalized_type context pattern.pat_loc pattern.pat_type with
+          match normalized_pattern_type context pattern pattern.pat_type with
           | Error _ as error -> error
           | Ok typ ->
               let binding =
@@ -5996,7 +6914,7 @@ module Public = struct
             expression);
       admit_type =
         (function
-        | Sst.Int | Sst.Bool | Sst.Parameter _ -> true
+        | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Parameter _ -> true
         | Sst.Application _ as typ
           when Parametric_type.is_spec_function typ ->
             true
@@ -6170,6 +7088,38 @@ module Public = struct
                   span = span context application.exp_loc;
                 })
     | _ -> malformed ()
+  and lower_authenticated_expression_with_expected context bindings ~expected
+      expression =
+    let lower_then_adapt () =
+      let* lowered = lower_authenticated_expression context bindings expression in
+      adapt_call_argument context expression.exp_loc ~expected lowered
+    in
+    match expression.exp_desc with
+    | Texp_ident (path, _, description, _, _)
+      when has_symbolic_candidate context (normalize_value_path expression path) ->
+        [%log.trace "relowering symbolic value with contextual result type"
+          ~stage:(Delator.Field.string "logical-call-result-reconciliation")
+          ~expected_result:
+            (Delator.Field.string (Parametric_type.to_string expected))
+          ~decision:(Delator.Field.string "relower")];
+        lower_symbolic_identifier context expression expected path description
+    | Texp_apply (callee, arguments, _, _, _)
+      when symbolic_context_is_logical context -> (
+        match preclassify_application context bindings callee with
+        | Some _ -> lower_then_adapt ()
+        | None ->
+            [%log.trace "relowering logical call with contextual result type"
+              ~stage:
+                (Delator.Field.string "logical-call-result-reconciliation")
+              ~expected_result:
+                (Delator.Field.string (Parametric_type.to_string expected))
+              ~decision:(Delator.Field.string "relower")];
+            let* lowered =
+              lower_application context bindings expression expected callee
+                arguments
+            in
+            adapt_call_argument context expression.exp_loc ~expected lowered)
+    | _ -> lower_then_adapt ()
   and exact_callback_callee context callee =
     Typedtree_spec_function_private.exact_callback_callee
       ~find:(Typedtree_callback_private.find_binding context.callbacks) callee
@@ -6177,6 +7127,19 @@ module Public = struct
       arguments =
     let unsupported_at construct =
       unsupported context application.exp_loc construct
+    in
+    let application_argument_count =
+      List.fold_left
+        (fun count (_, argument) ->
+          match argument with
+          | Typedtree.Arg _ -> count + 1
+          | Typedtree.Omitted _ -> count)
+        0 arguments
+    in
+    let candidate_arity candidate =
+      match candidate.value_binding.vb_expr.exp_desc with
+      | Texp_function { params; _ } -> List.length params
+      | _ -> 0
     in
     let specification_callee, recursive_specification_call =
       Typedtree_spec_function_private.classify_callee
@@ -6194,10 +7157,7 @@ module Public = struct
           | Top_external_specification _ | Top_external_body _ ->
               `Other)
         ~id:(fun candidate -> candidate.function_id)
-        ~arity:(fun candidate ->
-          match candidate.value_binding.vb_expr.exp_desc with
-          | Texp_function { params; _ } -> List.length params
-          | _ -> 0)
+        ~arity:candidate_arity
         ~first_class:(fun candidate ->
           Typedtree_spec_function_private.first_class_surface
             ~signature:
@@ -6209,33 +7169,157 @@ module Public = struct
         ~current:(Option.map (fun function_ -> function_.function_id)
                     context.current_function)
         ~local:(fun ident -> find_ident ident bindings <> None)
-        ~argument_count:
-          (List.fold_left
-             (fun count (_, argument) ->
-               match argument with
-               | Typedtree.Arg _ -> count + 1
-               | Typedtree.Omitted _ -> count)
-             0 arguments)
+        ~argument_count:application_argument_count
         ~result_type callee
     in
+    let specification_application_services =
+      {
+        Typedtree_spec_function_private.normalize =
+          normalized_expression_type context bindings;
+        lower = lower_authenticated_expression context bindings;
+        adapt_argument = adapt_call_argument context;
+        parameter_label;
+        span = span context;
+        higher_order_error =
+          (fun location ->
+            Diagnostic.make
+              (Diagnostic.Unsupported_construct Diagnostic.Higher_order_call)
+              (span context location));
+      }
+    in
+    let staged_named_specification_application =
+      if not (symbolic_context_is_logical context && specification_callee) then
+        None
+      else
+        Option.bind recursive_specification_call
+          (fun candidate ->
+            if application_argument_count < candidate_arity candidate then None
+            else
+              Some
+                (
+            let candidate_context =
+              { context with current_function = Some candidate }
+            in
+            let* formal_types, formal_labels, formal_result =
+              match
+                Typedtree_spec_function_private.source_signature
+                  ?semantic_signature:(semantic_signature_for candidate)
+                  ~explicit_parameter_type:
+                    (explicit_pattern_type candidate_context)
+                  ~explicit_result_type:
+                    (explicit_callable_result_type candidate_context candidate)
+                  ~lower:(fun location typ ->
+                    normalized_type_with_substitutions candidate_context
+                      candidate.type_substitutions location typ)
+                  ~optional_carrier:(optional_carrier candidate_context)
+                  ~parameter_error:
+                    (optional_parameter_type_error candidate_context)
+                  candidate.value_binding.vb_expr
+              with
+              | Some result -> result
+              | None -> unsupported_at Diagnostic.Higher_order_call
+            in
+            let rec split remaining reversed = function
+              | rest when remaining = 0 -> Ok (List.rev reversed, rest)
+              | argument :: rest ->
+                  split (remaining - 1) (argument :: reversed) rest
+              | [] -> unsupported_at Diagnostic.Higher_order_call
+            in
+            let* direct_arguments, residual_arguments =
+              split (List.length formal_types) [] arguments
+            in
+            let* compiler_arrow =
+              normalized_expression_type context bindings callee
+            in
+            let* compiler_result =
+              match
+                Typedtree_spec_function_private.residual_type compiler_arrow
+                  direct_arguments
+              with
+              | Some result -> Ok result
+              | None -> unsupported_at Diagnostic.Higher_order_call
+            in
+            let* actuals =
+              lower_arguments context bindings application direct_arguments
+            in
+            let* direct =
+              Typedtree_spec_function_private.direct_call
+                ~invalid:(fun _message ->
+                  let[@log_value.debug] message = _message in
+                  [%log.debug "rejected staged named specification call"
+                    ~stage:
+                      (Delator.Field.string
+                         "specification-function-application")
+                    ~callee:
+                      (Delator.Field.string
+                         candidate.function_id.function_name)
+                    ~detail:
+                      (Delator.Field.string (message [@log_value.debug]))
+                    ~decision:(Delator.Field.string "rejected")];
+                  Diagnostic.make
+                    (Diagnostic.Unsupported_construct
+                       Diagnostic.Unsupported_generic_use)
+                    (span context application.exp_loc))
+                ~adapt_argument:
+                  (adapt_call_argument context application.exp_loc)
+                ~span:(span context application.exp_loc)
+                ~result_type:compiler_result ~actuals
+                {
+                  function_id = candidate.function_id;
+                  type_binders =
+                    List.map snd candidate.parametric_type_binders;
+                  formal_types;
+                  formal_labels;
+                  formal_result;
+                  recursive =
+                    Option.fold ~none:false
+                      ~some:(fun current ->
+                        current.function_id = candidate.function_id)
+                      context.current_function;
+                }
+            in
+            let[@log_value.debug] formal_type_view =
+              let rec bounded remaining reversed = function
+                | rest when remaining = 0 ->
+                    (List.rev reversed, List.length rest)
+                | [] -> (List.rev reversed, 0)
+                | typ :: rest ->
+                    bounded (remaining - 1)
+                      (Delator.Field.string (Parametric_type.to_string typ)
+                      :: reversed)
+                      rest
+              in
+              let shown, dropped = bounded 16 [] formal_types in
+              Delator.Field.seq ~dropped shown
+            in
+            [%log.debug "lowered staged named specification call"
+              ~stage:
+                (Delator.Field.string "specification-function-application")
+              ~callee:(Delator.Field.string candidate.function_id.function_name)
+              ~application_shape:
+                (Delator.Field.map
+                   [ ("formal_types", formal_type_view [@log_value.debug]);
+                     ( "direct_arguments",
+                       Delator.Field.int (List.length direct_arguments) );
+                     ( "residual_arguments",
+                       Delator.Field.int (List.length residual_arguments) );
+                     ( "semantic_result",
+                       Delator.Field.string
+                         (Parametric_type.to_string direct.typ) ) ])
+              ~decision:(Delator.Field.string "accepted")];
+            Typedtree_spec_function_private.apply_lowered
+              specification_application_services ~application ~result_type
+              ~function_:direct ~arguments:residual_arguments))
+    in
     let specification_application =
-      Typedtree_spec_function_private.lower_application
-        {
-          normalize = normalized_expression_type context bindings;
-          lower = lower_authenticated_expression context bindings;
-          parameter_label;
-          span = span context;
-          higher_order_error =
-            (fun location ->
-              Diagnostic.make
-                (Diagnostic.Unsupported_construct
-                   Diagnostic.Higher_order_call)
-                (span context location));
-        }
-        ~enabled:
-          (symbolic_context_is_logical context
-          && specification_callee)
-        ~application ~result_type ~callee ~arguments
+      match staged_named_specification_application with
+      | Some result -> Some result
+      | None ->
+          Typedtree_spec_function_private.lower_application
+            specification_application_services
+            ~enabled:
+              (symbolic_context_is_logical context && specification_callee)
+            ~application ~result_type ~callee ~arguments
     in
     match specification_application with
     | Some result -> result
@@ -6248,10 +7332,16 @@ module Public = struct
             let* formal_types, formal_labels, formal_result =
               match
                 Typedtree_spec_function_private.source_signature
+                ?semantic_signature:(semantic_signature_for candidate)
+                ~explicit_parameter_type:(explicit_pattern_type candidate_context)
+                ~explicit_result_type:
+                  (explicit_callable_result_type candidate_context candidate)
                 ~lower:(fun location typ ->
                   normalized_type_with_substitutions candidate_context
                     candidate.type_substitutions location typ)
                 ~optional_carrier:(optional_carrier candidate_context)
+                ~parameter_error:
+                  (optional_parameter_type_error candidate_context)
                   candidate.value_binding.vb_expr
               with
               | Some result -> result
@@ -6264,6 +7354,8 @@ module Public = struct
                   (Diagnostic.Unsupported_construct
                      Diagnostic.Unsupported_generic_use)
                   (span context application.exp_loc))
+              ~adapt_argument:
+                (adapt_call_argument context application.exp_loc)
               ~span:(span context application.exp_loc) ~result_type ~actuals
               {
                 function_id = candidate.function_id;
@@ -6293,6 +7385,26 @@ module Public = struct
           let uid = compiler_uid description.Types.val_uid in
           let is_stdlib name = path_resolves_to context path "Stdlib" name in
           let is_ghost name = path_resolves_to context path "Vero_ghost" name in
+          match logical_sort_for_integer_literal_callable context path uid with
+          | Resolution_exact descriptor ->
+              lower_logical_integer_literal context application descriptor arguments
+          | Resolution_ambiguous _ ->
+              Error
+                (Diagnostic.make
+                   (Diagnostic.Unsupported_construct
+                      Diagnostic.Unsupported_expression)
+                   (span context application.exp_loc)
+                |> Diagnostic.with_message
+                     "This call resolves to multiple authenticated mathematical Int integer literal constructors. Remove the conflicting specification-library dependency.")
+          | Resolution_identity_mismatch _ ->
+              Error
+                (Diagnostic.make
+                   (Diagnostic.Unsupported_construct
+                      Diagnostic.Unsupported_expression)
+                   (span context application.exp_loc)
+                |> Diagnostic.with_message
+                     "This mathematical Int integer literal constructor has conflicting compiler path and UID evidence. Rebuild the specification library and this consumer together.")
+          | Resolution_absent ->
           if has_symbolic_candidate context path then
             lower_symbolic_application context bindings application result_type
               path description arguments
@@ -6324,27 +7436,23 @@ module Public = struct
             || is_ghost "external_body"
           then unsupported_at Diagnostic.Malformed_ghost_call
           else if is_stdlib "+" then
-            lower_fixed_arity context bindings application result_type arguments
-              2 (fun operands -> Sst.Checked_arithmetic (Sst.Add, operands))
+            lower_integer_arithmetic context bindings application result_type
+              arguments 2 Sst.Add
           else if is_stdlib "-" then
-            lower_fixed_arity context bindings application result_type arguments
-              2 (fun operands ->
-                Sst.Checked_arithmetic (Sst.Subtract, operands))
+            lower_integer_arithmetic context bindings application result_type
+              arguments 2 Sst.Subtract
           else if is_stdlib "~-" then
-            lower_fixed_arity context bindings application result_type arguments
-              1 (fun operands -> Sst.Checked_arithmetic (Sst.Negate, operands))
+            lower_integer_arithmetic context bindings application result_type
+              arguments 1 Sst.Negate
           else if is_stdlib "succ" then
-            lower_fixed_arity context bindings application result_type arguments
-              1 (fun operands ->
-                Sst.Checked_arithmetic (Sst.Successor, operands))
+            lower_integer_arithmetic context bindings application result_type
+              arguments 1 Sst.Successor
           else if is_stdlib "pred" then
-            lower_fixed_arity context bindings application result_type arguments
-              1 (fun operands ->
-                Sst.Checked_arithmetic (Sst.Predecessor, operands))
+            lower_integer_arithmetic context bindings application result_type
+              arguments 1 Sst.Predecessor
           else if is_stdlib "abs" then
-            lower_fixed_arity context bindings application result_type arguments
-              1 (fun operands ->
-                Sst.Checked_arithmetic (Sst.Absolute_value, operands))
+            lower_integer_arithmetic context bindings application result_type
+              arguments 1 Sst.Absolute_value
           else if is_stdlib "*" then
             lower_multiplication context bindings application result_type
               arguments
@@ -6388,10 +7496,16 @@ module Public = struct
         let* formal_types, formal_labels, formal_result =
           match
             Typedtree_spec_function_private.source_signature
+              ?semantic_signature:(semantic_signature_for candidate)
+              ~explicit_parameter_type:(explicit_pattern_type candidate_context)
+              ~explicit_result_type:
+                (explicit_callable_result_type candidate_context candidate)
               ~lower:(fun location typ ->
                 normalized_type_with_substitutions candidate_context
                   candidate.type_substitutions location typ)
               ~optional_carrier:(optional_carrier candidate_context)
+              ~parameter_error:
+                (optional_parameter_type_error candidate_context)
               candidate.value_binding.vb_expr
           with
           | Some result -> result
@@ -6417,55 +7531,158 @@ module Public = struct
   and authenticate_symbolic_use context location path description =
     authenticate_symbolic_candidate context location path description
   and lower_symbolic_identifier context expression result_type path description =
-    let path = normalize_value_path expression path in
-    let* function_id, declaration =
-      authenticate_symbolic_use context expression.exp_loc path description
-    in
-    if
-      Parametric_type.is_spec_function result_type
-      && Symbolic_application_private.parameter_types declaration <> []
-    then
-      Typedtree_spec_function_private.reference
-        ~invalid:(fun message ->
-          Diagnostic.make (Diagnostic.Invalid_symbolic_application message)
-            (span context expression.exp_loc))
-        ~span:(span context expression.exp_loc) ~result_type
-        ~function_id
-        ~type_binders:(Symbolic_application_private.type_binders declaration)
-        ~formal_types:
-          (Symbolic_application_private.parameter_types declaration
-          @ [
-              Symbolic_application_private.declaration_result_type declaration;
-            ])
-        ~formal_labels:
-          (List.map
-             (fun _ -> None)
-             (Symbolic_application_private.parameter_types declaration))
-        ~recursive:false
+    if not (symbolic_context_is_logical context) then (
+      [%log.debug "rejected symbolic specification value in executable code"
+        ~stage:(Delator.Field.string "ghost-containment")
+        ~construct:(Delator.Field.string "symbolic-value")
+        ~semantic_sort:
+          (Delator.Field.string (Parametric_type.to_string result_type))
+        ~decision:(Delator.Field.string "rejected")
+        ~reason_class:(Delator.Field.string "executable-symbolic-value")];
+      Error
+        (Diagnostic.make
+           (Diagnostic.Invalid_symbolic_application
+              "symbolic specification values require a logical stage")
+           (span context expression.exp_loc)
+        |> Diagnostic.with_message
+             "Symbolic specification values are ghost-only. Use them in a specification, proof, contract, or proof region."))
     else
-      Typedtree_symbolic_private.identifier_expression declaration ~result_type
-        ~span:(span context expression.exp_loc)
-      |> Result.map_error (fun message ->
-             Diagnostic.make (Diagnostic.Invalid_symbolic_application message)
-               (span context expression.exp_loc))
+      let path = normalize_value_path expression path in
+      let* function_id, declaration =
+        authenticate_symbolic_use context expression.exp_loc path description
+      in
+      if
+        Parametric_type.is_spec_function result_type
+        && Symbolic_application_private.parameter_types declaration <> []
+      then
+        Typedtree_spec_function_private.reference
+          ~invalid:(fun message ->
+            Diagnostic.make (Diagnostic.Invalid_symbolic_application message)
+              (span context expression.exp_loc))
+          ~span:(span context expression.exp_loc) ~result_type ~function_id
+          ~type_binders:(Symbolic_application_private.type_binders declaration)
+          ~formal_types:
+            (Symbolic_application_private.parameter_types declaration
+            @ [
+                Symbolic_application_private.declaration_result_type declaration;
+              ])
+          ~formal_labels:
+            (List.map
+               (fun _ -> None)
+               (Symbolic_application_private.parameter_types declaration))
+          ~recursive:false
+      else
+        Typedtree_symbolic_private.identifier_expression declaration ~result_type
+          ~span:(span context expression.exp_loc)
+        |> Result.map_error (fun message ->
+               Diagnostic.make (Diagnostic.Invalid_symbolic_application message)
+                 (span context expression.exp_loc))
+  and lower_specification_lambda context bindings expression ~arrow ~parameters
+      ~body =
+    Typedtree_spec_function_private.lower_lambda
+      {
+        pattern_type =
+          (fun pattern ->
+            normalized_pattern_type context pattern
+              (hinted_source_type context pattern.pat_loc pattern.pat_type));
+        lower_pattern =
+          (fun ~expected bindings pattern ->
+            lower_pattern_with_origin ~expected_type:expected context bindings None
+              pattern);
+        lower_expression = lower_authenticated_expression context;
+        adapt_result = adapt_call_argument context;
+        admit_capture =
+          (fun binding -> specification_capture_type context binding.Sst.typ);
+        parameter_label;
+        span = span context;
+        higher_order_error =
+          (fun location ->
+            Diagnostic.make
+              (Diagnostic.Unsupported_construct Diagnostic.Higher_order_function)
+              (span context location));
+      }
+      ~source_file:context.source_file ~bindings ~arrow
+      ~location:expression.exp_loc ~parameters ~body
+  and lower_expected_symbolic_argument context bindings ~expected expression =
+    match (Spec_function_type_private.classify expected, expression.exp_desc) with
+    | ( Some _,
+        Texp_function
+          {
+            params;
+            body = Tfunction_body body;
+            ret_mode = _;
+            alloc_mode = _;
+            _;
+          } ) ->
+        lower_specification_lambda context bindings expression ~arrow:expected
+          ~parameters:params ~body
+    | (Some _, _) | (None, _) ->
+        let* argument =
+          lower_authenticated_expression context bindings expression
+        in
+        adapt_call_argument context expression.exp_loc ~expected argument
+  and lower_symbolic_arguments context bindings ~invalid ~formals arguments =
+    if List.length formals <> List.length arguments then
+      Error (invalid "symbolic application argument arity differs")
+    else
+      let rec loop lowered formals arguments =
+        match (formals, arguments) with
+        | [], [] -> Ok (List.rev lowered)
+        | expected :: formals, (label, Arg (argument, _)) :: arguments ->
+            let* argument =
+              lower_expected_symbolic_argument context bindings ~expected argument
+            in
+            loop ((parameter_label label, argument) :: lowered) formals arguments
+        | _ :: _, (_, Omitted _) :: _ ->
+            Error (invalid "symbolic application omits an argument")
+        | [], _ :: _ | _ :: _, [] -> assert false
+      in
+      loop [] formals arguments
   and lower_symbolic_application context bindings application result_type path
       description arguments =
+    let application_span = span context application.exp_loc in
+    if not (symbolic_context_is_logical context) then (
+      [%log.debug "rejected symbolic specification call in executable code"
+        ~stage:(Delator.Field.string "ghost-containment")
+        ~construct:(Delator.Field.string "symbolic-call")
+        ~semantic_sort:
+          (Delator.Field.string (Parametric_type.to_string result_type))
+        ~decision:(Delator.Field.string "rejected")
+        ~reason_class:(Delator.Field.string "executable-symbolic-call")];
+      Error
+        (Diagnostic.make
+           (Diagnostic.Invalid_symbolic_application
+              "symbolic specification calls require a logical stage")
+           application_span
+        |> Diagnostic.with_message
+             "Symbolic specification calls are ghost-only. Use them in a specification, proof, contract, or proof region."))
+    else
     let path = normalize_value_path application path in
     let* _function, declaration =
       authenticate_symbolic_use context application.exp_loc path description
     in
-    let* lowered_arguments =
-      lower_arguments context bindings application arguments
+    let invalid message =
+      Diagnostic.make (Diagnostic.Invalid_symbolic_application message)
+        application_span
     in
-    let application_span = span context application.exp_loc in
+    let* lowered_arguments =
+      lower_symbolic_arguments context bindings ~invalid
+        ~formals:(Symbolic_application_private.parameter_types declaration)
+        arguments
+    in
     Typedtree_spec_function_private.lower_symbolic_application
-      ~invalid:(fun message ->
-        Diagnostic.make (Diagnostic.Invalid_symbolic_application message)
-          application_span)
+      ~invalid
+      ~adapt_argument:
+        (adapt_call_argument context application.exp_loc)
       ~span:application_span ~declaration ~result_type
       ~arguments:lowered_arguments
   and lower_named_application context bindings application result_type arguments
       path source_name uid is_stdlib unsupported_at =
+    let source_operator =
+      match source_name.txt with
+      | Longident.Lident name | Ldot (_, name) -> Some name
+      | Lapply _ -> None
+    in
     let comparison =
       if is_stdlib "=" then Some Sst.Equal
       else if is_stdlib "<>" then Some Sst.Not_equal
@@ -6480,11 +7697,22 @@ module Public = struct
         lower_comparison context bindings application result_type arguments
           comparison
     | None ->
-        let wrapping =
-          List.exists is_stdlib
-            [ "/"; "mod"; "land"; "lor"; "lxor"; "lsl"; "lsr"; "asr" ]
+        let excluded_arithmetic =
+          [ "/"; "mod"; "land"; "lor"; "lxor"; "lsl"; "lsr"; "asr"; "**" ]
         in
-        if wrapping then unsupported_at Diagnostic.Wrapping_arithmetic
+        if
+          Option.fold ~none:false
+            ~some:(fun name -> List.mem name excluded_arithmetic)
+            source_operator
+        then (
+          [%log.debug "rejected excluded integer operator"
+            ~stage:(Delator.Field.string "logical-integer-operation")
+            ~operation:
+              (Delator.Field.string
+                 (Option.value source_operator ~default:"unknown"))
+            ~decision:(Delator.Field.string "rejected")
+            ~reason_class:(Delator.Field.string "excluded-operator")];
+          unsupported_at Diagnostic.Wrapping_arithmetic)
         else if path_resolves_to context path "Effect" "perform" then
           unsupported_at Diagnostic.Effect
         else if
@@ -6504,6 +7732,9 @@ module Public = struct
                 Parametric_interface_lowering_private.lower_direct_call
                   ~lower_expression:
                     (lower_authenticated_expression context bindings)
+                  ~lower_expression_expected:
+                    (lower_authenticated_expression_with_expected context bindings)
+                  ~adapt_argument:(adapt_call_argument context)
                   ~span:(span context)
                   ~reject:(fun construct ->
                     Diagnostic.make
@@ -6517,7 +7748,8 @@ module Public = struct
                     List.exists
                       (fun (_, typ) -> application_bearing typ)
                       components
-                | Sst.Unit | Sst.Bool | Sst.Int | Sst.Aggregate _
+                | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                | Sst.Aggregate _
                 | Sst.Parameter _ ->
                     false
               in
@@ -6706,6 +7938,9 @@ module Public = struct
                   callee_function.type_substitutions location typ);
             optional_carrier = optional_carrier callee_context;
             lower_expression = lower_authenticated_expression context bindings;
+            lower_expression_expected =
+              lower_authenticated_expression_with_expected context bindings;
+            adapt_argument = adapt_call_argument context;
             callback_actual;
             callback_candidate_contract =
               explicit_top_level_callback_contract context callee_function;
@@ -6722,6 +7957,10 @@ module Public = struct
               (fun location ->
                 callback_diagnostic context Diagnostic.Higher_order_call
                   location);
+            semantic_result_type =
+              (if symbolic_context_is_logical context then
+                 callee_function.semantic_result_type
+               else None);
             span = span context;
             current =
               Option.map (fun current -> current.ident) context.current_function;
@@ -6767,42 +8006,214 @@ module Public = struct
               typ = result_type;
               span = span context application.exp_loc;
             }
+  and lift_logical_integer context application operand =
+    match operand.Sst.typ with
+    | Sst.Mathematical_int -> Ok operand
+    | Sst.Int ->
+        let lifted =
+          match operand.expression_desc with
+          | Sst.Int_constant _ ->
+              { operand with Sst.typ = Sst.Mathematical_int }
+          | Sst.Lift_runtime_int _ -> operand
+          | _ ->
+              {
+                Sst.expression_desc = Sst.Lift_runtime_int operand;
+                typ = Sst.Mathematical_int;
+                span = operand.span;
+              }
+        in
+        [%log.trace "lifted runtime integer operand for logical operation"
+          ~stage:(Delator.Field.string "logical-integer-operation")
+          ~source_sort:(Delator.Field.string "runtime-int")
+          ~target_sort:(Delator.Field.string "mathematical-int")
+          ~lift_kind:
+            (Delator.Field.string
+               (match operand.expression_desc with
+               | Sst.Int_constant _ -> "direct-literal"
+               | Sst.Lift_runtime_int _ -> "existing"
+               | _ -> "intrinsic-lift"))
+          ~decision:(Delator.Field.string "accepted")];
+        Ok lifted
+    | Sst.Unit | Sst.Bool | Sst.Tuple _ | Sst.Aggregate _ | Sst.Parameter _
+    | Sst.Application _ ->
+        [%log.debug "rejected non-integer logical operation operand"
+          ~stage:(Delator.Field.string "logical-integer-operation")
+          ~operand_sort:
+            (Delator.Field.string (Parametric_type.to_string operand.typ))
+          ~decision:(Delator.Field.string "rejected")
+          ~reason_class:(Delator.Field.string "operand-sort")];
+        unsupported context application.exp_loc Diagnostic.Unsupported_expression
+  and lower_integer_arithmetic context bindings application result_type arguments
+      arity operation =
+    match lower_arguments context bindings application arguments with
+    | Error _ as error -> error
+    | Ok arguments ->
+        let operands = List.map snd arguments in
+        if List.length operands <> arity then
+          unsupported context application.exp_loc Diagnostic.Higher_order_call
+        else if not (symbolic_context_is_logical context) then
+          Ok
+            {
+              Sst.expression_desc = Sst.Checked_arithmetic (operation, operands);
+              typ = result_type;
+              span = span context application.exp_loc;
+            }
+        else
+          let rec lift lifted = function
+            | [] -> Ok (List.rev lifted)
+            | operand :: rest -> (
+                match lift_logical_integer context application operand with
+                | Error _ as error -> error
+                | Ok operand -> lift (operand :: lifted) rest)
+          in
+          (match lift [] operands with
+          | Error _ as error -> error
+          | Ok operands ->
+              [%log.debug "lowered mathematical integer operation"
+                ~stage:(Delator.Field.string "logical-integer-operation")
+                ~operation:
+                  (Delator.Field.string
+                     (match operation with
+                     | Sst.Add -> "add"
+                     | Sst.Subtract -> "subtract"
+                     | Sst.Negate -> "negate"
+                     | Sst.Multiply -> "multiply"
+                     | Sst.Multiply_constant _ -> "scale"
+                     | Sst.Successor -> "successor"
+                     | Sst.Predecessor -> "predecessor"
+                     | Sst.Absolute_value -> "absolute-value"))
+                ~operand_count:(Delator.Field.int (List.length operands))
+                ~result_sort:(Delator.Field.string "mathematical-int")
+                ~decision:(Delator.Field.string "accepted")];
+              Ok
+                (Mathematical_int_rewrite_private.simplify
+                   {
+                     Sst.expression_desc =
+                       Sst.Checked_arithmetic (operation, operands);
+                     typ = Sst.Mathematical_int;
+                     span = span context application.exp_loc;
+                   }))
   and lower_multiplication context bindings application result_type arguments =
+    if symbolic_context_is_logical context then
+      lower_integer_arithmetic context bindings application result_type arguments
+        2 Sst.Multiply
+    else
     let literal = function
       | { exp_desc = Texp_constant (Const_int value); _ } ->
           Some (Z.of_int value)
       | _ -> None
     in
+    let coefficient = literal in
+    let open Mathematical_int_constant_private in
     match arguments with
     | [ (Nolabel, Arg (left, _)); (Nolabel, Arg (right, _)) ] -> (
-        match (literal left, literal right) with
-        | Some constant, _ -> (
+        match
+          Mathematical_int_constant_private.classify_multiplication
+            ~coefficient ~left ~right
+        with
+        | Constant_pair (left, right)
+          when symbolic_context_is_logical context ->
+            let value = Z.mul left right in
+            [%log.debug "folded mathematical integer coefficient product"
+              ~stage:(Delator.Field.string "logical-integer-operation")
+              ~operation:(Delator.Field.string "scale")
+              ~coefficient_side:(Delator.Field.string "both")
+              ~digit_count:
+                (Delator.Field.int
+                   (String.length (Z.to_string (Z.abs value))))
+              ~result_sort:(Delator.Field.string "mathematical-int")
+              ~decision:(Delator.Field.string "accepted")];
+            Ok
+              {
+                Sst.expression_desc = Sst.Int_constant value;
+                typ = Sst.Mathematical_int;
+                span = span context application.exp_loc;
+              }
+        | Constant_pair (constant, _) | Constant_left constant -> (
             match lower_authenticated_expression context bindings right with
             | Error _ as error -> error
             | Ok operand ->
+                let* operand =
+                  if symbolic_context_is_logical context then
+                    lift_logical_integer context application operand
+                  else Ok operand
+                in
+                [%log.debug "lowered constant integer scaling"
+                  ~stage:(Delator.Field.string "logical-integer-operation")
+                  ~operation:(Delator.Field.string "scale")
+                  ~coefficient_side:(Delator.Field.string "left")
+                  ~logical:
+                    (Delator.Field.bool (symbolic_context_is_logical context))
+                  ~decision:(Delator.Field.string "accepted")];
                 Ok
                   {
                     Sst.expression_desc =
                       Sst.Checked_arithmetic
                         (Sst.Multiply_constant constant, [ operand ]);
-                    typ = result_type;
+                    typ =
+                      (if symbolic_context_is_logical context then
+                         Sst.Mathematical_int
+                       else result_type);
                     span = span context application.exp_loc;
                   })
-        | None, Some constant -> (
+        | Constant_right constant -> (
             match lower_authenticated_expression context bindings left with
             | Error _ as error -> error
             | Ok operand ->
+                let* operand =
+                  if symbolic_context_is_logical context then
+                    lift_logical_integer context application operand
+                  else Ok operand
+                in
+                [%log.debug "lowered constant integer scaling"
+                  ~stage:(Delator.Field.string "logical-integer-operation")
+                  ~operation:(Delator.Field.string "scale")
+                  ~coefficient_side:(Delator.Field.string "right")
+                  ~logical:
+                    (Delator.Field.bool (symbolic_context_is_logical context))
+                  ~decision:(Delator.Field.string "accepted")];
                 Ok
                   {
                     Sst.expression_desc =
                       Sst.Checked_arithmetic
                         (Sst.Multiply_constant constant, [ operand ]);
-                    typ = result_type;
+                    typ =
+                      (if symbolic_context_is_logical context then
+                         Sst.Mathematical_int
+                       else result_type);
                     span = span context application.exp_loc;
                   })
-        | None, None ->
-            unsupported context application.exp_loc
-              Diagnostic.Nonlinear_multiplication)
+        | Nonlinear ->
+            let* left = lower_authenticated_expression context bindings left in
+            let* right = lower_authenticated_expression context bindings right in
+            let* left =
+              if symbolic_context_is_logical context then
+                lift_logical_integer context application left
+              else Ok left
+            in
+            let* right =
+              if symbolic_context_is_logical context then
+                lift_logical_integer context application right
+              else Ok right
+            in
+            [%log.debug "lowered general integer multiplication"
+              ~stage:(Delator.Field.string "logical-integer-operation")
+              ~operation:(Delator.Field.string "multiply")
+              ~logical:
+                (Delator.Field.bool (symbolic_context_is_logical context))
+              ~operand_count:(Delator.Field.int 2)
+              ~solver_fragment:(Delator.Field.string "nonlinear-integer")
+              ~decision:(Delator.Field.string "accepted")];
+            Ok
+              {
+                Sst.expression_desc =
+                  Sst.Checked_arithmetic (Sst.Multiply, [ left; right ]);
+                typ =
+                  (if symbolic_context_is_logical context then
+                     Sst.Mathematical_int
+                   else result_type);
+                span = span context application.exp_loc;
+              })
     | _ -> unsupported context application.exp_loc Diagnostic.Higher_order_call
   and lower_comparison context bindings application result_type arguments
       comparison =
@@ -6858,7 +8269,8 @@ module Public = struct
                             ]))
                 imported_type.imported_parametric_descriptor)
             context.imported.imported_types
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _ ->
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Parameter _ ->
           false
     in
     let exact_model_formal expected_type definition =
@@ -7007,7 +8419,9 @@ module Public = struct
                   | Sst.Application _ ->
                       Parametric_adt.exec_scalar_equality descriptors left_type
                   | Sst.Parameter _ | Sst.Tuple _ -> false
-                  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Aggregate _ -> false)
+                  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                  | Sst.Aggregate _ ->
+                      false)
           -> (
             match normalized_expression_type context bindings right with
             | Ok right_type when Parametric_type.equal left_type right_type ->
@@ -7036,7 +8450,55 @@ module Public = struct
           when comparison <> Sst.Equal && comparison <> Sst.Not_equal ->
             unsupported context application.exp_loc
               Diagnostic.Unsupported_expression
-        | Ok (Sst.Unit | Sst.Bool | Sst.Int) -> (
+        | Ok (Sst.Int | Sst.Mathematical_int) -> (
+            match lower_authenticated_expression context bindings left with
+            | Error _ as error -> error
+            | Ok left -> (
+                match lower_authenticated_expression context bindings right with
+                | Error _ as error -> error
+                | Ok right ->
+                    let* left, right =
+                      if symbolic_context_is_logical context then
+                        let* left =
+                          lift_logical_integer context application left
+                        in
+                        let* right =
+                          lift_logical_integer context application right
+                        in
+                        Ok (left, right)
+                      else if left.typ = Sst.Int && right.typ = Sst.Int then
+                        Ok (left, right)
+                      else
+                        unsupported context application.exp_loc
+                          Diagnostic.Unsupported_expression
+                    in
+                    [%log.trace "lowered integer comparison"
+                      ~stage:(Delator.Field.string "logical-integer-comparison")
+                      ~logical:
+                        (Delator.Field.bool
+                           (symbolic_context_is_logical context))
+                      ~left_sort:
+                        (Delator.Field.string
+                           (Parametric_type.to_string left.typ))
+                      ~right_sort:
+                        (Delator.Field.string
+                           (Parametric_type.to_string right.typ))
+                      ~result_sort:(Delator.Field.string "bool")
+                      ~decision:(Delator.Field.string "accepted")];
+                    let comparison_expression =
+                      {
+                        Sst.expression_desc =
+                          Sst.Compare (comparison, left, right);
+                        typ = Sst.Bool;
+                        span = span context application.exp_loc;
+                      }
+                    in
+                    Ok
+                      (if symbolic_context_is_logical context then
+                         Mathematical_int_rewrite_private.simplify
+                           comparison_expression
+                       else comparison_expression)))
+        | Ok (Sst.Unit | Sst.Bool) -> (
             match lower_authenticated_expression context bindings left with
             | Error _ as error -> error
             | Ok left -> (
@@ -7315,17 +8777,20 @@ module Public = struct
             parametric_type_binders = [];
             proof_capture_hints = [];
             builtin_assertions = [];
+            semantic_parameters = None;
+            semantic_result_type = None;
           }
     | _ ->
         unsupported context value_binding.vb_loc
           Diagnostic.Unsupported_top_level_binding
-  let collect_structure source_file imports allow_imported_opens broadcast_scan
-      symbolic_scan structure =
+  let collect_structure ?proof_capture_artifact
+      ?(imported = empty_imported_environment) source_file imports
+      allow_imported_opens broadcast_scan symbolic_scan structure =
     let context =
       {
         source_file;
         typing_environment = structure.str_final_env;
-        proof_capture_artifact = None;
+        proof_capture_artifact;
         broadcast_scan = Some broadcast_scan;
         symbolic_scan = Some symbolic_scan;
         symbolic_definitions = [];
@@ -7341,6 +8806,7 @@ module Public = struct
         contract_carriers = [];
         logical_ghost_depth = 0;
         function_result_type = None;
+        function_result_semantic_type = None;
         owned_tree_cursors = [];
         owned_tree_observation_paths = [];
         owned_tree_root_versions = [];
@@ -7348,7 +8814,7 @@ module Public = struct
         shared_scalar_aliases = [];
         shared_scalar_next_epoch = 0;
         owned_tree_candidate_roots = [];
-        imported = empty_imported_environment;
+        imported;
         callbacks = empty_callback_lowering_state ();
       }
     in
@@ -7357,20 +8823,188 @@ module Public = struct
     let unsupported_item item =
       unsupported context item.str_loc Diagnostic.Unsupported_structure_item
     in
-    let authenticated_imported_open declaration =
-      allow_imported_opens
-      &&
-      match declaration.open_expr.mod_desc with
-      | Tmod_ident (Path.Pident ident, _) when Ident.is_global_or_predef ident
-        ->
+    let integer_literal_marker attributes =
+      let public_name = "verocaml.integer_literal" in
+      let retained_name =
+        "verocaml.internal.logical_sort.integer_literal.v1"
+      in
+      let relevant =
+        List.filter
+          (fun attribute ->
+            String.equal attribute.Parsetree.attr_name.txt public_name
+            || String.equal attribute.attr_name.txt retained_name)
+          attributes
+      in
+      match relevant with
+      | [] -> `Ordinary
+      | [ attribute ]
+        when String.equal attribute.attr_name.txt retained_name
+             && attribute.attr_loc.loc_ghost
+             && attribute.attr_name.loc.loc_ghost
+             && attribute.attr_payload = Parsetree.PStr [] ->
+          `Retained
+      | _ -> `Malformed
+    in
+    let integer_literal_binding ?module_name value_binding =
+      match integer_literal_marker value_binding.Typedtree.vb_attributes with
+      | `Ordinary -> Ok None
+      | `Malformed ->
+          unsupported context value_binding.vb_loc
+            Diagnostic.Malformed_ghost_call
+      | `Retained -> (
+          let* name =
+            match value_binding.vb_pat.pat_desc with
+            | Tpat_var (_, name, _, _, _) -> Ok name.txt
+            | _ ->
+                unsupported context value_binding.vb_loc
+                  Diagnostic.Malformed_ghost_call
+          in
+          let expected_paths =
+            match proof_capture_artifact with
+            | Some artifact ->
+                let unit_name =
+                  artifact.proof_capture_implementation.Cmt_input.unit_name
+                in
+                [
+                  unit_name ^ "."
+                  ^ Option.fold ~none:name
+                      ~some:(fun module_name -> module_name ^ "." ^ name)
+                      module_name;
+                ]
+            | None -> []
+          in
+          let matches =
+            available_logical_sorts context
+            |> List.filter (fun descriptor ->
+                   List.exists
+                     (String.equal
+                        descriptor.Logical_sort_private.integer_literal_path)
+                     expected_paths)
+          in
+          match matches with
+          | [ descriptor ] ->
+              [%log.debug "admitted authenticated integer-literal declaration"
+                ~stage:
+                  (Delator.Field.string "logical-integer-literal-constructor-registry")
+                ~provider:(Delator.Field.string descriptor.provider_origin)
+                ~callable:
+                  (Delator.Field.string descriptor.integer_literal_path)
+                ~route:(Delator.Field.string "local-retained-interface")
+                ~decision:(Delator.Field.string "descriptor-only")];
+              Ok (Some descriptor)
+          | [] | _ :: _ :: _ ->
+              [%log.warn "rejected unbound integer-literal declaration"
+                ~stage:
+                  (Delator.Field.string "logical-integer-literal-constructor-registry")
+                ~expected_paths:
+                  (Delator.Field.string (String.concat "," expected_paths))
+                ~candidate_count:(Delator.Field.int (List.length matches))
+                ~decision:(Delator.Field.string "rejected")
+                ~reason_class:
+                  (Delator.Field.string "descriptor-binding-mismatch")];
+              unsupported context value_binding.vb_loc
+                Diagnostic.Malformed_ghost_call)
+    in
+    let rec imported_path_root = function
+      | Path.Pident ident when Ident.is_global_or_predef ident ->
+          Some (Ident.name ident)
+      | Path.Pdot (parent, _) -> imported_path_root parent
+      | Path.Pextra_ty (parent, _) -> imported_path_root parent
+      | Path.Pident _ | Path.Papply _ -> None
+    in
+    let authenticated_imported_path path =
+      match imported_path_root path with
+      | None -> false
+      | Some unit_name ->
           Array.exists
             (fun (import : Cmt_input.import) ->
-              String.equal import.unit_name (Ident.name ident)
+              String.equal import.unit_name unit_name
               && Option.is_some import.crc)
             context.imports
-      | Tmod_ident _ | Tmod_structure _ | Tmod_functor _ | Tmod_apply _
-      | Tmod_apply_unit _ | Tmod_constraint _ | Tmod_unpack _ ->
-          false
+    in
+    let authenticated_imported_open declaration =
+      let admitted =
+        allow_imported_opens
+        &&
+        match declaration.open_expr.mod_desc with
+        | Tmod_ident (path, _) -> authenticated_imported_path path
+        | Tmod_structure _ | Tmod_functor _ | Tmod_apply _
+        | Tmod_apply_unit _ | Tmod_constraint _ | Tmod_unpack _ ->
+            false
+      in
+      [%log.trace "evaluated imported open admission"
+        ~route:(Delator.Field.string "typedtree")
+        ~stage:(Delator.Field.string "imported-module-admission")
+        ~member_kind:(Delator.Field.string "open")
+        ~decision:
+          (Delator.Field.string (if admitted then "accepted" else "ignored"))];
+      admitted
+    in
+    let authenticated_imported_include declaration =
+      let admitted =
+        allow_imported_opens
+        &&
+        match declaration.incl_mod.mod_desc with
+        | Tmod_ident (path, _) -> authenticated_imported_path path
+        | Tmod_structure _ | Tmod_functor _ | Tmod_apply _
+        | Tmod_apply_unit _ | Tmod_constraint _ | Tmod_unpack _ ->
+            false
+      in
+      [%log.trace "evaluated imported include admission"
+        ~route:(Delator.Field.string "typedtree")
+        ~stage:(Delator.Field.string "imported-module-admission")
+        ~member_kind:(Delator.Field.string "include")
+        ~decision:
+          (Delator.Field.string (if admitted then "accepted" else "ignored"))];
+      admitted
+    in
+    let authenticated_imported_alias binding =
+      let admitted =
+        allow_imported_opens
+        &&
+        match binding.mb_expr.mod_desc with
+        | Tmod_ident (Path.Pident ident, _)
+          when Ident.is_global_or_predef ident ->
+            Array.exists
+              (fun (import : Cmt_input.import) ->
+                String.equal import.unit_name (Ident.name ident)
+                && Option.is_some import.crc)
+              context.imports
+        | Tmod_ident _ | Tmod_structure _ | Tmod_functor _ | Tmod_apply _
+        | Tmod_apply_unit _ | Tmod_constraint _ | Tmod_unpack _ ->
+            false
+      in
+      [%log.trace "evaluated imported alias admission"
+        ~route:(Delator.Field.string "typedtree")
+        ~stage:(Delator.Field.string "imported-module-admission")
+        ~member_kind:(Delator.Field.string "alias")
+        ~decision:
+          (Delator.Field.string (if admitted then "accepted" else "ignored"))];
+      admitted
+    in
+    let static_module_alias binding =
+      let admitted =
+        match binding.mb_expr.mod_desc with
+        | Tmod_ident _ -> true
+        | Tmod_structure _ | Tmod_functor _ | Tmod_apply _ | Tmod_apply_unit _
+        | Tmod_constraint _ | Tmod_unpack _ -> false
+      in
+      [%log.trace "evaluated static module alias admission"
+        ~route:(Delator.Field.string "typedtree")
+        ~stage:(Delator.Field.string "static-module-metadata")
+        ~member_kind:(Delator.Field.string "alias")
+        ~decision:
+          (Delator.Field.string (if admitted then "accepted" else "ignored"))];
+      admitted
+    in
+    let retained_broadcast_signature_witness include_ =
+      List.exists
+        (fun attribute ->
+          String.equal attribute.Parsetree.attr_name.txt
+            "verocaml.internal.broadcast.interface_member.v1"
+          && attribute.attr_loc.Location.loc_ghost
+          && attribute.attr_name.loc.loc_ghost)
+        include_.Typedtree.incl_attributes
     in
     let signature_items signature =
       let rec loop types values = function
@@ -7379,8 +9013,17 @@ module Public = struct
             match item.sig_desc with
             | Tsig_type (_, declarations) ->
                 loop (List.rev_append declarations types) values rest
-            | Tsig_value value -> loop types (value :: values) rest
+            | Tsig_value value -> (
+                match integer_literal_marker value.val_attributes with
+                | `Retained -> loop types values rest
+                | `Ordinary -> loop types (value :: values) rest
+                | `Malformed ->
+                    unsupported context value.val_loc
+                      Diagnostic.Malformed_ghost_call)
             | Tsig_attribute _ -> loop types values rest
+            | Tsig_include (include_, _)
+              when retained_broadcast_signature_witness include_ ->
+                loop types values rest
             | Tsig_typesubst _ | Tsig_typext _ | Tsig_exception _
             | Tsig_module _ | Tsig_modsubst _ | Tsig_recmodule _
             | Tsig_modtype _ | Tsig_modtypesubst _ | Tsig_open _
@@ -7425,6 +9068,13 @@ module Public = struct
                 unsupported context signature_declaration.mtd_loc
                   Diagnostic.Unsupported_structure_item)
         | Tmod_constraint (_, _, Tmodtype_explicit explicit_signature, _) ->
+            [%log.debug "rejected unsupported constrained static module shape"
+              ~route:(Delator.Field.string "typedtree")
+              ~stage:(Delator.Field.string "static-module-metadata")
+              ~member_kind:(Delator.Field.string "constrained-module")
+              ~decision:(Delator.Field.string "rejected")
+              ~reason_class:
+                (Delator.Field.string "noncanonical-explicit-constraint")];
             unsupported context explicit_signature.mty_loc
               Diagnostic.Unsupported_structure_item
         | Tmod_constraint (_, _, Tmodtype_implicit, _)
@@ -7583,34 +9233,51 @@ module Public = struct
                       implementation_items type_index function_index types
                         functions public_type_links public_functions rest
                   | value_binding :: remaining -> (
-                      let* function_ =
-                        top_level_binding
-                          ~module_identity:(module_id, module_name) context
-                          function_index rec_flag value_binding
+                      let* integer_literal =
+                        integer_literal_binding ~module_name value_binding
                       in
-                      let public = public_value (Ident.name function_.ident) in
-                      match (public, function_.function_kind) with
-                      | Some public, _ ->
-                          bindings_loop (function_index + 1)
-                            (function_ :: functions)
-                            ((public, function_) :: public_functions)
-                            remaining
-                      | ( None,
-                          Top_recursive_spec
-                            { recursive_visibility = Some `Opaque; _ } ) ->
-                          bindings_loop (function_index + 1) (function_ :: functions)
+                      match integer_literal with
+                      | Some _ ->
+                          bindings_loop function_index functions
                             public_functions remaining
-                      | None, Top_spec _
-                        when Option.is_some (symbolic_binding value_binding) ->
-                          bindings_loop (function_index + 1)
-                            (function_ :: functions) public_functions remaining
-                      | None, _ ->
-                          unsupported context value_binding.vb_loc
-                            Diagnostic.Unsupported_structure_item)
+                      | None ->
+                          let* function_ =
+                            top_level_binding
+                              ~module_identity:(module_id, module_name) context
+                              function_index rec_flag value_binding
+                          in
+                          let public =
+                            public_value (Ident.name function_.ident)
+                          in
+                          match (public, function_.function_kind) with
+                          | Some public, _ ->
+                              bindings_loop (function_index + 1)
+                                (function_ :: functions)
+                                ((public, function_) :: public_functions)
+                                remaining
+                          | ( None,
+                              Top_recursive_spec
+                                { recursive_visibility = Some `Opaque; _ } ) ->
+                              bindings_loop (function_index + 1)
+                                (function_ :: functions) public_functions
+                                remaining
+                          | None, Top_spec _
+                            when Option.is_some
+                                   (symbolic_binding value_binding) ->
+                              bindings_loop (function_index + 1)
+                                (function_ :: functions) public_functions
+                                remaining
+                          | None, _ ->
+                              unsupported context value_binding.vb_loc
+                                Diagnostic.Unsupported_structure_item)
                 in
                 bindings_loop function_index functions public_functions bindings
             | Tstr_open declaration when authenticated_imported_open declaration
               ->
+                implementation_items type_index function_index types functions
+                  public_type_links public_functions rest
+            | Tstr_include declaration
+              when authenticated_imported_include declaration ->
                 implementation_items type_index function_index types functions
                   public_type_links public_functions rest
             | Tstr_eval _ | Tstr_primitive _ | Tstr_typext _ | Tstr_exception _
@@ -7665,17 +9332,26 @@ module Public = struct
               in
               let rec group function_index functions = function
                 | [] -> items type_index function_index types functions rest
-                | binding :: bindings ->
-                    let* function_ =
-                      top_level_binding context function_index rec_flag binding
-                    in
-                    group (function_index + 1) (function_ :: functions) bindings
+                | binding :: bindings -> (
+                    let* integer_literal = integer_literal_binding binding in
+                    match integer_literal with
+                    | Some _ -> group function_index functions bindings
+                    | None ->
+                        let* function_ =
+                          top_level_binding context function_index rec_flag
+                            binding
+                        in
+                        group (function_index + 1) (function_ :: functions)
+                          bindings)
               in
               group function_index functions bindings
           | Tstr_attribute _ ->
               items type_index function_index types functions rest
           | Tstr_open declaration when authenticated_imported_open declaration
             ->
+              items type_index function_index types functions rest
+          | Tstr_include declaration
+            when authenticated_imported_include declaration ->
               items type_index function_index types functions rest
           | Tstr_type (_, declarations) ->
               let rec group type_index types = function
@@ -7702,15 +9378,21 @@ module Public = struct
                   items type_index function_index types functions rest
               | Some _ -> unsupported_item item)
           | Tstr_module binding -> (
-              match (!module_type_declaration, !constrained_module) with
-              | Some signature_declaration, None ->
+              if
+                authenticated_imported_alias binding
+                || static_module_alias binding
+              then
+                items type_index function_index types functions rest
+              else
+                match (!module_type_declaration, !constrained_module) with
+                | Some signature_declaration, None ->
                   let* type_index, function_index, types, functions, module_ =
                     collect_constrained_module type_index function_index types
                       functions binding signature_declaration
                   in
                   constrained_module := Some module_;
                   items type_index function_index types functions rest
-              | None, _ | _, Some _ -> unsupported_item item)
+                | None, _ | _, Some _ -> unsupported_item item)
           | Tstr_eval _ | Tstr_primitive _ | Tstr_typext _ | Tstr_exception _
           | Tstr_recmodule _ | Tstr_open _ | Tstr_class _ | Tstr_class_type _
           | Tstr_include _ ->
@@ -9700,13 +11382,18 @@ module Public = struct
             local_types
         in
         analyze_rank_profiles source_file structure local_types
-  let lower_type_registry source_file imports env ~imported_parametric_adts
+  let lower_type_registry source_file imports env ~imported
       ~load_path_visible ~load_path_hidden ~proof_capture_artifact local_types =
+    let imported_parametric_adts =
+      imported.imported_types
+      |> List.filter_map (fun imported ->
+             imported.imported_parametric_descriptor)
+    in
     let base_context =
       {
         source_file;
         typing_environment = env;
-        proof_capture_artifact = None;
+        proof_capture_artifact;
         broadcast_scan = None;
         symbolic_scan = None;
         symbolic_definitions = [];
@@ -9722,6 +11409,7 @@ module Public = struct
         contract_carriers = [];
         logical_ghost_depth = 0;
         function_result_type = None;
+        function_result_semantic_type = None;
         owned_tree_cursors = [];
         owned_tree_observation_paths = [];
         owned_tree_root_versions = [];
@@ -9729,7 +11417,7 @@ module Public = struct
         shared_scalar_aliases = [];
         shared_scalar_next_epoch = 0;
         owned_tree_candidate_roots = [];
-        imported = empty_imported_environment;
+        imported;
         callbacks = empty_callback_lowering_state ();
       }
     in
@@ -9774,29 +11462,103 @@ module Public = struct
       let* linearity_modality = linearity_modality in
       Ok { Sst.uniqueness_modality; linearity_modality }
     in
-    let* external_types, ordinary_types =
-      let rec classify specifications ordinary = function
-        | [] -> Ok (List.rev specifications, List.rev ordinary)
+    let local_logical_sort_descriptor local =
+      let local_path_names = List.map Path.name local.resolved_paths in
+      let path_names =
+        match proof_capture_artifact with
+        | Some artifact ->
+            let unit_name =
+              artifact.proof_capture_implementation.Cmt_input.unit_name
+            in
+            local_path_names
+            @ List.map (fun path -> unit_name ^ "." ^ path) local_path_names
+        | None -> local_path_names
+      in
+      let uid = compiler_uid local.declaration.typ_type.type_uid in
+      let available = available_logical_sorts base_context in
+      let matches =
+        available
+        |> List.filter (fun descriptor ->
+             List.exists (String.equal descriptor.Logical_sort_private.type_path)
+               path_names
+             || String.equal descriptor.type_uid uid)
+      in
+      [%log.trace "correlated local logical-sort declaration with retained descriptor"
+        ~stage:(Delator.Field.string "logical-sort-type-registry")
+        ~local_paths:(Delator.Field.string (String.concat "," path_names))
+        ~local_uid:(Delator.Field.string uid)
+        ~available_paths:
+          (Delator.Field.string
+             (available
+             |> List.map (fun descriptor -> descriptor.Logical_sort_private.type_path)
+             |> String.concat ","))
+        ~available_count:(Delator.Field.int (List.length available))
+        ~match_count:(Delator.Field.int (List.length matches))
+        ~decision:
+          (Delator.Field.string
+             (match matches with [ _ ] -> "matched" | [] -> "missing" | _ -> "ambiguous"))];
+      matches
+    in
+    let* external_types, logical_types, ordinary_types =
+      let rec classify specifications logical ordinary = function
+        | [] ->
+            Ok
+              ( List.rev specifications,
+                List.rev logical,
+                List.rev ordinary )
         | local :: rest -> (
-            match external_type_specification local.declaration with
-            | Ordinary_type ->
-                classify specifications (local :: ordinary) rest
-            | Authenticated_external_type -> (
+            match
+              ( External_type_specification_marker_private.classify
+                  local.declaration.typ_attributes,
+                logical_sort_specification local.declaration )
+            with
+            | External_type_specification_marker_private.Ordinary,
+              Ordinary_logical_type ->
+                classify specifications logical (local :: ordinary) rest
+            | Authenticated, Ordinary_logical_type -> (
                 match proof_capture_artifact with
                 | Some artifact
                   when Typedtree_adapter_issuance_private
                        .authenticate_logical_builtin_artifact artifact
                          ~source_file ->
-                    classify (local :: specifications) ordinary rest
+                    classify (local :: specifications) logical ordinary rest
                 | Some _ | None ->
                     unsupported base_context local.declaration.typ_loc
                       Diagnostic.Malformed_ghost_call)
-            | Malformed_external_type ->
+            | Ordinary, Authenticated_logical_sort -> (
+                match
+                  ( proof_capture_artifact,
+                    local_logical_sort_descriptor local )
+                with
+                | Some artifact, [ _descriptor ]
+                  when Typedtree_adapter_issuance_private
+                       .authenticate_logical_builtin_artifact artifact
+                         ~source_file ->
+                    [%log.debug "admitted authenticated local logical-sort declaration"
+                      ~stage:(Delator.Field.string "logical-sort-type-registry")
+                      ~provider:
+                        (Delator.Field.string
+                           (_descriptor [@log_value.debug]).provider_origin)
+                      ~route:(Delator.Field.string "local-retained-interface")
+                      ~decision:(Delator.Field.string "accepted")];
+                    classify specifications (local :: logical) ordinary rest
+                | Some _, [] | Some _, [ _ ] | None, [] | None, [ _ ]
+                | None, _ :: _ :: _
+                | Some _, _ :: _ :: _ ->
+                    unsupported base_context local.declaration.typ_loc
+                      Diagnostic.Malformed_ghost_call)
+            | ( Malformed,
+                (Ordinary_logical_type | Authenticated_logical_sort
+                | Malformed_logical_sort) )
+            | ( (Ordinary | Authenticated),
+                Malformed_logical_sort )
+            | Authenticated, Authenticated_logical_sort ->
                 unsupported base_context local.declaration.typ_loc
-                  Diagnostic.Malformed_ghost_call)
+                      Diagnostic.Malformed_ghost_call)
       in
-      classify [] [] local_types
+      classify [] [] [] local_types
     in
+    let _ = logical_types in
     let* external_sources =
       let rec lower sources = function
         | [] -> Ok (List.rev sources)
@@ -9836,6 +11598,12 @@ module Public = struct
     in
     let* parametric_adts =
       Parametric_adt_lowering_private.lower ~span:(span base_context) ~aggregate
+        ~logical_sort:(fun path ->
+          match logical_sort_for_path base_context path with
+          | Resolution_exact _ -> true
+          | Resolution_absent | Resolution_ambiguous _
+          | Resolution_identity_mismatch _ ->
+              false)
         ~modalities:normalize_field_modalities parametric_sources
     in
     let local_external_specifications =
@@ -10184,6 +11952,7 @@ module Public = struct
         contract_carriers = [];
         logical_ghost_depth = 0;
         function_result_type = None;
+        function_result_semantic_type = None;
         owned_tree_cursors = [];
         owned_tree_observation_paths = [];
         owned_tree_root_versions = [];
@@ -10457,6 +12226,7 @@ module Public = struct
         contract_carriers = [];
         logical_ghost_depth = 0;
         function_result_type = None;
+        function_result_semantic_type = None;
         owned_tree_cursors = [];
         owned_tree_observation_paths = [];
         owned_tree_root_versions = [];
@@ -10550,6 +12320,7 @@ module Public = struct
         contract_carriers = [];
         logical_ghost_depth = 0;
         function_result_type = None;
+        function_result_semantic_type = None;
         owned_tree_cursors = [];
         owned_tree_observation_paths = [];
         owned_tree_root_versions = [];
@@ -10626,6 +12397,7 @@ module Public = struct
         contract_carriers = [];
         logical_ghost_depth = 0;
         function_result_type = None;
+        function_result_semantic_type = None;
         owned_tree_cursors = [];
         owned_tree_observation_paths = [];
         owned_tree_root_versions = [];
@@ -10778,6 +12550,7 @@ module Public = struct
         contract_carriers = [];
         logical_ghost_depth = 0;
         function_result_type = None;
+        function_result_semantic_type = None;
         owned_tree_cursors = [];
         owned_tree_observation_paths = [];
         owned_tree_root_versions = [];
@@ -10892,30 +12665,15 @@ module Public = struct
                         Callback_contract_private.extract
                           context.contract_carriers lowered_body
                       in
-                      let* () =
-                        if function_.rec_flag <> Asttypes.Recursive then Ok ()
-                        else
-                          match contracts.Sst.decreases with
-                          | [ _ ] -> Ok ()
-                          | [] ->
-                              Error
-                                (Diagnostic.make
-                                   (Diagnostic.Invalid_recursive_rank
-                                      (Printf.sprintf
-                                         "Recursive function %S needs one decreases clause. Add [%%verocaml.decreases ...] at the beginning of its body."
-                                         function_.function_id.function_name))
-                                   (span context
-                                      function_.value_binding.vb_loc))
-                          | _ :: _ :: _ ->
-                              Error
-                                (Diagnostic.make
-                                   (Diagnostic.Invalid_recursive_rank
-                                      (Printf.sprintf
-                                         "Recursive function %S has more than one decreases clause; keep exactly one."
-                                         function_.function_id.function_name))
-                                   (span context
-                                      function_.value_binding.vb_loc))
-                      in
+                      [%log.trace "deferred recursive measure decision to resolved call graph"
+                        ~stage:(Delator.Field.string "termination-correlation")
+                        ~syntactic_recursive:
+                          (Delator.Field.bool
+                             (function_.rec_flag = Asttypes.Recursive))
+                        ~measure_count:
+                          (Delator.Field.int
+                             (List.length contracts.Sst.decreases))
+                        ~decision:(Delator.Field.string "deferred")];
                       let declaration_span =
                         span context function_.value_binding.vb_loc
                       in
@@ -10989,6 +12747,7 @@ module Public = struct
       contract_carriers = [];
       logical_ghost_depth = 0;
       function_result_type = None;
+        function_result_semantic_type = None;
       owned_tree_cursors = [];
       owned_tree_observation_paths = [];
       owned_tree_root_versions = [];
@@ -11047,8 +12806,9 @@ module Public = struct
                 (Diagnostic.Unsupported_construct
                    Diagnostic.Refutable_parameter_pattern)
                 (span context location));
+          parameter_type_error = optional_parameter_type_error context;
         }
-        [] parameters
+        ~function_type:function_.value_binding.vb_expr.exp_type [] parameters
     in
     let* result_type =
       normalized_type context result.exp_loc result.exp_type
@@ -11119,8 +12879,24 @@ module Public = struct
             | Texp_function { params; body = Tfunction_body body; _ } ->
                 let definition_body = callback_definition_body function_ body in
                 let* () =
+                  match definition_body.exp_desc with
+                  | Texp_pack _ | Texp_letmodule _ ->
+                      [%log.debug
+                        "classified first-class module before result-type lowering"
+                        ~stage:(Delator.Field.string "frontend-diagnostic-routing")
+                        ~construct:(Delator.Field.string "first-class-module")
+                        ~decision:(Delator.Field.string "reject-specific")];
+                      unsupported context definition_body.exp_loc
+                        Diagnostic.First_class_module
+                  | _ -> Ok ()
+                in
+                let* explicit_result_type =
+                  explicit_expression_type context body
+                in
+                let* () =
                   prepare_callback_function_context context definition_body
                 in
+                context.function_result_semantic_type <- explicit_result_type;
                 let* parameters, bindings =
                   Callback_contract_private.lower_parameters
                     {
@@ -11146,8 +12922,10 @@ module Public = struct
                         (fun location ->
                           callback_diagnostic context
                             Diagnostic.Refutable_parameter_pattern location);
+                      parameter_type_error = optional_parameter_type_error context;
                     }
-                    [] params
+                    ~function_type:function_.value_binding.vb_expr.exp_type []
+                    params
                 in
                 configure_shared_scalar_formals context
                   authenticated_source_text params parameters;
@@ -11155,32 +12933,25 @@ module Public = struct
                   lower_authenticated_expression context bindings
                     definition_body
                 in
+                let* lowered_body =
+                  match explicit_result_type with
+                  | None -> Ok lowered_body
+                  | Some expected ->
+                      apply_expression_boundary context body.exp_loc expected
+                        lowered_body
+                in
                 let* contracts, body =
                   Callback_contract_private.extract context.contract_carriers
                     lowered_body
                 in
-                let* () =
-                  if function_.rec_flag <> Asttypes.Recursive then Ok ()
-                  else
-                    match contracts.Sst.decreases with
-                    | [ _ ] -> Ok ()
-                    | [] ->
-                        Error
-                          (Diagnostic.make
-                             (Diagnostic.Invalid_recursive_rank
-                                (Printf.sprintf
-                                   "Recursive function %S needs one decreases clause. Add [%%verocaml.decreases ...] at the beginning of its body."
-                                   function_.function_id.function_name))
-                             (span context function_.value_binding.vb_loc))
-                    | _ :: _ :: _ ->
-                        Error
-                          (Diagnostic.make
-                             (Diagnostic.Invalid_recursive_rank
-                                (Printf.sprintf
-                                   "Recursive function %S has more than one decreases clause; keep exactly one."
-                                   function_.function_id.function_name))
-                             (span context function_.value_binding.vb_loc))
-                in
+                [%log.trace "deferred recursive measure decision to resolved call graph"
+                  ~stage:(Delator.Field.string "termination-correlation")
+                  ~syntactic_recursive:
+                    (Delator.Field.bool
+                       (function_.rec_flag = Asttypes.Recursive))
+                  ~measure_count:
+                    (Delator.Field.int (List.length contracts.Sst.decreases))
+                  ~decision:(Delator.Field.string "deferred")];
                 let declaration_span =
                   span context function_.value_binding.vb_loc
                 in
@@ -11289,6 +13060,7 @@ module Public = struct
         contract_carriers = [];
         logical_ghost_depth = 0;
         function_result_type = None;
+        function_result_semantic_type = None;
         owned_tree_cursors = [];
         owned_tree_observation_paths = [];
         owned_tree_root_versions = [];
@@ -11315,7 +13087,7 @@ module Public = struct
         aggregates.definitions
     in
     let rec deeply_immutable visiting = function
-      | Sst.Unit | Sst.Bool | Sst.Int -> true
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> true
       | Sst.Parameter _ | Sst.Application _ -> false
       | Sst.Tuple components ->
           List.for_all
@@ -11509,7 +13281,8 @@ module Public = struct
     in
     let is_representation_type = function
       | Sst.Aggregate type_id -> List.mem type_id representation_ids
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Parameter _
       | Sst.Application _ ->
           false
     in
@@ -11549,6 +13322,7 @@ module Public = struct
         in
         let children =
           match expression.expression_desc with
+          | Sst.Lift_runtime_int operand -> [ operand ]
           | Sst.Tuple_value values -> List.map snd values
           | Sst.Record_value { fields; _ } -> List.map snd fields
           | Sst.Constructor_value { arguments; _ } -> arguments
@@ -11620,7 +13394,8 @@ module Public = struct
                   &&
                   match field.field_type with
                   | Sst.Aggregate _ -> true
-                  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _
+                  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                  | Sst.Tuple _
                   | Sst.Parameter _ | Sst.Application _ ->
                       false)
                 fields
@@ -11635,7 +13410,8 @@ module Public = struct
           let link_type =
             match edge.Sst.field_type with
             | Sst.Aggregate type_id -> type_id
-            | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
+            | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+            | Sst.Parameter _
             | Sst.Application _ ->
                 assert false
           in
@@ -11677,7 +13453,8 @@ module Public = struct
                         &&
                         match definition.result_type with
                         | Sst.Aggregate _ -> true
-                        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _
+                        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                        | Sst.Tuple _
                         | Sst.Parameter _ | Sst.Application _ ->
                             false)
                     | _ -> false)
@@ -11688,7 +13465,8 @@ module Public = struct
                   let result_type =
                     match helper.result_type with
                     | Sst.Aggregate type_id -> type_id
-                    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _
+                    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                    | Sst.Tuple _
                     | Sst.Parameter _ | Sst.Application _ ->
                         assert false
                   in
@@ -11880,7 +13658,8 @@ module Public = struct
               }
           | None ->
               false)
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Parameter _
       | Sst.Application _ ->
           false
     in
@@ -12104,7 +13883,8 @@ module Public = struct
         | Sst.Aggregate target -> [ target ]
         | Sst.Tuple components ->
             List.concat_map (fun (_, typ) -> type_targets typ) components
-        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Parameter _ | Sst.Application _ ->
+        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Parameter _
+        | Sst.Application _ ->
             []
       in
       fields definition
@@ -12376,7 +14156,8 @@ module Public = struct
                               Printf.sprintf "%s#%d=%s" type_id.type_name
                                 type_id.type_index snapshot)
                             (rank_snapshot type_id)
-                      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _
+                      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                      | Sst.Tuple _
                       | Sst.Parameter _ | Sst.Application _ ->
                           None))
               in
@@ -12537,9 +14318,16 @@ module Public = struct
           }
         in
         iterator.expr iterator definition_body;
-        List.sort_uniq
-          (fun (left, _) (right, _) -> Int.compare left right)
-          !aliases
+        let aliases =
+          List.sort_uniq
+            (fun (left, _) (right, _) -> Int.compare left right)
+            !aliases
+        in
+        [%log.trace "prepared retained generic shadow aliases"
+          ~stage:(Delator.Field.string "retained-shadow-authentication")
+          ~decision:(Delator.Field.string "prepared")
+          ~alias_count:(Delator.Field.int (List.length aliases))];
+        aliases
     | Some _ | None -> []
   let prepare_builtin_assertion_plan context function_ definition_body =
     let malformed location =
@@ -12688,6 +14476,7 @@ module Public = struct
               contract_carriers = [];
               logical_ghost_depth = 0;
               function_result_type = Some definition_body.exp_type;
+              function_result_semantic_type = None;
               owned_tree_cursors = [];
               owned_tree_observation_paths = [];
               owned_tree_root_versions = [];
@@ -12863,23 +14652,19 @@ module Public = struct
     let* broadcast_scan =
       Broadcast.authenticate_typedtree
         ~imported_declarations:
-          (imported.imported_callables
-          |> List.filter_map (fun callable ->
-                 Option.map
-                   (Fun.const (callable.imported_path, callable.imported_uid))
-                   callable.imported_broadcast_trigger_span))
+          (List.map
+             (fun declaration -> declaration.imported_broadcast_identity)
+             imported.imported_broadcast_declarations)
         ~imported_groups:
           (List.map
-             (fun group ->
-               ( group.imported_broadcast_group_path,
-                 group.imported_broadcast_group_uid ))
+             (fun group -> group.imported_broadcast_group_identity)
              imported.imported_broadcast_groups)
         ~source_file ~imports
         ~artifact:proof_capture_artifact structure
     in
     match
-      collect_structure source_file imports allow_imported_opens broadcast_scan
-        symbolic_scan structure
+      collect_structure ?proof_capture_artifact ~imported source_file imports
+        allow_imported_opens broadcast_scan symbolic_scan structure
     with
     | Error _ as error -> error
     | Ok (local_types, functions, constrained_modules) -> (
@@ -12903,8 +14688,11 @@ module Public = struct
         let rank_analysis_types =
           List.filter
             (fun local ->
-              external_type_specification local.declaration
-                <> Authenticated_external_type
+              External_type_specification_marker_private.classify
+                local.declaration.typ_attributes
+                <> Authenticated
+              && logical_sort_specification local.declaration
+                 <> Authenticated_logical_sort
               && (not (List.mem local.type_id constrained_type_ids))
               && not
                    (List.exists
@@ -12942,14 +14730,9 @@ module Public = struct
         let* linkages =
           resolve_external_linkages source_file imports imported functions
         in
-        let imported_parametric_adts =
-          imported.imported_types
-          |> List.filter_map (fun imported ->
-                 imported.imported_parametric_descriptor)
-        in
         match
           lower_type_registry source_file imports structure.str_final_env
-            ~imported_parametric_adts
+            ~imported
             ~load_path_visible
             ~load_path_hidden ~proof_capture_artifact local_types
         with
@@ -13010,6 +14793,46 @@ module Public = struct
               in
               loop [] linkages
             in
+            let remember_semantic_result function_ definition =
+              function_.semantic_result_type <- Some definition.Sst.result_type;
+              (match Sst.value_parameters definition.parameters with
+              | None -> function_.semantic_parameters <- None
+              | Some parameters ->
+                  function_.semantic_parameters <-
+                    Some
+                      (List.map
+                         (fun (parameter : Sst.value_parameter) ->
+                           (parameter.Sst.pattern.typ, parameter.Sst.label))
+                         parameters));
+              let[@log_value.debug] formal_sorts =
+                match function_.semantic_parameters with
+                | None -> []
+                | Some parameters ->
+                    parameters
+                    |> List.filteri (fun index _ -> index < 16)
+                    |> List.map (fun (typ, _) ->
+                           Delator.Field.string
+                             (Parametric_type.to_string typ))
+              in
+              let[@log_value.debug] dropped_formal_sorts =
+                match function_.semantic_parameters with
+                | None -> 0
+                | Some parameters -> Int.max 0 (List.length parameters - 16)
+              in
+              [%log.debug "recorded local callable semantic signature"
+                ~stage:
+                  (Delator.Field.string "local-callable-semantic-signature")
+                ~function_name:
+                  (Delator.Field.string function_.function_id.function_name)
+                ~formal_sorts:
+                  (Delator.Field.seq
+                     ~dropped:(dropped_formal_sorts [@log_value.debug])
+                     (formal_sorts [@log_value.debug]))
+                ~result_sort:
+                  (Delator.Field.string
+                     (Parametric_type.to_string definition.result_type))
+                ~decision:(Delator.Field.string "recorded")]
+            in
             let rec lower_functions lowered = function
               | [] -> Ok (List.rev lowered)
                 | function_ :: rest -> (
@@ -13020,8 +14843,18 @@ module Public = struct
                         external_definitions )
                   with
                   | Some definition, _ ->
+                      let definition =
+                        Local_logical_call_rewrite_private.reconcile_definition
+                          definition
+                      in
+                      remember_semantic_result function_ definition;
                       lower_functions (definition :: lowered) rest
                   | None, Some definition ->
+                      let definition =
+                        Local_logical_call_rewrite_private.reconcile_definition
+                          definition
+                      in
+                      remember_semantic_result function_ definition;
                       lower_functions (definition :: lowered) rest
                   | None, None -> (
                       match
@@ -13034,6 +14867,11 @@ module Public = struct
                       with
                       | Error _ as error -> error
                       | Ok (definition, local_definitions) ->
+                          let definition =
+                            Local_logical_call_rewrite_private
+                            .reconcile_definition definition
+                          in
+                          remember_semantic_result function_ definition;
                           lower_functions
                             (List.rev_append
                                (definition :: local_definitions)
@@ -13117,17 +14955,16 @@ module Public = struct
               }
             in
             let* () =
-              let imported_definitions =
-                imported.imported_callables
-                |> List.filter_map (fun imported ->
-                       if
-                         Symbolic_declaration_private.is_symbolic
-                           imported.imported_definition
-                       then Some imported.imported_definition
-                       else None)
-              in
-              Symbolic_declaration_private.seal ~program:authenticated
-                ~imported_definitions
+              Symbolic_declaration_private.seal
+                ~imported_definitions:
+                  (imported.imported_callables
+                  |> List.filter_map (fun imported ->
+                         if
+                           Symbolic_declaration_private.is_symbolic
+                             imported.imported_definition
+                         then Some imported.imported_definition
+                         else None))
+                ~program:authenticated
               |> Result.map_error (fun message ->
                      Diagnostic.make
                        (Diagnostic.Invalid_symbolic_authentication message)
@@ -13138,25 +14975,30 @@ module Public = struct
                 ~scan:broadcast_scan ~program:authenticated
                 ~sources:(broadcast_sources functions)
                 ~imported_declarations:
-                  (imported.imported_callables
-                  |> List.filter_map (fun callable ->
-                         Option.map
-                           (fun trigger_span ->
-                             {
-                               Broadcast.imported_path = callable.imported_path;
-                               imported_definition =
-                                 callable.imported_definition;
-                               imported_trigger_span = trigger_span;
-                             })
-                           callable.imported_broadcast_trigger_span))
+                  (List.map
+                     (fun declaration ->
+                       {
+                         Broadcast.imported_identity =
+                           declaration.imported_broadcast_identity;
+                         imported_definition =
+                           declaration.imported_broadcast_definition;
+                         imported_trigger_span =
+                           declaration.imported_broadcast_trigger_span;
+                         imported_kind =
+                           (match declaration.imported_broadcast_trust with
+                           | Retained_broadcast_private.Proved ->
+                               Broadcast.Proved_lemma
+                           | Retained_broadcast_private.Trusted ->
+                               Broadcast.Trusted_axiom);
+                       })
+                     imported.imported_broadcast_declarations)
                 ~imported_groups:
                   (List.map
                      (fun group ->
                        {
-                         Broadcast.imported_group_path =
-                           group.imported_broadcast_group_path;
-                         imported_target_paths =
-                           group.imported_broadcast_target_paths;
+                         Broadcast.imported_group_identity =
+                           group.imported_broadcast_group_identity;
+                         imported_members = group.imported_broadcast_members;
                        })
                      imported.imported_broadcast_groups)
             in

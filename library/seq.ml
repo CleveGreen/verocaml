@@ -1,26 +1,26 @@
 (** Immutable mathematical sequences for specifications and proofs.
  *)
 
-type +'a t = private Sequence_token of int
+type +'a t = private Sequence_token of Int.t
 
 [%%verocaml.symbolic val empty : 'a t]
-[%%verocaml.symbolic val init : int -> (int -> 'a) -> 'a t]
-[%%verocaml.symbolic val length : 'a t -> int]
-[%%verocaml.symbolic val get : 'a t -> int -> 'a]
+[%%verocaml.symbolic val init : Int.t -> (Int.t -> 'a) -> 'a t]
+[%%verocaml.symbolic val length : 'a t -> Int.t]
+[%%verocaml.symbolic val get : 'a t -> Int.t -> 'a]
 [%%verocaml.symbolic val push : 'a t -> 'a -> 'a t]
-[%%verocaml.symbolic val update : 'a t -> int -> 'a -> 'a t]
-[%%verocaml.symbolic val subrange : 'a t -> int -> int -> 'a t]
+[%%verocaml.symbolic val update : 'a t -> Int.t -> 'a -> 'a t]
+[%%verocaml.symbolic val subrange : 'a t -> Int.t -> Int.t -> 'a t]
 [%%verocaml.symbolic val append : 'a t -> 'a t -> 'a t]
 
-let valid_length (size : int) : bool =
+let valid_length (size : Int.t) : bool =
   0 <= size
 [@@verocaml.spec]
 
-let valid_index (sequence : 'a t) (index : int) : bool =
+let valid_index (sequence : 'a t) (index : Int.t) : bool =
   0 <= index && index < length sequence
 [@@verocaml.spec]
 
-let valid_subrange (sequence : 'a t) (lower : int) (upper : int) : bool =
+let valid_subrange (sequence : 'a t) (lower : Int.t) (upper : Int.t) : bool =
   0 <= lower && lower <= upper && upper <= length sequence
 [@@verocaml.spec]
 
@@ -40,27 +40,27 @@ let singleton (value : 'a) : 'a t =
   push empty value
 [@@verocaml.spec]
 
-let take (sequence : 'a t) (count : int) : 'a t =
+let take (sequence : 'a t) (count : Int.t) : 'a t =
   subrange sequence 0 count
 [@@verocaml.spec]
 
-let drop (sequence : 'a t) (count : int) : 'a t =
+let drop (sequence : 'a t) (count : Int.t) : 'a t =
   subrange sequence count (length sequence)
 [@@verocaml.spec]
 
-let skip (sequence : 'a t) (count : int) : 'a t =
+let skip (sequence : 'a t) (count : Int.t) : 'a t =
   drop sequence count
 [@@verocaml.spec]
 
 let ext_equal (left : 'a t) (right : 'a t) : bool =
   length left = length right
-  && forall (fun (index : int) ->
+  && forall (fun (index : Int.t) ->
          (not (valid_index left index))
          || ((get left index) [@trigger]) = get right index)
 [@@verocaml.spec]
 
 let contains (sequence : 'a t) (value : 'a) : bool =
-  exists (fun (index : int) ->
+  exists (fun (index : Int.t) ->
       valid_index sequence index
       && get sequence index = value)
 [@@verocaml.spec]
@@ -74,7 +74,7 @@ let axiom_length_domain (sequence : 'a t) : unit =
 [@@verocaml.axiom]
 [@@verocaml.broadcast]
 
-let axiom_init_length (size : int) (constructor : int -> 'a) : unit =
+let axiom_init_length (size : Int.t) (constructor : Int.t -> 'a) : unit =
   [%verocaml.requires valid_length size];
   [%verocaml.ensures
     fun _ -> length (init size constructor) [@trigger] = size];
@@ -83,9 +83,9 @@ let axiom_init_length (size : int) (constructor : int -> 'a) : unit =
 [@@verocaml.broadcast]
 
 let axiom_init_get
-    (size : int)
-    (constructor : int -> 'a)
-    (index : int) : unit =
+    (size : Int.t)
+    (constructor : Int.t -> 'a)
+    (index : Int.t) : unit =
   [%verocaml.requires valid_length size];
   [%verocaml.requires 0 <= index && index < size];
   [%verocaml.ensures
@@ -111,7 +111,7 @@ let axiom_push_get_last (sequence : 'a t) (value : 'a) : unit =
 let axiom_push_get_old
     (sequence : 'a t)
     (value : 'a)
-    (index : int) : unit =
+    (index : Int.t) : unit =
   [%verocaml.requires valid_index sequence index];
   [%verocaml.ensures
     fun _ -> get (push sequence value) index [@trigger] = get sequence index];
@@ -121,7 +121,7 @@ let axiom_push_get_old
 
 let axiom_update_length
     (sequence : 'a t)
-    (index : int)
+    (index : Int.t)
     (value : 'a) : unit =
   [%verocaml.requires valid_index sequence index];
   [%verocaml.ensures
@@ -132,7 +132,7 @@ let axiom_update_length
 
 let axiom_update_get_same
     (sequence : 'a t)
-    (index : int)
+    (index : Int.t)
     (value : 'a) : unit =
   [%verocaml.requires valid_index sequence index];
   [%verocaml.ensures
@@ -143,9 +143,9 @@ let axiom_update_get_same
 
 let axiom_update_get_other
     (sequence : 'a t)
-    (updated_index : int)
+    (updated_index : Int.t)
     (value : 'a)
-    (observed_index : int) : unit =
+    (observed_index : Int.t) : unit =
   [%verocaml.requires valid_index sequence updated_index];
   [%verocaml.requires valid_index sequence observed_index];
   [%verocaml.requires observed_index <> updated_index];
@@ -159,8 +159,8 @@ let axiom_update_get_other
 
 let axiom_subrange_length
     (sequence : 'a t)
-    (lower : int)
-    (upper : int) : unit =
+    (lower : Int.t)
+    (upper : Int.t) : unit =
   [%verocaml.requires valid_subrange sequence lower upper];
   [%verocaml.ensures
     fun _ -> length (subrange sequence lower upper) [@trigger] = upper - lower];
@@ -170,9 +170,9 @@ let axiom_subrange_length
 
 let axiom_subrange_get
     (sequence : 'a t)
-    (lower : int)
-    (upper : int)
-    (index : int) : unit =
+    (lower : Int.t)
+    (upper : Int.t)
+    (index : Int.t) : unit =
   [%verocaml.requires valid_subrange sequence lower upper];
   [%verocaml.requires 0 <= index && index < upper - lower];
   [%verocaml.ensures
@@ -193,7 +193,7 @@ let axiom_append_length (left : 'a t) (right : 'a t) : unit =
 let axiom_append_get_left
     (left : 'a t)
     (right : 'a t)
-    (index : int) : unit =
+    (index : Int.t) : unit =
   [%verocaml.requires valid_index left index];
   [%verocaml.ensures
     fun _ -> get (append left right) index [@trigger] = get left index];
@@ -204,7 +204,7 @@ let axiom_append_get_left
 let axiom_append_get_right
     (left : 'a t)
     (right : 'a t)
-    (index : int) : unit =
+    (index : Int.t) : unit =
   [%verocaml.requires length left <= index];
   [%verocaml.requires index < length left + length right];
   [%verocaml.ensures

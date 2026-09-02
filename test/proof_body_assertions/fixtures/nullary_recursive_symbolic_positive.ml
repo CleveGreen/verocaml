@@ -6,7 +6,7 @@ let rec spec_index_alt_imp (idx : int) (nodes : int node) : int node =
   | Empty -> Empty
   | Node (value, rest) ->
       if idx <= 0 then Node (value, Empty)
-      else spec_index_alt_imp (idx - 1) rest
+      else spec_index_alt_imp idx rest
 [@@verocaml.spec] [@@verocaml.revealed]
 
 let lemma_index_empty (idx : int) (nodes : int node [@finite]) =

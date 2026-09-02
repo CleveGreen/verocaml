@@ -208,13 +208,13 @@ let require_zero_delta label before after =
   require (before = after)
     "%s advanced driver, pipeline, backend, solver, or Z3 work" label
 
-let classify_ineligible label types definition =
+let classify_ineligible label ~result_mode types definition =
   reset ();
   let before = observations () in
   let classification =
     Retained_exec_result_private.classify ~provider ~types ~parametric_adts:[]
       ~resolved_path:definition.Sst.function_id.function_name
-      ~binding_uid:"Provider.callable.uid" ~definition ~model:None
+      ~binding_uid:"Provider.callable.uid" ~definition ~result_mode ~model:None
   in
   let after = observations () in
   require_zero_delta label before after;
@@ -233,6 +233,7 @@ let classify_closure_matrix () =
   let shared_field = field ~uniqueness:Sst.Force_aliased shared_id in
   let shared_definition = type_definition shared_id shared_field in
   classify_ineligible "closure-unsupported-shared"
+    ~result_mode:Sst.Exec_instance
     [
       provider_type shared_definition
         [ (shared_field.field_id, Sst.Exec_instance) ];
@@ -241,11 +242,11 @@ let classify_closure_matrix () =
   let incomplete_id = type_id 101 "incomplete_result" in
   let incomplete_field = field incomplete_id in
   let incomplete_definition = type_definition incomplete_id incomplete_field in
-  classify_ineligible "closure-incomplete"
+  classify_ineligible "closure-incomplete" ~result_mode:Sst.Exec_instance
     [ provider_type incomplete_definition [] ]
     (checked_definition 101 "Provider.make_incomplete" incomplete_id);
   let foreign_id = type_id 102 "Foreign.result" in
-  classify_ineligible "closure-foreign" []
+  classify_ineligible "closure-foreign" ~result_mode:Sst.Exec_instance []
     (checked_definition 102 "Provider.make_foreign" foreign_id);
   let malformed_id = type_id 103 "malformed_result" in
   let malformed_field =

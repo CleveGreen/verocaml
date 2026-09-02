@@ -27,6 +27,29 @@ type error =
   | Pipeline_error of Verification_pipeline.error
   | Internal_error of string
 
+let driver_error_of_pipeline_error = function
+  | Verification_pipeline.Engine_error
+      {
+        Symbolic_executor_private.unsupported = Missing_decreases;
+        function_name;
+        span;
+      } ->
+      let detail =
+        Printf.sprintf
+          "Recursive function %S needs one decreases clause. Add [%%verocaml.decreases ...] at the beginning of its body."
+          function_name
+      in
+      [%log.debug "routed resolved recursive rank failure to frontend diagnostic"
+        ~stage:(Delator.Field.string "termination-correlation")
+        ~route:(Delator.Field.string "resolved-call-scc")
+        ~failure_class:(Delator.Field.string "missing-measure")
+        ~diagnostic_code:
+          (Delator.Field.string "VERO_INVALID_RECURSIVE_RANK")
+        ~decision:(Delator.Field.string "frontend-rejection")];
+      Frontend_error
+        (Diagnostic.make (Diagnostic.Invalid_recursive_rank detail) span)
+  | error -> Pipeline_error error
+
 let render_semantic_sst program validated =
   String.concat "\n"
     [
@@ -109,7 +132,8 @@ let run_with_policy ~solver_policy ~allow_imported_opens
               let preflight = ref None in
               let run_preflight () =
                 match
-                  Verification_solver_private.preflight ~solver_policy program
+                  Verification_solver_private.preflight_validated ~solver_policy
+                    validated
                 with
                 | Error error -> Error error
                 | Ok prepared ->
@@ -181,8 +205,8 @@ let run_with_policy ~solver_policy ~allow_imported_opens
                                   validated;
                                   completion = None;
                                 }
-                          | None -> Error (Pipeline_error error))
-                      | None -> Error (Pipeline_error error))
+                          | None -> Error (driver_error_of_pipeline_error error))
+                      | None -> Error (driver_error_of_pipeline_error error))
                   | Ok outcome ->
                       let completion =
                         match outcome.status with
@@ -287,7 +311,8 @@ let run_with_policy_threaded ~threads ~solver_policy ~allow_imported_opens
               let preflight = ref None in
               let run_preflight () =
                 match
-                  Verification_solver_private.preflight ~solver_policy program
+                  Verification_solver_private.preflight_validated ~solver_policy
+                    validated
                 with
                 | Error error -> Error error
                 | Ok prepared ->
@@ -371,8 +396,8 @@ let run_with_policy_threaded ~threads ~solver_policy ~allow_imported_opens
                                   validated;
                                   completion = None;
                                 }
-                          | None -> Error (Pipeline_error error))
-                      | None -> Error (Pipeline_error error))
+                          | None -> Error (driver_error_of_pipeline_error error))
+                      | None -> Error (driver_error_of_pipeline_error error))
                   | Ok outcome ->
                       let completion =
                         match outcome.status with

@@ -22,16 +22,6 @@
    %{targets}
    (echo "let ready = ()"))))
 
-(cram
- (deps
-  function_vc_dispatch_tool.exe
-  (glob_files fixtures/*.ml)
-  ../private_receipt/fixtures/local_positive.ml
-  ../private_receipt/fixtures/failing_callee.ml
-  ../recursive_specifications/fixtures/structural_positive.ml
-  ../../ppx/vero_ppx.exe
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
-
 (alias
  (name function-vc-dispatch-check)
  (deps

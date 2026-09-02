@@ -7,6 +7,11 @@ val preflight :
   Sst.program ->
   (preflight, Verification_pipeline.setup_error) result
 
+val preflight_validated :
+  solver_policy:Solver_policy_private.t ->
+  Sst_validation.validated_program ->
+  (preflight, Verification_pipeline.setup_error) result
+
 val termination_obligations : preflight -> int
 val terminal_result : preflight -> Solver_backend.obligation_result option
 val preservation_capabilities :

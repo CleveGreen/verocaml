@@ -49,19 +49,6 @@
  (action
   (run %{validator} %{report} %{archive})))
 
-(cram
- (alias verifier-service-specialist-check)
- (runtest_alias false)
- (deps
-  verifier_service_tool.exe
-  ../private_receipt/fixtures/local_positive.ml
-  ../private_receipt/fixtures/failing_callee.ml
-  ../trusted_external_bodies/fixtures/positive.ml
-  ../verified_interfaces/fixtures/model_dependency.ml
-  ../verified_interfaces/fixtures/model_consumer.ml
-  ../../ppx/vero_ppx.exe
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
-
 (alias
  (name verifier-service-check)
  (deps

@@ -78,6 +78,8 @@ let rec term_contains_successor term =
       || term_contains_successor else_
   | Negate value | Not value | Scale (_, value) ->
       term_contains_successor value
+  | Multiply (left, right) ->
+      term_contains_successor left || term_contains_successor right
   | And values | Or values -> List.exists term_contains_successor values
   | Forall_term quantifier | Exists_term quantifier ->
       term_contains_successor

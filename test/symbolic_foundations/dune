@@ -1,0 +1,73 @@
+(rule
+ (targets symbolic_foundations_prerequisites.ml)
+ (deps
+ ../../src/.verocaml_core.objs/byte/function_vc_worker_private.cmi
+  ../../src/.verocaml_core.objs/byte/broadcast_vc_private.cmi
+  ../../src/.verocaml_core.objs/byte/imported_callable.cmi
+  ../../src/.verocaml_core.objs/byte/recursive_spec_encoding.cmi
+  ../../src/.verocaml_core.objs/byte/solver_backend_counter_private.cmi
+  ../../src/.verocaml_core.objs/byte/solver_policy_private.cmi
+  ../../src/.verocaml_core.objs/byte/symbolic_application_collision_testing_private.cmi
+  ../../src/.verocaml_core.objs/byte/symbolic_application_private.cmi
+  ../../src/.verocaml_core.objs/byte/symbolic_executor_private.cmi
+  ../../src/.verocaml_core.objs/byte/verification_pipeline.cmi
+  ../../src/.verocaml_core.objs/byte/verification_solver_private.cmi
+  ../../src/.verocaml_core.objs/byte/vir_logic_ir_translation_private.cmi
+  ../../src/.verocaml_core.objs/byte/z3_bridge.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules
+  outcome_cases
+  symbolic_foundations_prerequisites
+  integration_environment)
+ (flags (:standard -opaque -I src/.verocaml_core.objs/byte))
+ (libraries
+  outcome_test_support
+  verocaml_core
+  vero_ppx_rewriter
+  compiler-libs.common
+  delator
+  unix))
+
+(rule
+ (targets
+  symbolic-foundations-outcome-cases.result-report
+  symbolic-foundations-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   symbolic-foundations-outcome-cases.result-report
+   symbolic-foundations-outcome-cases.failure-archive)))
+
+(rule
+ (alias symbolic-foundations-outcome-check)
+ (deps
+  (:report symbolic-foundations-outcome-cases.result-report)
+  (:archive symbolic-foundations-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
+(alias
+ (name runtest)
+ (deps (alias symbolic-foundations-outcome-check)))

@@ -2,8 +2,50 @@
  (name ppx_driver_observability_tool)
  (libraries vero_ppx_driver compiler-libs.common))
 
-(cram
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
  (deps
-  (glob_files fixtures/*)
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases integration_environment)
+ (libraries outcome_test_support unix))
+
+(rule
+ (targets
+  ppx-observability-outcome-cases.result-report
+  ppx-observability-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+  (:suite outcome_cases.exe)
   ppx_driver_observability_tool.exe
-  ../../ppx/vero_ppx.exe))
+  (glob_files fixtures/*)
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   ppx-observability-outcome-cases.result-report
+   ppx-observability-outcome-cases.failure-archive)))
+
+(rule
+ (alias ppx-observability-outcome-check)
+ (deps
+  (:report ppx-observability-outcome-cases.result-report)
+  (:archive ppx-observability-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
+(alias
+ (name runtest)
+ (deps
+  (alias ppx-observability-outcome-check)))

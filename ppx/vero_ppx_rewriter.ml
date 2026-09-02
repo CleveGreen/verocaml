@@ -2,6 +2,8 @@ open Ast_helper
 open Asttypes
 open Parsetree
 
+module String_set = Set.Make (String)
+
 type contract = Requires | Ensures | Decreases | Assert
 
 let configure_observability () =
@@ -9,13 +11,6 @@ let configure_observability () =
   match Sys.getenv_opt "DELATOR_LOG" with
   | None | Some "" -> Delator.set_default_level Delator.Warn
   | Some _ -> ()
-
-let keep_ghost_of_arguments = function
-  | [] -> false
-  | [ "--keep-ghost" ] -> true
-  | _ ->
-      invalid_arg
-        "verocaml-ppx accepts only the optional --keep-ghost argument"
 
 let rewrite_root_structure_phase
     ~keep_ghost:(keep_ghost [@delator.field Bool.to_string])
@@ -54,6 +49,8 @@ let type_invariant_attribute = "verocaml.type_invariant"
 let external_specification_attribute = "verocaml.external_specification"
 let external_type_specification_attribute =
   "verocaml.external_type_specification"
+let logical_sort_attribute = "verocaml.logical_sort"
+let integer_literal_attribute = "verocaml.integer_literal"
 let external_body_attribute = "verocaml.external_body"
 let opaque_attribute = "verocaml.opaque"
 let revealed_attribute = "verocaml.revealed"
@@ -69,6 +66,8 @@ let verification_scope_prefix = internal_prefix ^ "verification_scope."
 let explicit_compiler_mode_marker = internal_prefix ^ "compiler_mode_syntax"
 let external_type_specification_marker =
   internal_prefix ^ "external_type_specification.v1"
+let logical_sort_marker = internal_prefix ^ "logical_sort.mathematical_int.v1"
+let integer_literal_marker = internal_prefix ^ "logical_sort.integer_literal.v1"
 
 type declaration_role = {
   attribute_name : string;
@@ -93,6 +92,14 @@ type instance_stage =
   | Spec_stage
   | Proof_stage
   | Recursive_proof_stage
+
+type ppx_issuer = Standalone_issuer | Ppxlib_issuer
+
+type entrypoint = Implementation | Interface
+
+let ppx_issuer_name = function
+  | Standalone_issuer -> "standalone-v1"
+  | Ppxlib_issuer -> "ppxlib-v1"
 
 let instance_mode_name = function
   | Tracked_mode -> "tracked"
@@ -177,9 +184,24 @@ let internal_finite_formal_attribute ~index ~loc =
   internal_attribute ~loc
     (Printf.sprintf "%s%d" internal_finite_formal_prefix index)
 
-let family_attribute ~keep_ghost ~loc =
-  internal_attribute ~loc
-    (family_prefix ^ (if keep_ghost then "retained-v1" else "ordinary-v1"))
+let family_attribute ~keep_ghost ~issuer ~loc =
+  let family = if keep_ghost then "retained-v1" else "ordinary-v1" in
+  let attribute = internal_attribute ~loc (family_prefix ^ family) in
+  let loc = { loc with Location.loc_ghost = true } in
+  let receipt =
+    String.concat "|"
+      [ "v1"; "issuer=verocaml.ppx"; "route=" ^ ppx_issuer_name issuer;
+        "family=" ^ family ]
+  in
+  {
+    attribute with
+    attr_payload =
+      PStr
+        [
+          Str.eval ~loc
+            (Exp.constant ~loc (Pconst_string (receipt, loc, None)));
+        ];
+  }
 
 let verification_scope_marker ~loc =
   internal_attribute ~loc (verification_scope_prefix ^ "marked-v1")
@@ -189,6 +211,12 @@ let explicit_compiler_mode_attribute ~loc =
 
 let retained_external_type_specification_attribute ~loc =
   internal_attribute ~loc external_type_specification_marker
+
+let retained_logical_sort_attribute ~loc =
+  internal_attribute ~loc logical_sort_marker
+
+let retained_integer_literal_attribute ~loc =
+  internal_attribute ~loc integer_literal_marker
 
 let public_verification_scope attribute =
   String.equal attribute.attr_name.txt verification_scope_attribute
@@ -1536,7 +1564,7 @@ let retained_proof_region_mapper ~keep_ghost () =
   in
   mapper
 
-let instance_mode_mapper ~keep_ghost =
+let instance_mode_mapper ~keep_ghost ~issuer =
   let default = Ast_mapper.default_mapper in
   let current_stage = ref Exec_stage in
   let declaration_function = ref false in
@@ -1559,7 +1587,10 @@ let instance_mode_mapper ~keep_ghost =
       default with
       attribute =
         (fun self attribute ->
-          reject_reserved_attribute attribute;
+          if
+            not
+              (Vero_ppx_symbolic_private.issued_interface_attribute attribute)
+          then reject_reserved_attribute attribute;
           if public_verification_scope attribute then
             Location.raise_errorf ~loc:attribute.attr_loc
               "[@@@%s] is only valid at implementation-unit scope"
@@ -1576,6 +1607,23 @@ let instance_mode_mapper ~keep_ghost =
               let bindings, erased_results =
                 List.map
                   (fun binding ->
+                    let integer_literals, binding_attributes =
+                      List.partition
+                        (fun attribute ->
+                          String.equal attribute.attr_name.txt
+                            integer_literal_attribute)
+                        binding.pvb_attributes
+                    in
+                    List.iter validate_empty_attribute integer_literals;
+                    let integer_literal =
+                      match integer_literals with
+                      | [] -> false
+                      | [ _ ] -> true
+                      | duplicate :: _ ->
+                          Location.raise_errorf ~loc:duplicate.attr_loc
+                            "duplicate [@@%s] attribute"
+                            integer_literal_attribute
+                    in
                     let declaration_modes =
                       declaration_expression_modes binding.pvb_expr
                     in
@@ -1583,7 +1631,7 @@ let instance_mode_mapper ~keep_ghost =
                       declaration_expression_finite_formals binding.pvb_expr
                     in
                     let role =
-                      role_attributes binding.pvb_attributes
+                      role_attributes binding_attributes
                       |> function
                       | [] -> None
                       | attribute :: _ ->
@@ -1598,7 +1646,7 @@ let instance_mode_mapper ~keep_ghost =
                       | Some _ | None -> false
                     in
                     let mode, attributes =
-                      split_instance_mode_attributes binding.pvb_attributes
+                      split_instance_mode_attributes binding_attributes
                     in
                     if Option.is_some mode then
                       Location.raise_errorf ~loc:binding.pvb_loc
@@ -1627,7 +1675,8 @@ let instance_mode_mapper ~keep_ghost =
                         pvb_pat = self.pat self binding.pvb_pat;
                         pvb_expr = expression;
                         pvb_attributes =
-                          family_attribute ~keep_ghost ~loc:binding.pvb_loc
+                          family_attribute ~keep_ghost ~issuer
+                            ~loc:binding.pvb_loc
                           ::
                           (if keep_ghost then
                              mode_signature_attribute ~loc:binding.pvb_loc
@@ -1635,7 +1684,21 @@ let instance_mode_mapper ~keep_ghost =
                              :: finite_signature_attribute ~loc:binding.pvb_loc
                                   declaration_finite_formals
                              ::
-                             (if explicit_compiler_mode_syntax then
+                             (if integer_literal then (
+                                [%log.debug
+                                  "issued retained integer-literal callable marker"
+                                  ~stage:
+                                    (Delator.Field.string
+                                       "logical-sort-marker")
+                                  ~route:
+                                    (Delator.Field.string
+                                       "implementation-value")
+                                  ~decision:
+                                    (Delator.Field.string "accepted")];
+                                retained_integer_literal_attribute
+                                  ~loc:binding.pvb_loc
+                                :: self.attributes self attributes)
+                              else if explicit_compiler_mode_syntax then
                                 explicit_compiler_mode_attribute
                                   ~loc:binding.pvb_loc
                                 :: self.attributes self attributes
@@ -1658,7 +1721,7 @@ let instance_mode_mapper ~keep_ghost =
                   item with
                   pstr_desc =
                     Pstr_attribute
-                      (family_attribute ~keep_ghost ~loc:item.pstr_loc);
+                      (family_attribute ~keep_ghost ~issuer ~loc:item.pstr_loc);
                 })
               else { item with pstr_desc = Pstr_value (rec_flag, bindings) }
           | Pstr_type (rec_flag, declarations) ->
@@ -1672,7 +1735,7 @@ let instance_mode_mapper ~keep_ghost =
                   item with
                   pstr_desc =
                     Pstr_attribute
-                      (family_attribute ~keep_ghost ~loc:item.pstr_loc);
+                      (family_attribute ~keep_ghost ~issuer ~loc:item.pstr_loc);
                 }
               else { item with pstr_desc = Pstr_type (rec_flag, declarations) }
           | _ -> default.structure_item self item);
@@ -1680,7 +1743,23 @@ let instance_mode_mapper ~keep_ghost =
         (fun self item ->
           match item.psig_desc with
           | Psig_value value ->
-              let attributes = self.attributes self value.pval_attributes in
+              let integer_literals, source_attributes =
+                List.partition
+                  (fun attribute ->
+                    String.equal attribute.attr_name.txt
+                      integer_literal_attribute)
+                  value.pval_attributes
+              in
+              List.iter validate_empty_attribute integer_literals;
+              let integer_literal =
+                match integer_literals with
+                | [] -> false
+                | [ _ ] -> true
+                | duplicate :: _ ->
+                    Location.raise_errorf ~loc:duplicate.attr_loc
+                      "duplicate [@@%s] attribute" integer_literal_attribute
+              in
+              let attributes = self.attributes self source_attributes in
               let external_bodies = external_body_attributes attributes in
               if external_bodies <> [] then
                 Location.raise_errorf
@@ -1721,7 +1800,7 @@ let instance_mode_mapper ~keep_ghost =
                   item with
                   psig_desc =
                     Psig_attribute
-                      (family_attribute ~keep_ghost ~loc:item.psig_loc);
+                      (family_attribute ~keep_ghost ~issuer ~loc:item.psig_loc);
                 }
               else
                 {
@@ -1732,13 +1811,30 @@ let instance_mode_mapper ~keep_ghost =
                         value with
                         pval_type = typ;
                         pval_attributes =
-                          family_attribute ~keep_ghost ~loc:value.pval_loc
+                          family_attribute ~keep_ghost ~issuer
+                            ~loc:value.pval_loc
                           :: mode_signature_attribute ~loc:value.pval_loc modes
                           ::
                           (if keep_ghost then
-                             retain_or_issue_finite_signature
-                               ~loc:value.pval_loc ~finite_formals attributes
-                             :: without_finite_signature attributes
+                             let attributes =
+                               retain_or_issue_finite_signature
+                                 ~loc:value.pval_loc ~finite_formals attributes
+                               :: without_finite_signature attributes
+                             in
+                             if integer_literal then (
+                               [%log.debug
+                                 "issued retained integer-literal callable marker"
+                                 ~stage:
+                                   (Delator.Field.string
+                                      "logical-sort-marker")
+                                 ~route:
+                                   (Delator.Field.string "interface-value")
+                                 ~decision:
+                                   (Delator.Field.string "accepted")];
+                               retained_integer_literal_attribute
+                                 ~loc:value.pval_loc
+                               :: attributes)
+                             else attributes
                            else without_finite_signature attributes);
                       };
                 }
@@ -1753,7 +1849,7 @@ let instance_mode_mapper ~keep_ghost =
                   item with
                   psig_desc =
                     Psig_attribute
-                      (family_attribute ~keep_ghost ~loc:item.psig_loc);
+                      (family_attribute ~keep_ghost ~issuer ~loc:item.psig_loc);
                 }
               else { item with psig_desc = Psig_type (rec_flag, declarations) }
           | _ -> default.signature_item self item);
@@ -1782,7 +1878,14 @@ let instance_mode_mapper ~keep_ghost =
             external_type_specification_attribute)
         declaration.ptype_attributes
     in
+    let logical_sorts, declaration_attributes =
+      List.partition
+        (fun attribute ->
+          String.equal attribute.attr_name.txt logical_sort_attribute)
+        declaration_attributes
+    in
     List.iter validate_empty_attribute external_type_specifications;
+    List.iter validate_empty_attribute logical_sorts;
     let external_type_specification =
       match external_type_specifications with
       | [] -> false
@@ -1792,6 +1895,18 @@ let instance_mode_mapper ~keep_ghost =
             "duplicate [@@%s] attribute"
             external_type_specification_attribute
     in
+    let logical_sort =
+      match logical_sorts with
+      | [] -> false
+      | [ _ ] -> true
+      | duplicate :: _ ->
+          Location.raise_errorf ~loc:duplicate.attr_loc
+            "duplicate [@@%s] attribute" logical_sort_attribute
+    in
+    if external_type_specification && logical_sort then
+      Location.raise_errorf ~loc:declaration.ptype_loc
+        "[@@%s] and [@@%s] cannot describe the same declaration"
+        external_type_specification_attribute logical_sort_attribute;
     let () =
       if external_type_specification then
         let direct_parameter argument =
@@ -1820,6 +1935,24 @@ let instance_mode_mapper ~keep_ghost =
             "[@@%s] requires a public transparent type alias whose target uses \
              each declared type parameter once in declaration order"
             external_type_specification_attribute
+    in
+    let () =
+      if logical_sort then
+        match declaration.ptype_manifest with
+        | Some { ptyp_desc = Ptyp_constr (_, []); _ }
+          when declaration.ptype_kind = Ptype_abstract
+               && declaration.ptype_private = Public
+               && declaration.ptype_params = []
+               && declaration.ptype_cstrs = [] ->
+            [%log.debug "issued retained logical-sort type marker"
+              ~stage:(Delator.Field.string "logical-sort-marker")
+              ~route:(Delator.Field.string "type-declaration")
+              ~keep_ghost:(Delator.Field.bool keep_ghost)
+              ~decision:(Delator.Field.string "accepted")]
+        | Some _ | None ->
+            Location.raise_errorf ~loc:declaration.ptype_loc
+              "[@@%s] requires a public, parameter-free transparent type alias"
+              logical_sort_attribute
     in
     let rewrite_label label =
       List.iter reject_reserved_attribute label.pld_attributes;
@@ -1897,7 +2030,7 @@ let instance_mode_mapper ~keep_ghost =
           declaration with
           ptype_kind;
           ptype_attributes =
-            family_attribute ~keep_ghost ~loc:declaration.ptype_loc
+            family_attribute ~keep_ghost ~issuer ~loc:declaration.ptype_loc
             ::
             (if keep_ghost then
                type_mode_signature_attribute declaration
@@ -1905,6 +2038,9 @@ let instance_mode_mapper ~keep_ghost =
                (if external_type_specification then
                   retained_external_type_specification_attribute
                     ~loc:declaration.ptype_loc
+                  :: self.attributes self declaration_attributes
+                else if logical_sort then
+                  retained_logical_sort_attribute ~loc:declaration.ptype_loc
                   :: self.attributes self declaration_attributes
                 else self.attributes self declaration_attributes)
              else self.attributes self declaration_attributes);
@@ -2374,16 +2510,215 @@ let rewrite_expression_extensions ~keep_ghost ~logical_scope
             "unsupported verocaml extension %%%s" name
       | _ -> default.expr self expression)
 
-let make (arguments [@delator.skip]) =
+let erased_declaration_names structure =
+  List.fold_left
+    (fun names item ->
+      match item.pstr_desc with
+      | Pstr_value (_, bindings) ->
+          List.fold_left
+            (fun names binding ->
+              match
+                role_attributes binding.pvb_attributes
+                |> List.filter_map (fun attribute ->
+                       declaration_role attribute.attr_name.txt)
+              with
+              | role :: _ when not role.preserve_ordinary_body ->
+                  String_set.add (binding_name role binding).txt names
+              | [] | _ -> names)
+            names bindings
+      | _ -> names)
+    String_set.empty structure
+
+let rec module_structure expression =
+  match expression.pmod_desc with
+  | Pmod_structure structure -> Some structure
+  | Pmod_constraint (expression, _, _) -> module_structure expression
+  | _ -> None
+
+let local_module_type_name module_type =
+  match module_type.pmty_desc with
+  | Pmty_ident { txt = Longident.Lident name; _ } -> Some name
+  | _ -> None
+
+let rewrite_signature_declarations ~issuer ~erased signature =
+  let erased_count = ref 0 in
+  let psg_items =
+    List.map
+      (fun item ->
+        match item.psig_desc with
+        | Psig_value value when String_set.mem value.pval_name.txt erased ->
+            incr erased_count;
+            {
+              item with
+              psig_desc =
+                Psig_attribute
+                  (family_attribute ~keep_ghost:false ~issuer
+                     ~loc:item.psig_loc);
+            }
+        | _ -> item)
+      signature.psg_items
+  in
+  ({ signature with psg_items }, !erased_count)
+
+let align_ordinary_module_signatures ~issuer structure =
+  let requirements = Hashtbl.create 4 in
+  let record_requirement name erased =
+    if not (String_set.is_empty erased) then
+      Hashtbl.replace requirements name
+        (erased :: Option.value ~default:[] (Hashtbl.find_opt requirements name))
+  in
+  let inspect_binding binding =
+    match binding.pmb_expr.pmod_desc with
+    | Pmod_constraint (implementation, Some module_type, _) ->
+        Option.iter
+          (fun name ->
+            Option.iter
+              (fun body ->
+                record_requirement name (erased_declaration_names body))
+              (module_structure implementation))
+          (local_module_type_name module_type)
+    | Pmod_constraint (_, None, _) | _ -> ()
+  in
+  List.iter
+    (fun item ->
+      match item.pstr_desc with
+      | Pstr_module binding -> inspect_binding binding
+      | Pstr_recmodule bindings -> List.iter inspect_binding bindings
+      | _ -> ())
+    structure;
+  let required_erasure name =
+    match Hashtbl.find_opt requirements name with
+    | Some (first :: rest) -> List.fold_left String_set.inter first rest
+    | Some [] | None -> String_set.empty
+  in
+  let erased_count = ref 0 in
+  let rewrite_inline_constraint expression =
+    match expression.pmod_desc with
+    | Pmod_constraint (implementation, Some module_type, modes) -> (
+        match (module_structure implementation, module_type.pmty_desc) with
+        | Some body, Pmty_signature signature ->
+            let signature, count =
+              rewrite_signature_declarations ~issuer
+                ~erased:(erased_declaration_names body)
+                signature
+            in
+            erased_count := !erased_count + count;
+            {
+              expression with
+              pmod_desc =
+                Pmod_constraint
+                  ( implementation,
+                    Some
+                      {
+                        module_type with
+                        pmty_desc = Pmty_signature signature;
+                      },
+                    modes );
+            }
+        | _ -> expression)
+    | Pmod_constraint (_, None, _) | _ -> expression
+  in
+  let rewrite_binding binding =
+    { binding with pmb_expr = rewrite_inline_constraint binding.pmb_expr }
+  in
+  let structure =
+    List.map
+      (fun item ->
+        match item.pstr_desc with
+        | Pstr_modtype declaration -> (
+            match declaration.pmtd_type with
+            | Some ({ pmty_desc = Pmty_signature signature; _ } as module_type)
+              ->
+                let signature, count =
+                  rewrite_signature_declarations ~issuer
+                    ~erased:(required_erasure declaration.pmtd_name.txt)
+                    signature
+                in
+                erased_count := !erased_count + count;
+                {
+                  item with
+                  pstr_desc =
+                    Pstr_modtype
+                      {
+                        declaration with
+                        pmtd_type =
+                          Some
+                            {
+                              module_type with
+                              pmty_desc = Pmty_signature signature;
+                            };
+                      };
+                }
+            | Some _ | None -> item)
+        | Pstr_module binding ->
+            { item with pstr_desc = Pstr_module (rewrite_binding binding) }
+        | Pstr_recmodule bindings ->
+            {
+              item with
+              pstr_desc = Pstr_recmodule (List.map rewrite_binding bindings);
+            }
+        | _ -> item)
+      structure
+  in
+  [%log.debug "aligned ordinary module signatures with erased implementations"
+    ~route:(Delator.Field.string (ppx_issuer_name issuer))
+    ~stage:(Delator.Field.string "ordinary-module-signature-erasure")
+    ~module_type_count:(Delator.Field.int (Hashtbl.length requirements))
+    ~erased_declaration_count:(Delator.Field.int !erased_count)
+    ~decision:(Delator.Field.string "completed")];
+  structure
+
+let rewrite_symbolic_signature_tree ~keep_ghost ~issuer signature =
+  let default = Ast_mapper.default_mapper in
+  let mapper =
+    {
+      default with
+      signature =
+        (fun self signature ->
+          Vero_ppx_symbolic_private.rewrite_signature ~keep_ghost
+            ~issuer:(ppx_issuer_name issuer) signature
+          |> default.signature self);
+    }
+  in
+  mapper.signature mapper signature
+
+let make ?entrypoint:_entrypoint (arguments [@delator.skip]) =
   configure_observability ();
-  let keep_ghost = keep_ghost_of_arguments arguments in
+  let keep_ghost, issuer =
+    match arguments with
+    | [] -> (false, Standalone_issuer)
+    | [ "--keep-ghost" ] -> (true, Standalone_issuer)
+    | [ "--verocaml-internal-ppxlib-v1" ] -> (false, Ppxlib_issuer)
+    | [ "--verocaml-internal-ppxlib-v1"; "--keep-ghost" ] ->
+        (true, Ppxlib_issuer)
+    | _ ->
+        invalid_arg
+          "verocaml-ppx accepts only the optional --keep-ghost argument"
+  in
   [%log.debug "construct PPX mapper"
     ~keep_ghost:(Delator.Field.bool keep_ghost)
+    ~route:(Delator.Field.string (ppx_issuer_name issuer))
+    ~family:
+      (Delator.Field.string
+         (if keep_ghost then "retained-v1" else "ordinary-v1"))
+    ~stage:(Delator.Field.string "ppx-issuance")
+    ~entrypoint:
+      (Delator.Field.string
+         (match _entrypoint with
+         | Some Implementation -> "implementation"
+         | Some Interface -> "interface"
+         | None -> "automatic"))
+    ~decision:(Delator.Field.string "selected")
     ~argument_count:(Delator.Field.int (List.length arguments))];
   let default = Ast_mapper.default_mapper in
   let root_structure = ref true in
-  let root_signature = ref true in
-  let instance_modes = instance_mode_mapper ~keep_ghost in
+  let instance_modes = instance_mode_mapper ~keep_ghost ~issuer in
+  let structure_instance_modes =
+    {
+      instance_modes with
+      Ast_mapper.signature = (fun _self signature -> signature);
+    }
+  in
   let proof_regions = retained_proof_region_mapper ~keep_ghost () in
   let function_scopes = ref [] in
   let lexical_bindings = ref [] in
@@ -2412,8 +2747,23 @@ let make (arguments [@delator.skip]) =
                 rewrite_root_structure_phase ~keep_ghost ~phase:name rewrite
                   structure
               in
-              let structure =
-                phase "normalize axiom sugar" normalize_axiom_sugar structure
+              phase "normalize axiom sugar" normalize_axiom_sugar structure)
+            else structure
+          in
+          let structure =
+            if keep_ghost then structure
+            else if is_root then
+              rewrite_root_structure_phase ~keep_ghost
+                ~phase:"align ordinary module signatures"
+                (align_ordinary_module_signatures ~issuer)
+                structure
+            else align_ordinary_module_signatures ~issuer structure
+          in
+          let structure =
+            if is_root then
+              let phase name rewrite structure =
+                rewrite_root_structure_phase ~keep_ghost ~phase:name rewrite
+                  structure
               in
               let structure =
                 phase "mark verification scope" split_root_verification_scope
@@ -2421,17 +2771,18 @@ let make (arguments [@delator.skip]) =
               in
               let structure =
                 phase "rewrite instance modes"
-                  (instance_modes.structure instance_modes)
+                  (structure_instance_modes.structure structure_instance_modes)
                   structure
               in
               phase "retain proof regions"
                 (proof_regions.structure proof_regions)
-                structure)
+                structure
             else structure
           in
           let structure =
             let rewrite =
               Vero_ppx_symbolic_private.rewrite_structure ~keep_ghost
+                ~issuer:(ppx_issuer_name issuer)
             in
             if is_root then
               rewrite_root_structure_phase ~keep_ghost
@@ -2441,6 +2792,8 @@ let make (arguments [@delator.skip]) =
           let structure =
             let rewrite =
               Vero_ppx_broadcast_private.rewrite_structure ~keep_ghost
+                ~family_attribute:(fun loc ->
+                  family_attribute ~keep_ghost ~issuer ~loc)
             in
             if is_root then
               rewrite_root_structure_phase ~keep_ghost
@@ -2456,19 +2809,22 @@ let make (arguments [@delator.skip]) =
           else rewrite structure);
       signature =
         (fun _self signature ->
-          if !root_signature then (
-            root_signature := false;
-            let signature =
-              rewrite_root_signature_phase ~keep_ghost
-                ~phase:"rewrite broadcast interfaces"
-                (Vero_ppx_broadcast_private.rewrite_signature ~keep_ghost)
-                signature
-            in
+          let signature =
             rewrite_root_signature_phase ~keep_ghost
-              ~phase:"rewrite instance modes"
-              (instance_modes.signature instance_modes)
-              signature)
-          else signature);
+              ~phase:"rewrite broadcast interfaces"
+              (Vero_ppx_broadcast_private.rewrite_signature ~keep_ghost)
+              signature
+          in
+          let signature =
+            rewrite_root_signature_phase ~keep_ghost
+              ~phase:"rewrite symbolic interfaces"
+              (rewrite_symbolic_signature_tree ~keep_ghost ~issuer)
+              signature
+          in
+          rewrite_root_signature_phase ~keep_ghost
+            ~phase:"rewrite instance modes"
+            (instance_modes.signature instance_modes)
+            signature);
       expr =
         (fun self expression ->
           match

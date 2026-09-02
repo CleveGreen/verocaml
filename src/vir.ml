@@ -63,6 +63,7 @@ and integer_term =
   | Integer_add of integer_term * integer_term
   | Integer_subtract of integer_term * integer_term
   | Integer_negate of integer_term
+  | Integer_multiply of integer_term * integer_term
   | Integer_multiply_constant of Z.t * integer_term
   | Integer_absolute_value of integer_term
   | Integer_conditional of boolean_term * integer_term * integer_term
@@ -226,7 +227,7 @@ let symbolic_application_arguments = function
 
 let symbolic_application ~aggregate_type application =
   match Symbolic_application_private.result_type application with
-  | Parametric_type.Int ->
+  | Parametric_type.Int | Parametric_type.Mathematical_int ->
       Ok (Integer_application (Integer_symbolic_application application))
   | Bool ->
       Ok (Boolean_application (Boolean_symbolic_application application))
@@ -276,7 +277,8 @@ let boolean_term_symbol_ids term =
   and integer ids = function
     | Integer_constant _ -> ids
     | Integer_symbol symbol -> add symbol ids
-    | Integer_add (left, right) | Integer_subtract (left, right) ->
+    | Integer_add (left, right) | Integer_subtract (left, right)
+    | Integer_multiply (left, right) ->
         integer (integer ids left) right
     | Integer_negate value | Integer_multiply_constant (_, value)
     | Integer_absolute_value value ->
@@ -446,6 +448,7 @@ type checked_operation =
   | Add
   | Subtract
   | Negate
+  | Multiply
   | Multiply_constant of Z.t
   | Successor
   | Predecessor
@@ -919,6 +922,9 @@ and integer_term_to_string = function
         (integer_term_to_string right)
   | Integer_negate value ->
       Printf.sprintf "(- %s)" (integer_term_to_string value)
+  | Integer_multiply (left, right) ->
+      Printf.sprintf "(* %s %s)" (integer_term_to_string left)
+        (integer_term_to_string right)
   | Integer_multiply_constant (constant, value) ->
       Printf.sprintf "(* %s %s)" (Z.to_string constant)
         (integer_term_to_string value)
@@ -1096,14 +1102,6 @@ let specification_application_name callee type_arguments arguments =
   Printf.sprintf "trigger.spec.%d.%s" callee.function_index
     (Digest.to_hex (Digest.string identity))
 
-let rec parametric_conditions term =
-  match term.parametric_desc with
-  | Parametric_symbol _ | Parametric_selector _
-  | Parametric_symbolic_application _ ->
-      []
-  | Parametric_conditional (condition, consequent, alternative) ->
-      condition :: parametric_conditions consequent @ parametric_conditions alternative
-
 let rank_term_to_string term =
   Printf.sprintf "(rank[%s] %s)" term.rank_term_domain.rank_id
     (aggregate_term_to_string term.rank_term_value)
@@ -1155,7 +1153,8 @@ and integer_has_recursive_specification = function
   | Integer_symbolic_application application ->
       List.exists argument_has_recursive_specification
         (Symbolic_application_private.arguments application)
-  | Integer_add (left, right) | Integer_subtract (left, right) ->
+  | Integer_add (left, right) | Integer_subtract (left, right)
+  | Integer_multiply (left, right) ->
       integer_has_recursive_specification left
       || integer_has_recursive_specification right
   | Integer_negate value | Integer_multiply_constant (_, value)
@@ -1201,6 +1200,9 @@ and boolean_has_recursive_specification = function
       parametric_has_recursive_specification left
       || parametric_has_recursive_specification right
   | Boolean_constant _ | Boolean_symbol _ -> false
+
+let recursive_spec_argument_has_recursive_specification =
+  argument_has_recursive_specification
 
 let obligation_has_recursive_specification (obligation : obligation) =
   List.exists boolean_has_recursive_specification obligation.assumptions
@@ -1275,7 +1277,8 @@ let obligation_aggregate_recursive_specifications (obligation : obligation) =
     | Integer_symbolic_application application ->
         arguments_fold applications
           (Symbolic_application_private.arguments application)
-    | Integer_add (left, right) | Integer_subtract (left, right) ->
+    | Integer_add (left, right) | Integer_subtract (left, right)
+    | Integer_multiply (left, right) ->
         let* applications = integer applications left in
         integer applications right
     | Integer_negate value | Integer_multiply_constant (_, value)
@@ -1318,11 +1321,8 @@ let obligation_aggregate_recursive_specifications (obligation : obligation) =
         let* applications = aggregate applications left in
         aggregate applications right
     | Parametric_equal (left, right) ->
-        List.fold_left
-          (fun result condition ->
-            let* applications = result in
-            boolean applications condition)
-          (Ok applications) (parametric_conditions left @ parametric_conditions right)
+        let* applications = parametric applications left in
+        parametric applications right
     | Boolean_constant _ | Boolean_symbol _ -> Ok applications
   in
   let terms =
@@ -1392,17 +1392,18 @@ let obligation_aggregate_types (obligation : obligation) =
     | Recursive_integer_argument term -> integer types term
     | Recursive_boolean_argument term -> boolean types term
     | Recursive_aggregate_argument term -> aggregate types term
-    | Recursive_parametric_argument term ->
-        (match term.parametric_desc with
-        | Parametric_symbol _ -> types
-        | Parametric_selector (_, source) -> aggregate types source
-        | Parametric_conditional (condition, consequent, alternative) ->
-            let types = boolean types condition in
-            List.fold_left boolean types
-              (parametric_conditions consequent @ parametric_conditions alternative)
-        | Parametric_symbolic_application application ->
-            arguments_fold types
-              (Symbolic_application_private.arguments application))
+    | Recursive_parametric_argument term -> parametric types term
+  and parametric types term =
+    match term.parametric_desc with
+    | Parametric_symbol _ -> types
+    | Parametric_selector (_, source) -> aggregate types source
+    | Parametric_conditional (condition, consequent, alternative) ->
+        parametric
+          (parametric (boolean types condition) consequent)
+          alternative
+    | Parametric_symbolic_application application ->
+        arguments_fold types
+          (Symbolic_application_private.arguments application)
   and arguments_fold types arguments =
     List.fold_left argument types arguments
   and integer types = function
@@ -1411,7 +1412,8 @@ let obligation_aggregate_types (obligation : obligation) =
     | Integer_symbolic_application application ->
         arguments_fold types
           (Symbolic_application_private.arguments application)
-    | Integer_add (left, right) | Integer_subtract (left, right) ->
+    | Integer_add (left, right) | Integer_subtract (left, right)
+    | Integer_multiply (left, right) ->
         integer (integer types left) right
     | Integer_negate value | Integer_multiply_constant (_, value)
     | Integer_absolute_value value ->
@@ -1460,8 +1462,7 @@ let obligation_aggregate_types (obligation : obligation) =
         aggregate (aggregate types left) right
     | Boolean_invariant_application { value; _ } -> aggregate types value
     | Parametric_equal (left, right) ->
-        List.fold_left boolean types
-          (parametric_conditions left @ parametric_conditions right)
+        parametric (parametric types left) right
     | Boolean_constant _ -> types
     | Boolean_symbol symbol -> sort types symbol.sort
   in
@@ -1490,7 +1491,8 @@ let rec aggregate_has_structural_rank term =
 
 and integer_has_structural_rank = function
   | Integer_rank_project _ -> true
-  | Integer_add (left, right) | Integer_subtract (left, right) ->
+  | Integer_add (left, right) | Integer_subtract (left, right)
+  | Integer_multiply (left, right) ->
       integer_has_structural_rank left || integer_has_structural_rank right
   | Integer_negate value | Integer_multiply_constant (_, value)
   | Integer_absolute_value value ->
@@ -1512,17 +1514,19 @@ and argument_has_structural_rank = function
   | Recursive_integer_argument term -> integer_has_structural_rank term
   | Recursive_boolean_argument term -> boolean_has_structural_rank term
   | Recursive_aggregate_argument term -> aggregate_has_structural_rank term
-  | Recursive_parametric_argument term ->
-      (match term.parametric_desc with
-      | Parametric_symbol _ -> false
-      | Parametric_selector (_, source) -> aggregate_has_structural_rank source
-      | Parametric_conditional (condition, consequent, alternative) ->
-          boolean_has_structural_rank condition
-          || List.exists boolean_has_structural_rank
-               (parametric_conditions consequent @ parametric_conditions alternative)
-      | Parametric_symbolic_application application ->
-          List.exists argument_has_structural_rank
-            (Symbolic_application_private.arguments application))
+  | Recursive_parametric_argument term -> parametric_has_structural_rank term
+
+and parametric_has_structural_rank term =
+  match term.parametric_desc with
+  | Parametric_symbol _ -> false
+  | Parametric_selector (_, source) -> aggregate_has_structural_rank source
+  | Parametric_conditional (condition, consequent, alternative) ->
+      boolean_has_structural_rank condition
+      || parametric_has_structural_rank consequent
+      || parametric_has_structural_rank alternative
+  | Parametric_symbolic_application application ->
+      List.exists argument_has_structural_rank
+        (Symbolic_application_private.arguments application)
 
 and boolean_has_structural_rank = function
   | Logical_adt_schema _ -> false
@@ -1551,8 +1555,8 @@ and boolean_has_structural_rank = function
   | Boolean_invariant_application { value; _ } ->
       aggregate_has_structural_rank value
   | Parametric_equal (left, right) ->
-      List.exists boolean_has_structural_rank
-        (parametric_conditions left @ parametric_conditions right)
+      parametric_has_structural_rank left
+      || parametric_has_structural_rank right
   | Boolean_constant _ | Boolean_symbol _ -> false
 
 let obligation_has_structural_rank (obligation : obligation) =
@@ -1578,7 +1582,8 @@ let rec aggregate_has_logical_construction term =
   | Aggregate_symbol _ -> false
 
 and integer_has_logical_construction = function
-  | Integer_add (left, right) | Integer_subtract (left, right) ->
+  | Integer_add (left, right) | Integer_subtract (left, right)
+  | Integer_multiply (left, right) ->
       integer_has_logical_construction left
       || integer_has_logical_construction right
   | Integer_negate value | Integer_multiply_constant (_, value)
@@ -1606,16 +1611,20 @@ and argument_has_logical_construction = function
   | Recursive_aggregate_argument term ->
       aggregate_has_logical_construction term
   | Recursive_parametric_argument term ->
-      (match term.parametric_desc with
-      | Parametric_symbol _ -> false
-      | Parametric_selector (_, source) -> aggregate_has_logical_construction source
-      | Parametric_conditional (condition, consequent, alternative) ->
-          boolean_has_logical_construction condition
-          || List.exists boolean_has_logical_construction
-               (parametric_conditions consequent @ parametric_conditions alternative)
-      | Parametric_symbolic_application application ->
-          List.exists argument_has_logical_construction
-            (Symbolic_application_private.arguments application))
+      parametric_has_logical_construction term
+
+and parametric_has_logical_construction term =
+  match term.parametric_desc with
+  | Parametric_symbol _ -> false
+  | Parametric_selector (_, source) ->
+      aggregate_has_logical_construction source
+  | Parametric_conditional (condition, consequent, alternative) ->
+      boolean_has_logical_construction condition
+      || parametric_has_logical_construction consequent
+      || parametric_has_logical_construction alternative
+  | Parametric_symbolic_application application ->
+      List.exists argument_has_logical_construction
+        (Symbolic_application_private.arguments application)
 
 and boolean_has_logical_construction = function
   | Logical_adt_schema _ -> false
@@ -1646,8 +1655,8 @@ and boolean_has_logical_construction = function
       aggregate_has_logical_construction left
       || aggregate_has_logical_construction right
   | Parametric_equal (left, right) ->
-      List.exists boolean_has_logical_construction
-        (parametric_conditions left @ parametric_conditions right)
+      parametric_has_logical_construction left
+      || parametric_has_logical_construction right
   | Boolean_constant _ | Boolean_symbol _ -> false
 
 let obligation_has_logical_aggregate_construction
@@ -1678,7 +1687,8 @@ let rec aggregate_rank_domains term =
 and integer_rank_domains = function
   | Integer_rank_project (domain, aggregate) ->
       domain :: aggregate_rank_domains aggregate
-  | Integer_add (left, right) | Integer_subtract (left, right) ->
+  | Integer_add (left, right) | Integer_subtract (left, right)
+  | Integer_multiply (left, right) ->
       integer_rank_domains left @ integer_rank_domains right
   | Integer_negate value | Integer_multiply_constant (_, value)
   | Integer_absolute_value value ->
@@ -1699,17 +1709,18 @@ and argument_rank_domains = function
   | Recursive_integer_argument term -> integer_rank_domains term
   | Recursive_boolean_argument term -> boolean_rank_domains term
   | Recursive_aggregate_argument term -> aggregate_rank_domains term
-  | Recursive_parametric_argument term ->
-      (match term.parametric_desc with
-      | Parametric_symbol _ -> []
-      | Parametric_selector (_, source) -> aggregate_rank_domains source
-      | Parametric_conditional (condition, consequent, alternative) ->
-          boolean_rank_domains condition
-          @ List.concat_map boolean_rank_domains
-              (parametric_conditions consequent @ parametric_conditions alternative)
-      | Parametric_symbolic_application application ->
-          List.concat_map argument_rank_domains
-            (Symbolic_application_private.arguments application))
+  | Recursive_parametric_argument term -> parametric_rank_domains term
+
+and parametric_rank_domains term =
+  match term.parametric_desc with
+  | Parametric_symbol _ -> []
+  | Parametric_selector (_, source) -> aggregate_rank_domains source
+  | Parametric_conditional (condition, consequent, alternative) ->
+      boolean_rank_domains condition @ parametric_rank_domains consequent
+      @ parametric_rank_domains alternative
+  | Parametric_symbolic_application application ->
+      List.concat_map argument_rank_domains
+        (Symbolic_application_private.arguments application)
 
 and boolean_rank_domains = function
   | Logical_adt_schema _ -> []
@@ -1737,8 +1748,7 @@ and boolean_rank_domains = function
   | Boolean_invariant_application { value; _ } ->
       aggregate_rank_domains value
   | Parametric_equal (left, right) ->
-      List.concat_map boolean_rank_domains
-        (parametric_conditions left @ parametric_conditions right)
+      parametric_rank_domains left @ parametric_rank_domains right
   | Boolean_constant _ | Boolean_symbol _ -> []
 
 let obligation_rank_domains (obligation : obligation) =
@@ -1758,6 +1768,7 @@ let operation_to_string = function
   | Add -> "add"
   | Subtract -> "subtract"
   | Negate -> "negate"
+  | Multiply -> "multiply"
   | Multiply_constant value ->
       Printf.sprintf "multiply-constant(%s)" (Z.to_string value)
   | Successor -> "successor"

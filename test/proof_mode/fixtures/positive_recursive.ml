@@ -1,9 +1,9 @@
-let positive (x : int) : unit =
+let positive (x : Vstd.Int.t) : unit =
   [%verocaml.requires x > 0];
   ()
 [@@verocaml.proof]
 
-let rec induct (n : int) : unit =
+let rec induct (n : Vstd.Int.t) : unit =
   [%verocaml.requires n >= 0];
   [%verocaml.ensures fun result -> n >= 0];
   [%verocaml.decreases n];
@@ -13,7 +13,7 @@ let rec induct (n : int) : unit =
     positive n)
 [@@verocaml.proof]
 
-let use_induct (n : int) : unit =
+let use_induct (n : Vstd.Int.t) : unit =
   [%verocaml.requires n >= 0];
   induct n
 [@@verocaml.proof]

@@ -6,7 +6,20 @@
  (deps
   (:writer ../support/integration_manifest_writer.exe)
   (:core %{lib:verocaml.core:verocaml_core.cma})
+  (:vstd %{lib:verocaml.vstd:vstd.cma})
   (:ghost %{lib:verocaml.ghost:vero_ghost.cma})
+  (:basement %{lib:basement:basement.cma})
+  (:delator %{lib:delator:delator.cma})
+  (:ocaml_compiler_libs %{lib:ocaml-compiler-libs.common:ocaml_common.cma})
+  (:ppx_derivers %{lib:ppx_derivers:ppx_derivers.cma})
+  (:ppxlib %{lib:ppxlib:ppxlib.cma})
+  (:ppxlib_ast %{lib:ppxlib_ast.ast:ppxlib_ast.cma})
+  (:ppxlib_jane %{lib:ppxlib_jane:ppxlib_jane.cma})
+  (:seq %{lib:seq:META})
+  (:sexp_type %{lib:sexp_type:sexp_type.cma})
+  (:sexplib0 %{lib:sexplib0:sexplib0.cma})
+  (:stdlib_shims %{lib:stdlib-shims:stdlib_shims.cma})
+  (:yojson %{lib:yojson:yojson.cma})
   (:ppx %{bin:verocaml-ppx})
   (alias_rec ../../install)
   ../../verocaml.dune-package)
@@ -23,27 +36,45 @@
     --compiler-path %{ocamlc}
     --library verocaml.core
     lib/verocaml/core/verocaml_core.cma
+    --library verocaml.vstd
+    lib/verocaml/vstd/vstd.cma
     --library verocaml.ghost
-    lib/verocaml/ghost/vero_ghost.cma))))
+    lib/verocaml/ghost/vero_ghost.cma
+    --library basement %{basement}
+    --library delator %{delator}
+    --library ocaml-compiler-libs.common %{ocaml_compiler_libs}
+    --library ppx_derivers %{ppx_derivers}
+    --library ppxlib %{ppxlib}
+    --library ppxlib_ast.ast %{ppxlib_ast}
+    --library ppxlib_jane %{ppxlib_jane}
+    --library seq %{seq}
+    --library sexp_type %{sexp_type}
+    --library sexplib0 %{sexplib0}
+    --library stdlib-shims %{stdlib_shims}
+    --library yojson %{yojson}))))
 
 (executable
  (name framework_cases)
  (modules framework_cases integration_environment)
+ (flags (:standard -opaque))
  (libraries outcome_test_support))
 
 (executable
  (name framework_self_tests)
  (modules framework_self_tests integration_environment)
+ (flags (:standard -opaque))
  (libraries outcome_test_support unix))
 
 (executable
  (name failure_probe_a)
  (modules failure_probe_a integration_environment)
+ (flags (:standard -opaque))
  (libraries outcome_test_support))
 
 (executable
  (name failure_probe_b)
  (modules failure_probe_b integration_environment)
+ (flags (:standard -opaque))
  (libraries outcome_test_support))
 
 (executable

@@ -62,16 +62,6 @@
   (:validator ../support/report_validator.exe))
  (action
   (run %{validator} %{report} %{archive})))
-(cram
- (deps
-  (glob_files fixtures/*.ml)
-  ../../verocaml.install
-  ../../src/verocaml.exe
-  recursive_specifications_tool.exe
-  verocaml-install-root
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi))
 (alias
  (name recursive-specifications-check)
  (deps

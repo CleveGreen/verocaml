@@ -2,7 +2,7 @@ type 'a node = Empty | Node of 'a * 'a node
 
 type stack = {
   top : int node;
-  length : int;
+  length : Vstd.Int.t;
 }
 
 let spec_push_front (value : int) (stack : stack) : stack =
@@ -10,7 +10,7 @@ let spec_push_front (value : int) (stack : stack) : stack =
   { top = Node (value, top); length = length + 1 }
 [@@verocaml.spec]
 
-let rec spec_push_n (value : int) (n : int) (stack : stack) : stack =
+let rec spec_push_n (value : int) (n : Vstd.Int.t) (stack : stack) : stack =
   [%verocaml.decreases n];
   if n <= 0 then
     stack
@@ -19,7 +19,7 @@ let rec spec_push_n (value : int) (n : int) (stack : stack) : stack =
 [@@verocaml.spec]
 [@@verocaml.opaque]
 
-let rec spec_node_len (node : int node) : int =
+let rec spec_node_len (node : int node) : Vstd.Int.t =
   [%verocaml.decreases node];
   match node with
   | Empty -> 0
@@ -29,7 +29,7 @@ let rec spec_node_len (node : int node) : int =
 
 let consume_recursive_result
     (value : int)
-    (n : int)
+    (n : Vstd.Int.t)
     (stack : stack [@finite]) : unit =
   [%verocaml.requires n >= 0];
   [%verocaml.ensures fun _result ->
@@ -37,3 +37,4 @@ let consume_recursive_result
     expected.length = expected.length
     && spec_node_len expected.top = spec_node_len expected.top];
   ()
+[@@verocaml.proof]

@@ -74,7 +74,7 @@ let rec supported_conditional_type = function
       true
   | Sst.Tuple components ->
       List.for_all (fun (_, typ) -> supported_conditional_type typ) components
-  | Sst.Int -> false
+  | Sst.Int | Sst.Mathematical_int -> false
 
 let fields_of_type_definitions type_definitions =
   List.concat_map
@@ -108,7 +108,7 @@ let rec aggregate_type_ids = function
   | Sst.Tuple components ->
       List.concat_map (fun (_, typ) -> aggregate_type_ids typ) components
   | Sst.Application (_, arguments) -> List.concat_map aggregate_type_ids arguments
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Parameter _ -> []
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Parameter _ -> []
 
 let representation_type_reachable type_definitions ~root ~target =
   let rec visit visited type_id =
@@ -204,7 +204,9 @@ let total_match type_definitions scrutinee cases =
             unguarded case
             && case.case_pattern.pattern_desc = Sst.Unit_pattern)
           cases
-    | Sst.Int | Sst.Tuple _ | Sst.Parameter _ | Sst.Application _ -> false
+    | Sst.Int | Sst.Mathematical_int | Sst.Tuple _ | Sst.Parameter _
+    | Sst.Application _ ->
+        false
 
 let add_definition builder definition =
   let id = definition.Sst.function_id in
@@ -282,17 +284,14 @@ let rec eligible_expression builder current_model (expression : Sst.expression) 
   | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
   | Sst.Variable _ ->
       Ok ()
+  | Sst.Lift_runtime_int operand -> recurse operand
   | Sst.Optional_present payload | Sst.Optional_forward payload ->
       let* () = add_option_descriptor builder expression.typ in
       recurse payload
   | Sst.Optional_absent -> add_option_descriptor builder expression.typ
   | Sst.Tuple_value components -> all_ok recurse (List.map snd components)
-  | Sst.Record_value { record_type; fields } ->
-      let* () = add_aggregate_descriptor builder record_type in
-      all_ok recurse (List.map snd fields)
-  | Sst.Constructor_value { constructor; arguments } ->
-      let* () = add_aggregate_descriptor builder constructor.constructor_type in
-      all_ok recurse arguments
+  | Sst.Record_value _ | Sst.Constructor_value _ ->
+      Error "aggregate-construction-requires-general-evaluation"
   | Sst.Field_read { record; field } ->
       let* () = recurse record in
       let* descriptor = add_field_descriptor builder field in
@@ -387,7 +386,8 @@ and match_profile builder current_model expression scrutinee cases =
     let* () =
       match scrutinee.Sst.typ with
       | Sst.Aggregate type_id -> add_aggregate_descriptor builder type_id
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Parameter _
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Parameter _
       | Sst.Application _ ->
           Ok ()
     in
@@ -597,9 +597,10 @@ let prepare ~validated ~type_definitions ~classify ~excluded_contract
   entries
 
 module For_testing = struct
-  let tag (expression : Sst.expression) =
+  let[@log_value.info] tag (expression : Sst.expression) =
     match expression.expression_desc with
     | Sst.Int_constant _ -> "int"
+    | Sst.Lift_runtime_int _ -> "lift-runtime-int"
     | Sst.Bool_constant _ -> "bool"
     | Sst.Unit_constant -> "unit"
     | Sst.Variable _ -> "variable"
@@ -666,22 +667,26 @@ module For_testing = struct
                contract_root ~callable:definition.function_id ~clause_kind:Ensures
                  ~ordinal:(-1)
              in
-             let report candidate ~type_definitions ~classify expression =
+             let report (candidate [@log_value.info]) ~type_definitions ~classify
+                 expression =
                match
                  admit ~validated ~type_definitions ~classify
                    ~root_identity:identity expression
                with
                | Ok _ -> ()
-               | Error reason ->
+               | Error (reason [@log_value.info]) ->
                    [%log.info "formula validator rejection"
                      ~function_name:
                        (Delator.Field.string
                           definition.function_id.function_name)
                      ~function_index:
                        (Delator.Field.int definition.function_id.function_index)
-                     ~expression_tag:(Delator.Field.string (tag expression))
-                     ~candidate:(Delator.Field.string candidate)
-                     ~reason:(Delator.Field.string reason)
+                     ~expression_tag:
+                       (Delator.Field.string
+                          ((tag [@log_value.info]) expression))
+                     ~candidate:
+                       (Delator.Field.string (candidate [@log_value.info]))
+                     ~reason:(Delator.Field.string (reason [@log_value.info]))
                      ~span_file:(Delator.Field.string expression.span.file)
                      ~span_start_line:
                        (Delator.Field.int expression.span.start_pos.line)
@@ -693,18 +698,18 @@ module For_testing = struct
                        (Delator.Field.int expression.span.end_pos.column)]
              in
              let rec visit expression =
-               report "source" ~type_definitions ~classify expression;
+               report ("source" [@log_value.info]) ~type_definitions ~classify expression;
                (match expression.Sst.expression_desc with
                | Sst.Direct_call call ->
                    let specification =
                      { expression with expression_desc = Sst.Direct_call { call with call_form = Sst.Specification_call } }
                    in
-                   report "specification-call" ~type_definitions ~classify specification;
+                   report ("specification-call" [@log_value.info]) ~type_definitions ~classify specification;
                    let unsupported candidate =
                      if same_function_id candidate call.callee then Unsupported
                      else classify candidate
                    in
-                   report "unsupported-callable" ~type_definitions
+                   report ("unsupported-callable" [@log_value.info]) ~type_definitions
                      ~classify:unsupported specification;
                    (match Sst_validation.find_callable validated call.callee with
                    | Some callable_descriptor ->
@@ -717,8 +722,8 @@ module For_testing = struct
                          if same_function_id candidate call.callee then Local_nonrecursive { callable with span = callable.span }
                          else classify candidate
                        in
-                       report "descriptor-call" ~type_definitions ~classify:descriptor specification;
-                       report "stale-callable" ~type_definitions ~classify:stale specification;
+                       report ("descriptor-call" [@log_value.info]) ~type_definitions ~classify:descriptor specification;
+                       report ("stale-callable" [@log_value.info]) ~type_definitions ~classify:stale specification;
                        if
                          List.exists
                            (function Sst.Callback_parameter _ -> true | Sst.Value_parameter _ -> false)
@@ -729,31 +734,31 @@ module For_testing = struct
                              (function Sst.Value_argument _ -> true | Sst.Callback_argument _ -> false)
                              call.arguments
                          in
-                         report "callback-parameter" ~type_definitions ~classify:descriptor
+                         report ("callback-parameter" [@log_value.info]) ~type_definitions ~classify:descriptor
                            { specification with expression_desc = Sst.Direct_call { call with call_form = Sst.Specification_call; arguments = value_arguments } }
                    | None -> ())
                | Sst.Record_value _ ->
-                   report "missing-aggregate" ~type_definitions:[] ~classify expression
+                   report ("missing-aggregate" [@log_value.info]) ~type_definitions:[] ~classify expression
                | Sst.Field_read _ ->
-                   report "missing-field" ~type_definitions:[] ~classify expression
+                   report ("missing-field" [@log_value.info]) ~type_definitions:[] ~classify expression
                | Sst.Optional_absent | Sst.Optional_present _
                | Sst.Optional_forward _ ->
-                   report "missing-option" ~type_definitions ~classify
+                   report ("missing-option" [@log_value.info]) ~type_definitions ~classify
                      { expression with typ = Sst.Int }
                | Sst.Variable { binding; _ } ->
-                   report "mutable-read" ~type_definitions ~classify
+                   report ("mutable-read" [@log_value.info]) ~type_definitions ~classify
                      { expression with expression_desc = Sst.Mutable_read binding };
-                   report "assertion" ~type_definitions ~classify
+                   report ("assertion" [@log_value.info]) ~type_definitions ~classify
                      { expression with expression_desc = Sst.Local_assert { assertion_ordinal = -1; predicate = expression } };
-                   report "proof-region" ~type_definitions ~classify
+                   report ("proof-region" [@log_value.info]) ~type_definitions ~classify
                      { expression with expression_desc = Sst.Proof_region expression };
-                   report "invariant-use" ~type_definitions ~classify
+                   report ("invariant-use" [@log_value.info]) ~type_definitions ~classify
                      { expression with expression_desc = Sst.Use_type_invariant { use_id = "validator-candidate"; value = expression } };
                    if expression.typ <> Sst.Unit then
-                     report "non-unit-sequence" ~type_definitions ~classify
+                     report ("non-unit-sequence" [@log_value.info]) ~type_definitions ~classify
                        { expression with expression_desc = Sst.Sequence (expression, expression) }
                | Sst.Match (scrutinee, cases) ->
-                   report "empty-match" ~type_definitions ~classify
+                   report ("empty-match" [@log_value.info]) ~type_definitions ~classify
                      { expression with expression_desc = Sst.Match (scrutinee, []) };
                    Sst_callback_private.expression_children scrutinee
                    |> List.find_opt (fun child ->
@@ -761,7 +766,7 @@ module For_testing = struct
                           | Sst.Variable _ -> true
                           | _ -> false)
                    |> Option.iter (fun variable ->
-                          report "owned-cursor-pattern" ~type_definitions ~classify
+                          report ("owned-cursor-pattern" [@log_value.info]) ~type_definitions ~classify
                             { expression with expression_desc = Sst.Match (variable, cases) })
                | Sst.Callback_call application ->
                    let candidate callee =
@@ -786,7 +791,7 @@ module For_testing = struct
                      if same_function_id candidate definition.function_id then Local_nonrecursive callback_definition
                      else classify candidate
                    in
-                   report "callback-parameter" ~type_definitions
+                   report ("callback-parameter" [@log_value.info]) ~type_definitions
                      ~classify:callback_classifier callback_candidate;
                    Option.iter
                      (fun (symbolic : Sst.function_definition) ->
@@ -794,7 +799,7 @@ module For_testing = struct
                          if same_function_id candidate symbolic.function_id then Local_nonrecursive symbolic
                          else classify candidate
                        in
-                       report "symbolic-callable" ~type_definitions
+                       report ("symbolic-callable" [@log_value.info]) ~type_definitions
                          ~classify:symbolic_classifier
                          (candidate symbolic.function_id))
                      symbolic

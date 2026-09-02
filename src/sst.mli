@@ -9,6 +9,7 @@ type typ = Parametric_type.t =
   | Unit
   | Bool
   | Int
+  | Mathematical_int
   | Tuple of (string option * typ) list
   | Aggregate of type_id
   | Parameter of Parametric_type.binder
@@ -270,6 +271,7 @@ type checked_arithmetic =
   | Add
   | Subtract
   | Negate
+  | Multiply
   | Multiply_constant of Z.t
   | Successor
   | Predecessor
@@ -377,6 +379,7 @@ and expression_desc =
   | Sequence of expression * expression
   | If of expression * expression * expression option
   | Match of expression * case list
+  | Lift_runtime_int of expression
   | Checked_arithmetic of checked_arithmetic * expression list
   | Compare of comparison * expression * expression
   | Boolean_not of expression

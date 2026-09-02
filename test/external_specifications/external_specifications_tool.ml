@@ -134,6 +134,8 @@ let rec integer_symbols = function
       integer_symbols left @ integer_symbols right
   | Integer_negate term | Integer_absolute_value term -> integer_symbols term
   | Integer_multiply_constant (_, term) -> integer_symbols term
+  | Integer_multiply (left, right) ->
+      integer_symbols left @ integer_symbols right
   | Integer_conditional (condition, consequent, alternative) ->
       boolean_symbols condition
       @ integer_symbols consequent

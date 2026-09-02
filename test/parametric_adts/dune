@@ -55,17 +55,6 @@
  (action
   (run %{validator} %{report} %{archive})))
 
-(cram
- (deps
-  (glob_files fixtures/*.ml)
-  parametric_adts_tool.exe
-  ../../src/verocaml.exe
-  ../../ppx/vero_ppx.exe
-  ../../runtime/vero_ghost.cma
-  ../../runtime/vero_ghost.cmxa
-  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi
-  ../../runtime/.vero_ghost.objs/native/vero_ghost.cmx))
-
 (alias
  (name parametric-adts-check)
  (deps
