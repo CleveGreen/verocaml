@@ -98,8 +98,7 @@ being merged because their newly introduced facts are now competing for solver
 resources or changing proof search elsewhere in the module. Lexically scoped
 broadcasts make these dependencies explicit and help preserve a useful property
 for collaborative verification: adding a proof in one place should not
-unexpectedly destabilize an unrelated proof somewhere else.Keeping solver
-context local is especially important when collaborating.
+unexpectedly destabilize an unrelated proof somewhere else.
 
 *** Broad Support
 
@@ -122,23 +121,33 @@ implementations around the capabilities of a separate verification language.
 
 ** Feature Support Summary
 
-| Area                                  | Status        | Feature Support | Test Confidence | Summary |
-|---------------------------------------+---------------+-----------------+-----------------+---------|
-| Scalars and control flow              | Supported     |            8/10 |            8/10 | Unit, bool, checked int, lets, sequencing, branches, total matches, guards |
+| Area                                | Status        | Feature Support | Test Confidence | Summary |
+|-------------------------------------+---------------+-----------------+-----------------+---------|
+| Scalars and control flow             | Supported     |            8/10 |            8/10 | Unit, bool, checked machine int, lets, sequencing, branches, total matches, guards |
+| Mathematical integers                | Supported     |            8/10 |            8/10 | Unbounded ghost integers, arithmetic, comparisons, simplification and constant evaluation |
 | Tuples, records, variants, ADTs       | Supported     |            8/10 |            8/10 | Boxed tuples, records, variants, option, list, result, recursive data |
-| First-order generics                  | Supported     |            8/10 |            8/10 | Generic immutable functions/ADTs, labeled calls, cross-unit types, structural recursion |
-| Calls and direct recursion            | Supported     |            8/10 |            8/10 | Direct same/cross-unit calls and checked single-function recursion |
-| Contracts, specifications, proofs     | Supported     |            8/10 |            8/10 | Requires/ensures, old, assertions, Spec/Proof, reveal/fuel, invariants |
-| Quantifiers and symbolic logic        | Supported     |            8/10 |            8/10 | Forall/exists, triggers, symbolic declarations, axioms, logical Spec functions |
+| First-order generics                 | Supported     |            8/10 |            8/10 | Generic immutable functions/ADTs, labeled calls, cross-unit types, structural recursion |
+| Calls and direct recursion           | Supported     |            8/10 |            8/10 | Direct same/cross-unit calls and checked single-function recursion |
+| Contracts, specifications, proofs    | Supported     |            8/10 |            8/10 | Requires/ensures, old, assertions, Spec/Proof, reveal/fuel, invariants |
+| Quantifiers and symbolic logic       | Supported     |            8/10 |            8/10 | Forall/exists, triggers, symbolic declarations, axioms, logical Spec functions |
+| Defined logical constants            | Supported     |            8/10 |            8/10 | Ghost definitions with dependency tracking, cross-library transport and source-free installed imports |
+| User-defined numeric specifications  | Partial       |            6/10 |            8/10 | Library-defined carriers, ranges, conversions and operation laws; machine int specified in Vstd; no automatic runtime refinement |
+| Native bit-vector kernel             | Experimental  |            5/10 |            8/10 | Widths 1–4096, modular add/subtract, bitwise operations, signed/unsigned comparisons and Int conversions; public proof syntax unfinished |
 | OxCaml uniqueness and owned mutation  | Supported     |            8/10 |            8/10 | Unique/aliased evidence and bounded mutable-record transitions |
-| let mutable                           | Partial       |            6/10 |            6/10 | Local definitely-unique mutable bindings; no general heap interactions |
-| Verified callbacks                    | Partial       |            6/10 |            8/10 | Contracted nonescaping callbacks; not general higher-order OCaml |
-| Modules and interfaces                | Partial       |            6/10 |            8/10 | Strong separate compilation plus limited abstraction; no general modules/functors |
-| External specification libraries        | Partial       |            6/10 |            8/10 | Reachable libraries implicitly export generic type/function specs; overlaps reject |
-| Mathematical Vstd.Seq                    | Partial       |            6/10 |            6/10 | Abstract symbolic sequences for specs/proofs; not a runtime container |
-| Shared mutable state                  | Partial       |            4/10 |            8/10 | Narrow aliased scalar-record model; no general references or heap logic |
-| Other OxCaml mode axes                | Compiler-only |            2/10 |            4/10 | Mostly compiler-enforced rather than represented by VeroCaml semantics |
-| Loops, arrays, references             | Rejected      |            0/10 |            6/10 | No loops, arrays, Bigarrays, or general reference/heap semantics |
-| Exceptions, effects, concurrency      | Rejected      |            0/10 |            6/10 | No exceptions, handlers, continuations, domains, or source parallelism |
-| Objects, classes, advanced modules    | Rejected      |            0/10 |            4/10 | Objects/classes, functors, first-class/local/recursive modules unsupported |
-| Unboxed data, layouts, SIMD           | Rejected      |            0/10 |            4/10 | No unboxed data, layout polymorphism, mixed blocks, small numbers, or SIMD |
+| let mutable                          | Partial       |            6/10 |            6/10 | Local definitely-unique mutable bindings; no general heap interactions |
+| Verified callbacks                   | Partial       |            6/10 |            8/10 | Contracted nonescaping callbacks; not general higher-order OCaml |
+| Modules and interfaces               | Partial       |            6/10 |            8/10 | Separate compilation and specification transport with limited abstraction; no general modules/functors |
+| External specification libraries     | Partial       |            7/10 |            8/10 | Dependency-driven generic type/function specs, logical definitions and numeric specifications; overlapping external specs rejected |
+| Mathematical Vstd.Seq                | Partial       |            6/10 |            6/10 | Abstract symbolic sequences for specs/proofs; not a runtime container |
+| Shared mutable state                 | Partial       |            4/10 |            8/10 | Narrow aliased scalar-record model; no general references or heap logic |
+| Other OxCaml mode axes               | Compiler-only |            2/10 |            4/10 | Mostly compiler-enforced rather than represented by VeroCaml semantics |
+| Loops, arrays, references            | Rejected      |            0/10 |            6/10 | No loops, arrays, Bigarrays, or general reference/heap semantics |
+| Exceptions, effects, concurrency     | Rejected      |            0/10 |            6/10 | No exceptions, handlers, continuations, domains, or source parallelism |
+| Objects, classes, advanced modules   | Rejected      |            0/10 |            4/10 | Objects/classes, functors, first-class/local/recursive modules unsupported |
+| Unboxed data, layouts, SIMD          | Rejected      |            0/10 |            4/10 | General source-level unboxed data, layout polymorphism, mixed blocks, small numbers and SIMD remain unsupported; BV kernel support does not imply these |
+
+#+begin_quote
+Scores are qualitative: Feature Support estimates breadth and usability;
+Test Confidence reflects coverage of implemented behavior and rejection
+boundaries, not a guarantee of correctness.
+#+end_quote
