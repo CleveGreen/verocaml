@@ -3,6 +3,7 @@ type kind = Forall | Exists
 type first_order_binder =
   | Integer_binder
   | Boolean_binder
+  | Bit_vector_binder of Bv_width.t
   | Parameter_binder of Parametric_type.binder
   | Application_binder of Parametric_type.t
 

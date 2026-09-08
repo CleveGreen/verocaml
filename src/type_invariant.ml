@@ -38,6 +38,14 @@ let operation_id (operation : Sst.abstract_public_operation) =
 
 let expression_children (expression : Sst.expression) =
   match expression.expression_desc with
+  | Sst.Bv_literal _ -> []
+  | Sst.Bv_int_to_bv_mod { input; _ }
+  | Sst.Bv_to_int_unsigned input
+  | Sst.Bv_to_int_signed input
+  | Sst.Bv_not input ->
+      [ input ]
+  | Sst.Bv_binary (_, left, right) | Sst.Bv_compare (_, left, right) ->
+      [ left; right ]
   | Sst.Lift_runtime_int operand -> [ operand ]
   | Sst.Tuple_value values -> List.map snd values
   | Sst.Record_value { fields; _ } -> List.map snd fields
@@ -83,7 +91,8 @@ let expression_children (expression : Sst.expression) =
       [ quantifier.quantifier_body ]
   | Sst.Reveal _ | Sst.Reveal_with_fuel _
   | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
-  | Sst.Variable _ | Sst.Mutable_read _ | Sst.Optional_absent ->
+  | Sst.Variable _ | Sst.Mutable_read _ | Sst.Optional_absent
+  | Sst.Logical_constant_reference _ ->
       []
   | Sst.Optional_present payload | Sst.Optional_forward payload -> [ payload ]
 
@@ -281,6 +290,7 @@ let authenticate_handle validated type_descriptor evidence invariant_operation =
                           | Sst.Aggregate root_type ->
                               not (same_type_id root_type type_id)
                           | Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Bool
+                          | Sst.Bit_vector _
                           | Sst.Tuple _
                           | Sst.Parameter _ | Sst.Application _ -> true)
                         transitions

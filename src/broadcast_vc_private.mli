@@ -63,6 +63,7 @@ val make_lowering :
   aggregate_of_type:(Parametric_type.t -> Vir.aggregate_type option) ->
   integer_value:(Vir.integer_term -> 'value) ->
   boolean_value:(Vir.boolean_term -> 'value) ->
+  bit_vector_value:(Vir.bit_vector_term -> 'value) ->
   parametric_value:(Vir.parametric_term -> 'value) ->
   spec_function_value:(Parametric_type.t -> Vir.spec_function_term -> 'value) ->
   aggregate_value:(Vir.aggregate_term -> 'value) ->
@@ -89,6 +90,7 @@ val make_evaluator_lowering :
   aggregate_of_type:(Parametric_type.t -> Vir.aggregate_type option) ->
   integer_value:(Vir.integer_term -> 'value) ->
   boolean_value:(Vir.boolean_term -> 'value) ->
+  bit_vector_value:(Vir.bit_vector_term -> 'value) ->
   parametric_value:(Vir.parametric_term -> 'value) ->
   spec_function_value:(Parametric_type.t -> Vir.spec_function_term -> 'value) ->
   aggregate_value:(Vir.aggregate_term -> 'value) ->

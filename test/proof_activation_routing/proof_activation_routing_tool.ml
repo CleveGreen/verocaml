@@ -111,6 +111,8 @@ let adversaries filename =
       path_condition = [];
       goal = Vir.Boolean_constant true;
       projection_symbols = [];
+      logical_constant_instances = [];
+      logical_constant_equations = [];
     }
   in
   Recursive_spec_encoding.For_testing.reset_proof_query_construction_count ();

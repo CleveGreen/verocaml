@@ -4,6 +4,7 @@ type value =
   | Unit_value
   | Integer_value of Vir.integer_term
   | Boolean_value of Vir.boolean_term
+  | Bit_vector_value of Vir.bit_vector_term
   | Tuple_value of value list
   | Aggregate_value of Vir.aggregate_term
   | Parametric_value of Vir.parametric_term
@@ -149,6 +150,10 @@ type ('value, 'error) application_value_services = {
     Vir.recursive_spec_argument Symbolic_application_private.t -> 'value;
   boolean :
     Vir.recursive_spec_argument Symbolic_application_private.t -> 'value;
+  bit_vector :
+    Bv_width.t ->
+    Vir.recursive_spec_argument Symbolic_application_private.t ->
+    'value;
   parametric :
     Parametric_type.binder ->
     Vir.recursive_spec_argument Symbolic_application_private.t ->

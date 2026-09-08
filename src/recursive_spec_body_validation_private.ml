@@ -12,7 +12,8 @@ let same_function_id (left : Sst.function_id) (right : Sst.function_id) =
   && String.equal left.function_name right.function_name
 
 let scalar_type = function
-  | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Parameter _ -> true
+  | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Bit_vector _
+  | Sst.Parameter _ -> true
   | Sst.Unit | Sst.Tuple _ | Sst.Aggregate _
   | Sst.Application _ -> false
 
@@ -26,7 +27,8 @@ let validate ~admitted_type ~admit_tuple_match ~malformed definition expression 
         ||
         (match pattern.typ with
         | Sst.Parameter _ -> true
-        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+        | Sst.Bit_vector _ | Sst.Tuple _
         | Sst.Aggregate _
         | Sst.Application _ ->
             false)
@@ -91,6 +93,59 @@ let validate ~admitted_type ~admit_tuple_match ~malformed definition expression 
           iter_result
             (fun (pattern, value) ->
               match pattern.Sst.pattern_desc with
+              | Sst.Tuple_pattern _
+                when admit_tuple_match
+                     &&
+                     (match value.Sst.expression_desc with
+                     | Sst.Tuple_value _ -> true
+                     | _ -> false) -> (
+                  [%log.trace
+                    "validating exact tuple binding in recursive specification"
+                    ~stage:
+                      (Delator.Field.string "recursive-body-validation")
+                    ~decision:(Delator.Field.string "validate")];
+                  match
+                    Recursive_spec_tuple_match_private.plan value pattern
+                  with
+                  | Ok leaves
+                    when
+                      List.for_all
+                        (fun
+                          (leaf :
+                            Recursive_spec_tuple_match_private.leaf)
+                        ->
+                          admitted_type leaf.expression.typ
+                          && admitted_pattern leaf.pattern)
+                        leaves ->
+                      [%log.trace
+                        "admitting exact tuple destructuring in recursive specification"
+                        ~stage:
+                          (Delator.Field.string
+                             "recursive-body-validation")
+                        ~decision:(Delator.Field.string "accepted")
+                        ~leaf_count:(Delator.Field.int (List.length leaves))];
+                      iter_result
+                        (fun
+                          (leaf :
+                            Recursive_spec_tuple_match_private.leaf)
+                        -> loop scoped leaf.expression)
+                        leaves
+                  | Ok _ ->
+                      [%log.debug
+                        "rejecting recursive tuple binding with inadmissible leaves"
+                        ~stage:
+                          (Delator.Field.string "recursive-body-validation")
+                        ~decision:(Delator.Field.string "rejected")
+                        ~reason:(Delator.Field.string "inadmissible-leaf")];
+                      reject expression
+                  | Error _ ->
+                      [%log.debug
+                        "rejecting malformed recursive tuple binding"
+                        ~stage:
+                          (Delator.Field.string "recursive-body-validation")
+                        ~decision:(Delator.Field.string "rejected")
+                        ~reason:(Delator.Field.string "invalid-plan")];
+                      reject expression)
               | Sst.Bind
                   {
                     typ = ((Sst.Int | Sst.Bool) as typ);
@@ -153,6 +208,11 @@ let validate ~admitted_type ~admit_tuple_match ~malformed definition expression 
         else reject expression
     | Sst.Match
         (({ expression_desc = Sst.Tuple_value _; _ } as scrutinee), cases) ->
+        [%log.trace
+          "validating tuple destructuring in recursive specification"
+          ~stage:(Delator.Field.string "recursive-body-validation")
+          ~decision:(Delator.Field.string "validate")
+          ~case_count:(Delator.Field.int (List.length cases))];
         if not admit_tuple_match then reject expression
         else
           let* plans =
@@ -163,19 +223,40 @@ let validate ~admitted_type ~admit_tuple_match ~malformed definition expression 
                   Recursive_spec_tuple_match_private.plan scrutinee
                     case.case_pattern
                 with
-                | Error _ -> reject expression
+                | Error _ ->
+                    [%log.debug
+                      "rejecting malformed recursive tuple destructuring"
+                      ~stage:
+                        (Delator.Field.string "recursive-body-validation")
+                      ~decision:(Delator.Field.string "rejected")
+                      ~reason:(Delator.Field.string "invalid-plan")];
+                    reject expression
                 | Ok leaves ->
-                    if
-                      List.for_all
+                    let invalid_leaf_count =
+                      List.length
+                        (List.filter
                         (fun
                           (leaf :
                             Recursive_spec_tuple_match_private.leaf)
                         ->
-                          admitted_type leaf.expression.typ
-                          && admitted_pattern leaf.pattern)
-                        leaves
-                    then Ok ((case, leaves) :: plans)
-                    else reject expression)
+                          not
+                            (admitted_type leaf.expression.typ
+                            && admitted_pattern leaf.pattern))
+                        leaves)
+                    in
+                    if invalid_leaf_count = 0 then
+                      Ok ((case, leaves) :: plans)
+                    else (
+                      [%log.debug
+                        "rejecting inadmissible recursive tuple destructuring leaf"
+                        ~stage:
+                          (Delator.Field.string "recursive-body-validation")
+                        ~decision:(Delator.Field.string "rejected")
+                        ~reason:(Delator.Field.string "inadmissible-leaf")
+                        ~leaf_count:(Delator.Field.int (List.length leaves))
+                        ~invalid_leaf_count:
+                          (Delator.Field.int invalid_leaf_count)];
+                      reject expression))
               (Ok []) cases
           in
           let* () =
@@ -241,6 +322,25 @@ let validate ~admitted_type ~admit_tuple_match ~malformed definition expression 
                     (Symbolic_application_private.arguments application)))];
           iter_result (loop scoped)
             (Symbolic_application_private.arguments application))
+    | Sst.Logical_constant_reference
+        (reference [@log_value.trace]) ->
+        if scalar_type expression.typ || admitted_type expression.typ then (
+          [%log.trace
+            "admitting authenticated logical constant in recursive specification"
+            ~stage:(Delator.Field.string "recursive-body-validation")
+            ~constant_name:
+              (Delator.Field.string
+                 (reference [@log_value.trace]).constant.constant_name)
+            ~type_argument_count:
+              (Delator.Field.int
+                 (List.length
+                    (reference [@log_value.trace]).type_arguments))
+            ~result_type:
+              (Delator.Field.string
+                 (Parametric_type.to_string expression.typ))
+            ~decision:(Delator.Field.string "accepted")];
+          Ok ())
+        else reject expression
     | Sst.Direct_call
         {
           call_form = Sst.Specification_call;

@@ -41,6 +41,7 @@ let validate_conditional (term : Vir.aggregate_term)
 let argument_sort = function
   | Vir.Recursive_integer_argument _ -> Vir.Integer
   | Vir.Recursive_boolean_argument _ -> Vir.Boolean
+  | Vir.Recursive_bv_argument term -> Vir.Bit_vector term.bit_vector_width
   | Vir.Recursive_aggregate_argument term -> Vir.Aggregate term.aggregate_type
   | Vir.Recursive_parametric_argument term -> Vir.Parametric term.parametric_sort
 
@@ -62,7 +63,8 @@ let exact_argument selector source constructor arguments =
       match argument_at selector.selector_index arguments with
       | None ->
           Error "positional constructor selector index is outside the term"
-      | Some argument when argument_sort argument = selector.selector_range ->
+      | Some argument
+        when Vir.sort_equal (argument_sort argument) selector.selector_range ->
           Ok (Exact argument)
       | Some _ ->
           Error "positional constructor selector has a mismatched range"
@@ -87,7 +89,8 @@ let exact_field selector source fields =
       fields
   with
   | None -> Ok (Opaque source)
-  | Some (_, argument) when argument_sort argument = selector.selector_range ->
+  | Some (_, argument)
+    when Vir.sort_equal (argument_sort argument) selector.selector_range ->
       Ok (Exact argument)
   | Some _ -> Error "record selector has a mismatched range"
 
@@ -150,7 +153,7 @@ let rec positional_selector selector (source : Vir.aggregate_term) =
 
 and aggregate_selector selector source =
   match selector.Vir.selector_range with
-  | Vir.Integer | Vir.Boolean | Vir.Parametric _ ->
+  | Vir.Integer | Vir.Boolean | Vir.Bit_vector _ | Vir.Parametric _ ->
       Error "aggregate selector has a non-aggregate range"
   | Vir.Aggregate expected_type ->
       let* observed = positional_selector selector source in
@@ -200,6 +203,65 @@ let boolean_selector selector source =
       | Exact _ -> Error "Boolean selector reduced to a non-Boolean argument"
     in
     project observed
+
+let bit_vector_selector width selector source =
+  if
+    not
+      (Vir.sort_equal selector.Vir.selector_range (Vir.Bit_vector width))
+  then (
+    [%log.debug "refused positional BV selector normalization"
+      ~selector_index:(Delator.Field.int selector.selector_index)
+      ~width:(Delator.Field.int (Bv_width.to_int width))
+      ~reason_class:(Delator.Field.string "declared-width-mismatch")
+      ~decision:(Delator.Field.string "rejected")];
+    Error "bit-vector selector has a mismatched range" )
+  else
+    let rec project = function
+      | Opaque source ->
+          [%log.trace "normalized positional BV selector as opaque"
+            ~selector_index:(Delator.Field.int selector.selector_index)
+            ~width:(Delator.Field.int (Bv_width.to_int width))
+            ~decision:(Delator.Field.string "opaque")];
+          Ok (Opaque source)
+      | Conditional (condition, consequent, alternative) ->
+          [%log.trace "normalizing positional BV selector conditional"
+            ~selector_index:(Delator.Field.int selector.selector_index)
+            ~width:(Delator.Field.int (Bv_width.to_int width))
+            ~decision:(Delator.Field.string "conditional")];
+          let* consequent = project consequent in
+          let* alternative = project alternative in
+          Ok (Conditional (condition, consequent, alternative))
+      | Exact (Vir.Recursive_bv_argument term)
+        when Bv_width.equal term.bit_vector_width width ->
+          [%log.trace "normalized positional BV selector exactly"
+            ~selector_index:(Delator.Field.int selector.selector_index)
+            ~width:(Delator.Field.int (Bv_width.to_int width))
+            ~decision:(Delator.Field.string "exact")];
+          Ok (Exact term)
+      | Exact (Vir.Recursive_bv_argument _) ->
+          [%log.debug "refused positional BV selector normalization"
+            ~selector_index:(Delator.Field.int selector.selector_index)
+            ~width:(Delator.Field.int (Bv_width.to_int width))
+            ~reason_class:(Delator.Field.string "exact-width-mismatch")
+            ~decision:(Delator.Field.string "rejected")];
+          Error "bit-vector selector reduced to the wrong width"
+      | Exact _ ->
+          [%log.debug "refused positional BV selector normalization"
+            ~selector_index:(Delator.Field.int selector.selector_index)
+            ~width:(Delator.Field.int (Bv_width.to_int width))
+            ~reason_class:(Delator.Field.string "non-bv-argument")
+            ~decision:(Delator.Field.string "rejected")];
+          Error "bit-vector selector reduced to a non-bit-vector argument"
+    in
+    (match positional_selector selector source with
+    | Ok observed -> project observed
+    | Error message ->
+        [%log.debug "refused positional BV selector normalization"
+          ~selector_index:(Delator.Field.int selector.selector_index)
+          ~width:(Delator.Field.int (Bv_width.to_int width))
+          ~reason_class:(Delator.Field.string "positional-owner-refusal")
+          ~decision:(Delator.Field.string "rejected")];
+        Error message)
 
 let rec boolean_term = function
   | Exact term -> term

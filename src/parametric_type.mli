@@ -8,6 +8,7 @@ type t =
   | Bool
   | Int
   | Mathematical_int
+  | Bit_vector of Bv_width.t
   | Tuple of (string option * t) list
   | Aggregate of type_id
   | Parameter of binder
@@ -23,6 +24,7 @@ val spec_function_view : t -> (string option * t * t) option
 val is_spec_function : t -> bool
 val is_integer : t -> bool
 val contains_mathematical_int : t -> bool
+val contains_bit_vector : t -> bool
 val application : constructor -> t list -> (t, string) result
 val validate_application : constructor -> t list -> (unit, string) result
 val compare_owner : owner -> owner -> int

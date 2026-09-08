@@ -96,6 +96,19 @@ type definition_view = {
   body : Sst.expression;
   stable : string;
 }
+type logical_constant_state = {
+  terms : (Logical_constant_instance_private.t * Logic_ir.term) list ref;
+  completed : Logical_constant_instance_private.t list ref;
+  materializing : Logical_constant_instance_private.t list ref;
+  equations : Logic_ir.term list ref;
+}
+let make_logical_constant_state () =
+  {
+    terms = ref [];
+    completed = ref [];
+    materializing = ref [];
+    equations = ref [];
+  }
 let canonical_view definition =
   {
     key = None;
@@ -121,6 +134,7 @@ type symbols = {
     (string, Logic_ir.sort list * Logic_ir.sort * Logic_ir.function_symbol)
     Hashtbl.t;
   logical_adts : Logical_adt_encoding_private.t option;
+  logical_constants : logical_constant_state;
 }
 let a2_builder_constructions = ref 0
 let make_sort_registry builder span descriptors =
@@ -167,7 +181,8 @@ let aggregate_closure definition =
                 (definition :: seen) (fields definition.type_kind))
     | Sst.Tuple components ->
         List.fold_left (fun seen (_, typ) -> visit seen typ) seen components
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Parameter _
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
+    | Sst.Parameter _
     | Sst.Application _ ->
         seen
   in
@@ -181,8 +196,8 @@ let aggregate_closure definition =
   List.fold_left visit [] seeds
   |> List.sort (fun left right ->
          Int.compare left.Sst.type_id.type_index right.Sst.type_id.type_index)
-let declare_symbols_in ?functions ?sort_registry
-    ?logical_adts ?view builder ~fuel ~zero ~succ definition =
+let declare_symbols_in ?functions ?sort_registry ?logical_adts
+    ?logical_constants ?view builder ~fuel ~zero ~succ definition =
   let view = Option.value ~default:(canonical_view definition) view in
   let span = Spec_unfolding_private.definition_span definition in
   let sort_registry =
@@ -222,6 +237,9 @@ let declare_symbols_in ?functions ?sort_registry
       sort_registry;
       functions = Option.value ~default:(Hashtbl.create 16) functions;
       logical_adts;
+      logical_constants =
+        Option.value ~default:(make_logical_constant_state ())
+          logical_constants;
     }
 let declare_fuel builder span =
   let* fuel = of_logic (Logic_ir.declare_sort builder ~name:"Fuel" ~span) in
@@ -314,6 +332,12 @@ let legacy_range_suffix parametric_adts = function
   | Sst.Int -> "int"
   | Sst.Mathematical_int -> "Int"
   | Sst.Bool -> "bool"
+  | Sst.Bit_vector width ->
+      "bv" ^ Bv_width.to_string width ^ "_"
+      ^ String.sub
+          (Digest.to_hex
+             (Digest.string (Bv_width.structural_identity_material width)))
+          0 12
   | Sst.Aggregate type_id ->
       Printf.sprintf "agg%d_%s" type_id.type_index type_id.type_name
   | Sst.Application _ as application -> (
@@ -335,7 +359,7 @@ let tag_function symbols owner_typ (type_id : Sst.type_id) span =
     | Sst.Application _ ->
         Printf.sprintf "verocaml_tag_t%d_%s_%s" type_id.type_index
           type_id.type_name (type_suffix owner_typ)
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
     | Sst.Parameter _ ->
         assert false
   in
@@ -374,7 +398,7 @@ let selector_function symbols owner_typ (constructor : Sst.constructor_id)
               constructor.constructor_type.type_name
               constructor.constructor_index constructor.constructor_name index
               index (type_suffix typ)
-        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
         | Sst.Parameter _ ->
             assert false
       in
@@ -407,7 +431,7 @@ let constructor_function symbols (constructor : Sst.constructor_id)
               constructor.constructor_type.type_index
               constructor.constructor_type.type_name (type_suffix result_type)
               constructor.constructor_index constructor.constructor_name
-        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
         | Sst.Parameter _ ->
             assert false
       in
@@ -423,7 +447,7 @@ let record_constructor_function symbols result_type
     | Sst.Application _ ->
         Printf.sprintf "verocaml_record_ctor_t%d_%s_%s" record_type.type_index
           record_type.type_name (type_suffix result_type)
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
     | Sst.Parameter _ ->
         assert false
   in
@@ -446,7 +470,7 @@ let record_selector_function symbols owner_typ (record_type : Sst.type_id)
           record_type.type_index (type_suffix owner_typ) record_type.type_index
           record_type.type_name field.field_index field.field_name
           (type_suffix typ)
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
     | Sst.Parameter _ ->
         assert false
   in
@@ -490,7 +514,7 @@ let rec translate_pattern symbols environment scrutinee (pattern : Sst.pattern) 
                   (Logic_ir.equal ~span:pattern.span tag
                      (Logic_ir.int ~span:pattern.span
                         (Z.of_int constructor.constructor_index)))
-            | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+            | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
             | Sst.Tuple _ | Sst.Parameter _ ->
                 assert false)
       in
@@ -711,11 +735,25 @@ let rec translate_body symbols environment fuel
         List.fold_left
           (fun result (pattern, value) ->
             let* environment = result in
-            let* value = translate_body symbols environment fuel value in
-            let* environment, _condition =
-              translate_pattern symbols environment value pattern
-            in
-            Ok environment)
+            match (pattern.Sst.pattern_desc, value.Sst.expression_desc) with
+            | Sst.Tuple_pattern _, Sst.Tuple_value _ ->
+                let* environment, _condition =
+                  translate_match_pattern
+                    (fun environment expression ->
+                      translate_body symbols environment fuel expression)
+                    symbols environment value pattern
+                in
+                [%log.trace
+                  "translate exact tuple binding in recursive query"
+                  ~stage:(Delator.Field.string "recursive-query-translation")
+                  ~decision:(Delator.Field.string "tuple-binding-preserved")];
+                Ok environment
+            | _ ->
+                let* value = translate_body symbols environment fuel value in
+                let* environment, _condition =
+                  translate_pattern symbols environment value pattern
+                in
+                Ok environment)
           (Ok environment) bindings
       in
       translate_body symbols environment fuel body
@@ -771,6 +809,9 @@ let rec translate_body symbols environment fuel
         (fun environment expression ->
           translate_body symbols environment fuel expression)
         symbols environment expression scrutinee cases
+  | Sst.Logical_constant_reference { constant; type_arguments } ->
+      translate_logical_constant symbols fuel expression constant
+        type_arguments
   | Sst.Symbolic_application application ->
       [%log.debug
         "translating authenticated symbolic application in recursive totality"
@@ -849,9 +890,238 @@ let rec translate_body symbols environment fuel
           (Ok []) arguments
       in
       apply symbols symbols.helper (List.rev arguments @ [ fuel ])
+  | Sst.Direct_call
+      {
+        callee;
+        type_arguments;
+        arguments;
+        recursive = false;
+        call_form = Sst.Specification_call;
+      } ->
+      translate_nonrecursive_spec_call symbols environment fuel expression
+        callee type_arguments arguments
   | _ ->
       fail expression.span
         "expression escaped the authenticated recursive-spec body grammar"
+and translate_logical_constant symbols fuel (expression : Sst.expression)
+    constant type_arguments =
+  let program =
+    Spec_unfolding_private.definition_program symbols.definition
+  in
+  let* () =
+    Logical_constant_private.validate_reference ~program ~logical:true
+      ~expression_type:expression.typ constant ~type_arguments
+    |> Result.map_error (fun message -> { span = expression.span; message })
+  in
+  let* definition =
+    match Logical_constant_private.find_definition program constant with
+    | Some definition -> Ok definition
+    | None ->
+        fail expression.span
+          "logical constant reference has no authenticated recursive-query definition"
+  in
+  let* instance =
+    Logical_constant_instance_private.create ~definition ~type_arguments
+      ~result_type:expression.typ ~span:expression.span
+    |> Result.map_error (fun message -> { span = expression.span; message })
+  in
+  let state = symbols.logical_constants in
+  let find_instance entries =
+    List.find_opt
+      (fun (candidate, _) ->
+        Logical_constant_instance_private.equal candidate instance)
+      entries
+  in
+  let* term =
+    match find_instance !(state.terms) with
+    | Some (_, term) -> Ok term
+    | None ->
+        let* function_ =
+          cached_function symbols
+            (Logical_constant_instance_private.backend_head instance)
+            [] (sort symbols expression.typ) expression.span
+        in
+        let* term =
+          of_logic (Logic_ir.apply ~span:expression.span function_ [])
+        in
+        state.terms := (instance, term) :: !(state.terms);
+        Ok term
+  in
+  if
+    List.exists
+      (Logical_constant_instance_private.equal instance)
+      !(state.completed)
+  then (
+    [%log.trace "reused recursive-query logical constant equation"
+      ~stage:(Delator.Field.string "recursive-logical-constant")
+      ~constant_name:(Delator.Field.string constant.constant_name)
+      ~instance:
+        (Delator.Field.string
+           (Logical_constant_instance_private.identity_digest instance))
+      ~decision:(Delator.Field.string "reused")];
+    Ok term)
+  else if
+    List.exists
+      (Logical_constant_instance_private.equal instance)
+      !(state.materializing)
+  then
+    fail expression.span
+      "logical constant dependency cycle reached recursive query encoding"
+  else
+    match definition.constant_equation with
+    | None ->
+        state.completed := instance :: !(state.completed);
+        [%log.debug "retained equationless logical constant instance"
+          ~stage:(Delator.Field.string "recursive-logical-constant")
+          ~constant_name:(Delator.Field.string constant.constant_name)
+          ~instance:
+            (Delator.Field.string
+               (Logical_constant_instance_private.identity_digest instance))
+          ~provenance:
+            (Delator.Field.string
+               (match definition.constant_provenance with
+               | Sst.Uninterpreted_symbolic -> "uninterpreted-symbolic"
+               | Sst.Opaque_defined_identity -> "opaque-defined-identity"
+               | Sst.Verified_definitional_equation ->
+                   "verified-definitional-equation"))
+          ~decision:(Delator.Field.string "equation-omitted")];
+        Ok term
+    | Some constant_equation ->
+    let substitutions =
+      List.combine definition.constant_type_binders type_arguments
+    in
+    let body =
+      Sst.map_expression_types
+        (Parametric_type.substitute substitutions)
+        constant_equation.constant_body.expression
+    in
+    state.materializing := instance :: !(state.materializing);
+    let* rhs = translate_body symbols [] fuel body in
+    let* equation =
+      of_logic (Logic_ir.equal ~span:definition.constant_span term rhs)
+    in
+    state.materializing :=
+      List.filter
+        (fun candidate ->
+          not (Logical_constant_instance_private.equal candidate instance))
+        !(state.materializing);
+    state.completed := instance :: !(state.completed);
+    state.equations := equation :: !(state.equations);
+    [%log.debug "materialized recursive-query logical constant equation"
+      ~stage:(Delator.Field.string "recursive-logical-constant")
+      ~constant_name:(Delator.Field.string constant.constant_name)
+      ~instance:
+        (Delator.Field.string
+           (Logical_constant_instance_private.identity_digest instance))
+      ~type_argument_count:(Delator.Field.int (List.length type_arguments))
+      ~dependency_equation_count:
+        (Delator.Field.int (List.length !(state.equations) - 1))
+      ~decision:(Delator.Field.string "materialized")];
+    Ok term
+and translate_nonrecursive_spec_call symbols environment fuel
+    (expression : Sst.expression) callee type_arguments arguments =
+  let program =
+    Spec_unfolding_private.definition_program symbols.definition
+  in
+  let* definition =
+    match
+      List.find_opt
+        (fun candidate -> same_function_id candidate.Sst.function_id callee)
+        program.Sst.functions
+    with
+    | Some
+        ({
+           body =
+             Sst.Spec_definition
+               { stage = Sst.Logical; expression = body };
+           recursive = false;
+           _;
+         } as definition) ->
+        Ok (definition, body)
+    | Some _ ->
+        fail expression.span
+          "logical constant dependency is not a nonrecursive logical specification"
+    | None ->
+        fail expression.span
+          "logical constant dependency is absent from recursive-query authority"
+  in
+  let definition, body = definition in
+  let* substitutions =
+    if
+      List.length definition.type_binders = List.length type_arguments
+    then Ok (List.combine definition.type_binders type_arguments)
+    else
+      fail expression.span
+        "logical constant dependency has a stale type argument vector"
+  in
+  let substitute = Parametric_type.substitute substitutions in
+  let* actuals =
+    List.fold_left
+      (fun result argument ->
+        let* actuals = result in
+        match argument with
+        | Sst.Value_argument { value; _ } ->
+            let* term = translate_body symbols environment fuel value in
+            Ok (term :: actuals)
+        | Sst.Callback_argument _ ->
+            fail expression.span
+              "logical constant dependency has a callback argument")
+      (Ok []) arguments
+    |> Result.map List.rev
+  in
+  let* parameters =
+    List.fold_left
+      (fun result parameter ->
+        let* parameters = result in
+        match parameter with
+        | Sst.Value_parameter parameter -> Ok (parameter :: parameters)
+        | Sst.Callback_parameter _ ->
+            fail expression.span
+              "logical constant dependency has a callback parameter")
+      (Ok []) definition.parameters
+    |> Result.map List.rev
+  in
+  if List.length parameters <> List.length actuals then
+    fail expression.span
+      "logical constant dependency has inconsistent parameter arity"
+  else
+    let rec irrefutable (pattern : Sst.pattern) =
+      match pattern.pattern_desc with
+      | Sst.Wildcard | Sst.Bind _ | Sst.Unit_pattern -> true
+      | Sst.Tuple_pattern components ->
+          List.for_all (fun (_, nested) -> irrefutable nested) components
+      | Sst.Record_pattern fields ->
+          List.for_all (fun (_, nested) -> irrefutable nested) fields
+      | Sst.Int_pattern _ | Sst.Bool_pattern _ | Sst.Constructor_pattern _
+      | Sst.Owned_tree_cursor_pattern _ | Sst.Or_pattern _ ->
+          false
+    in
+    let* body_environment =
+      List.fold_left2
+        (fun result (parameter : Sst.value_parameter) actual ->
+          let* body_environment = result in
+          let pattern =
+            Sst.map_pattern_types substitute parameter.pattern
+          in
+          if not (irrefutable pattern) then
+            fail pattern.span
+              "logical constant dependency has a refutable parameter pattern"
+          else
+            let* body_environment, _ =
+              translate_pattern symbols body_environment actual pattern
+            in
+            Ok body_environment)
+        (Ok []) parameters actuals
+    in
+    let body = Sst.map_expression_types substitute body in
+    [%log.debug
+      "expanded logical constant specification dependency in recursive query"
+      ~stage:(Delator.Field.string "recursive-logical-constant")
+      ~callee:(Delator.Field.string callee.function_name)
+      ~type_argument_count:(Delator.Field.int (List.length type_arguments))
+      ~argument_count:(Delator.Field.int (List.length arguments))
+      ~decision:(Delator.Field.string "expanded")];
+    translate_body symbols body_environment fuel body
 and translate_body_quantifier symbols environment fuel universal quantifier =
   let metadata = quantifier.Sst.quantifier_metadata in
   let binder = quantifier.quantifier_binder in
@@ -1034,6 +1304,9 @@ type extra =
 let build_query definition depths extra =
   let* symbols = declare_symbols definition in
   let* axioms = make_axioms symbols in
+  let logical_constant_equations =
+    List.rev !(symbols.logical_constants.equations)
+  in
   let* activations =
     List.fold_left
       (fun result depth ->
@@ -1073,7 +1346,9 @@ let build_query definition depths extra =
   in
   of_logic
     (Logic_ir.query symbols.builder ~axioms
-       ~assertions:(List.rev activations @ extra_assertions)
+       ~assertions:
+         (logical_constant_equations @ List.rev activations
+        @ extra_assertions)
        ~requires:required_features ~span:symbols.span)
 let base_query verified function_id =
   let* definition = definition verified function_id in
@@ -1108,6 +1383,7 @@ let validate_obligation_record_metadata ~(program : Sst.program)
     (obligation : Vir.obligation) =
   let span = obligation.span in
   let reached = ref [] in
+  let logical_adt_schemas = Logical_adt_encoding_private.schemas obligation in
   let argument_type expected =
     Recursive_spec_term_private.argument_type
       ~parametric_adts:program.parametric_adts ~expected
@@ -1154,16 +1430,58 @@ let validate_obligation_record_metadata ~(program : Sst.program)
                  ~decision:(Delator.Field.string "accepted")];
                result_type)
   in
-  let record_definition record_type =
+  let record_definition record_type aggregate_type =
     match
       List.find_opt
-        (fun (definition : Sst.type_definition) ->
-          definition.type_id = record_type)
-        program.types
+        (fun schema ->
+          Logical_adt_encoding_private.aggregate_type schema = aggregate_type)
+        logical_adt_schemas
     with
-    | Some { type_kind = Sst.Record_definition fields; _ } -> Ok fields
-    | Some { type_kind = Sst.Variant_definition _; _ } | None ->
-        fail span "aggregate record has the wrong nominal program type"
+    | Some schema ->
+        let descriptor = Logical_adt_schema_private.descriptor schema in
+        let type_id = Parametric_adt.type_id descriptor in
+        if type_id <> record_type then
+          fail span "aggregate record schema has a mismatched nominal type"
+        else (
+          match Parametric_adt.kind descriptor with
+          | Parametric_adt.Variant _ ->
+              fail span "aggregate record schema names a variant type"
+          | Parametric_adt.Record fields ->
+              let arguments = Logical_adt_schema_private.arguments schema in
+              List.fold_left
+                (fun result field ->
+                  let* fields = result in
+                  let* typ =
+                    Parametric_adt.instantiate_field descriptor arguments field
+                    |> Result.map_error (fun message -> { span; message })
+                  in
+                  let field_id =
+                    Sst.
+                      { field_owner = Record_owner record_type;
+                        field_index = field.Parametric_adt.field_index;
+                        field_name = field.field_name }
+                  in
+                  Ok ((field_id, typ) :: fields))
+                (Ok []) fields
+              |> Result.map List.rev)
+    | None -> (
+        match
+          List.find_opt
+            (fun (definition : Sst.type_definition) ->
+              definition.type_id = record_type)
+            program.types
+        with
+        | Some { type_kind = Sst.Record_definition fields; _ }
+          when aggregate_type = vir_aggregate_type record_type ->
+            Ok
+              (List.map
+                 (fun (field : Sst.field_definition) ->
+                   (field.field_id, field.field_type))
+                 fields)
+        | Some { type_kind = Sst.Record_definition _; _ }
+        | Some { type_kind = Sst.Variant_definition _; _ }
+        | None ->
+            fail span "aggregate record has the wrong exact program type")
   in
   let rec aggregate (term : Vir.aggregate_term) =
     match term.aggregate_desc with
@@ -1195,41 +1513,62 @@ let validate_obligation_record_metadata ~(program : Sst.program)
             call_span (Some application_identity);
           arguments values)
     | Vir.Aggregate_record { record_type; fields } ->
-        let* expected_fields = record_definition record_type in
-        if term.aggregate_type <> vir_aggregate_type record_type then
-          fail span "aggregate record has a mismatched result type"
-        else if
-          List.length
-            (List.sort_uniq compare
-               (List.map
-                  (fun (field, _) -> field.Sst.field_index)
-                  fields))
-          <> List.length fields
-        then fail span "aggregate record has duplicate fields"
-        else if List.length fields <> List.length expected_fields then
-          fail span "aggregate record has an incomplete field vector"
-        else
-          List.fold_left2
-            (fun result (field, value)
-                 (expected : Sst.field_definition) ->
-              let* () = result in
-              let* () =
-                match field.Sst.field_owner with
-                | Sst.Record_owner owner when owner = record_type -> Ok ()
-                | Sst.Record_owner _ | Sst.Constructor_owner _ ->
-                    fail span "aggregate record field has a mismatched owner"
-              in
-              if field.field_index <> expected.field_id.field_index then
-                fail span
-                  "aggregate record field has a mismatched ordinal/index"
-              else if field <> expected.field_id then
-                fail span "aggregate record field metadata is not exact"
-              else if argument_type (Some expected.field_type) value
-                      <> expected.field_type
-              then
-                fail span "aggregate record field has a mismatched type/sort"
-              else argument value)
-            (Ok ()) fields expected_fields
+        (match
+           Logical_adt_encoding_private.validate_record_fields
+             ~schemas:logical_adt_schemas ~aggregate_type:term.aggregate_type
+             ~record_type ~fields
+         with
+        | Error message ->
+            [%log.debug
+              "rejected recursive record vector incompatible with exact ADT schema"
+              ~stage:(Delator.Field.string "recursive-record-schema-validation")
+              ~field_count:(Delator.Field.int (List.length fields))
+              ~reason:(Delator.Field.string message)
+              ~decision:(Delator.Field.string "rejected")];
+            fail span "%s" message
+        | Ok Logical_adt_encoding_private.Validated_record_schema ->
+            [%log.trace "validated recursive record vector against exact ADT schema"
+              ~stage:(Delator.Field.string "recursive-record-schema-validation")
+              ~field_count:(Delator.Field.int (List.length fields))
+              ~decision:(Delator.Field.string "accepted")];
+            arguments (List.map snd fields)
+        | Ok Logical_adt_encoding_private.Unavailable_record_schema ->
+            let* expected_fields =
+              record_definition record_type term.aggregate_type
+            in
+            if
+              List.length
+                (List.sort_uniq compare
+                   (List.map
+                      (fun (field, _) -> field.Sst.field_index)
+                      fields))
+              <> List.length fields
+            then fail span "aggregate record has duplicate fields"
+            else if List.length fields <> List.length expected_fields then
+              fail span "aggregate record has an incomplete field vector"
+            else
+              List.fold_left2
+                (fun result (field, value)
+                     ((expected_id : Sst.field_id), expected_type) ->
+                  let* () = result in
+                  let* () =
+                    match field.Sst.field_owner with
+                    | Sst.Record_owner owner when owner = record_type -> Ok ()
+                    | Sst.Record_owner _ | Sst.Constructor_owner _ ->
+                        fail span
+                          "aggregate record field has a mismatched owner"
+                  in
+                  if field.field_index <> expected_id.field_index then
+                    fail span
+                      "aggregate record field has a mismatched ordinal/index"
+                  else if field <> expected_id then
+                    fail span "aggregate record field metadata is not exact"
+                  else if
+                    argument_type (Some expected_type) value <> expected_type
+                  then
+                    fail span "aggregate record field has a mismatched type/sort"
+                  else argument value)
+                (Ok ()) fields expected_fields)
     | Vir.Aggregate_conditional (condition, consequent, alternative) ->
         let* () = boolean condition in
         let* () = aggregate consequent in
@@ -1239,6 +1578,7 @@ let validate_obligation_record_metadata ~(program : Sst.program)
   and argument = function
     | Vir.Recursive_integer_argument term -> integer term
     | Vir.Recursive_boolean_argument term -> boolean term
+    | Vir.Recursive_bv_argument term -> bit_vector term
     | Vir.Recursive_aggregate_argument term -> aggregate term
     | Vir.Recursive_parametric_argument term -> parametric term
   and parametric term =
@@ -1295,7 +1635,64 @@ let validate_obligation_record_metadata ~(program : Sst.program)
           arguments values)
     | Vir.Integer_symbolic_application application ->
         arguments (Symbolic_application_private.arguments application)
+  | Vir.Integer_bv_to_int_unsigned term | Vir.Integer_bv_to_int_signed term ->
+      bit_vector term
     | Vir.Integer_constant _ | Vir.Integer_symbol _ -> Ok ()
+  and bit_vector term =
+    let width = term.Vir.bit_vector_width in
+    match term.bit_vector_desc with
+    | Vir.Bv_symbol symbol ->
+        if Vir.sort_equal symbol.sort (Vir.Bit_vector width) then Ok ()
+        else fail symbol.span "bit-vector symbol has a mismatched declared width"
+    | Vir.Bv_literal value ->
+        if Bv_width.equal width value.Bv_value.width then Ok ()
+        else fail span "bit-vector literal has a mismatched authenticated width"
+    | Vir.Bv_int_to_bv_mod { input; source_authority } ->
+        let* () =
+          Numeric_bv_projection_evidence_private.validate ~width
+            source_authority
+          |> Result.map_error (fun message -> { span; message })
+        in
+        integer input
+    | Vir.Bv_conditional (condition, consequent, alternative) ->
+        if
+          not
+            (Bv_width.equal width consequent.bit_vector_width
+            && Bv_width.equal width alternative.bit_vector_width)
+        then fail span "bit-vector conditional crosses exact widths"
+        else
+          let* () = boolean condition in
+          let* () = bit_vector consequent in
+          bit_vector alternative
+    | Vir.Bv_selector (selector, source) ->
+        let* () = aggregate source in
+        let* observed =
+          Logical_aggregate_term_normalization_private.bit_vector_selector width
+            selector source
+          |> Result.map_error (fun message -> { span; message })
+        in
+        Logical_aggregate_term_normalization_private.fold
+          ~opaque:aggregate ~exact:bit_vector
+          ~conditional:(fun condition consequent alternative ->
+            let* () = boolean condition in
+            let* () = consequent in
+            alternative)
+          observed
+    | Vir.Bv_not value -> bit_vector value
+    | Vir.Bv_binary (_, left, right) ->
+        let* () = bit_vector left in
+        bit_vector right
+    | Vir.Bv_recursive_spec_application
+        { callee; type_arguments; arguments = values; span = call_span } ->
+        let* result_type = recursive_result_type callee type_arguments call_span in
+        if not (Parametric_type.equal result_type (Sst.Bit_vector width)) then
+          fail call_span
+            "bit-vector recursive specification application changes authenticated width"
+        else (
+          note callee type_arguments values result_type call_span None;
+          arguments values)
+    | Vir.Bv_symbolic_application application ->
+        arguments (Symbolic_application_private.arguments application)
   and boolean = function
     | Vir.Forall_term quantifier | Vir.Exists_term quantifier ->
         let* () = boolean quantifier.boolean_quantifier_body in
@@ -1312,6 +1709,10 @@ let validate_obligation_record_metadata ~(program : Sst.program)
     | Vir.Integer_compare (_, left, right) ->
         let* () = integer left in
         integer right
+    | Vir.Bv_equal (left, right) | Vir.Bv_not_equal (left, right)
+    | Vir.Bv_compare (_, left, right) ->
+        let* () = bit_vector left in
+        bit_vector right
     | Vir.Boolean_selector (_, value)
     | Vir.Boolean_invariant_application { value; _ } ->
         aggregate value
@@ -1346,6 +1747,7 @@ let validate_obligation_record_metadata ~(program : Sst.program)
   and application = function
     | Vir.Integer_application term -> integer term
     | Boolean_application term -> boolean term
+    | Bv_application term -> bit_vector term
     | Aggregate_application term -> aggregate term
     | Parametric_application term ->
         argument (Vir.Recursive_parametric_argument term)
@@ -1542,6 +1944,8 @@ type proof_query_translation_environment = {
     Parametric_type.t list ->
     (symbols, error) result;
   axioms : Logic_ir.axiom list;
+  logical_constant_instances : Logical_constant_instance_private.t list;
+  logical_constant_equations : Logic_ir.term list;
   activation_terms : Logic_ir.term list;
   rank_domains : (string, Logic_ir.rank_domain) Hashtbl.t;
   rank_axioms : Logic_ir.axiom list ref;
@@ -1562,6 +1966,11 @@ type proof_query_translation_environment = {
   logical_constructor_function :
     Vir.aggregate_type ->
     Sst.constructor_id ->
+    Logic_ir.sort list ->
+    (Logic_ir.function_symbol, error) result;
+  logical_record_constructor_function :
+    Vir.aggregate_type ->
+    Sst.type_id ->
     Logic_ir.sort list ->
     (Logic_ir.function_symbol, error) result;
   aggregate_tag :
@@ -1770,6 +2179,7 @@ let declare_proof_query_sorts (preparation : proof_query_preparation)
     }
 let declare_proof_query_environment (preparation : proof_query_preparation)
     (sorts : proof_query_sort_environment) (obligation : Vir.obligation) =
+  let logical_constants = make_logical_constant_state () in
   let* symbols =
     List.fold_left
       (fun result view ->
@@ -1777,7 +2187,7 @@ let declare_proof_query_environment (preparation : proof_query_preparation)
         let* declared =
           declare_symbols_in ~functions:sorts.datatype_functions
             ~sort_registry:sorts.sort_registry ?logical_adts:sorts.logical_adts
-            ~view sorts.builder
+            ~logical_constants ~view sorts.builder
             ~fuel:sorts.fuel ~zero:sorts.zero ~succ:sorts.succ view.definition
         in
         Ok (declared :: symbols))
@@ -1856,6 +2266,9 @@ let declare_proof_query_environment (preparation : proof_query_preparation)
         else Ok axioms)
       (Ok []) symbols
   in
+  let logical_constant_equations =
+    List.rev !(logical_constants.equations)
+  in
   let* activation_terms =
     List.fold_left
       (fun result (activation : Spec_unfolding.activation) ->
@@ -1878,7 +2291,7 @@ let declare_proof_query_environment (preparation : proof_query_preparation)
   in
   let declared_symbols = Hashtbl.create 32 in
   let declare_vir_symbol expected_sort (symbol : Vir.symbol) =
-    if symbol.sort <> expected_sort then
+    if not (Vir.sort_equal symbol.sort expected_sort) then
       fail preparation.span "VIR symbol %s#%d has inconsistent scalar sort"
         symbol.source_name symbol.symbol_id
     else
@@ -1890,16 +2303,66 @@ let declare_proof_query_environment (preparation : proof_query_preparation)
             match expected_sort with
             | Vir.Integer -> Logic_ir.Int
             | Vir.Boolean -> Logic_ir.Bool
+            | Vir.Bit_vector width -> Logic_ir.Bv width
             | Vir.Aggregate aggregate -> sorts.aggregate_sort aggregate
             | Vir.Parametric binder -> sorts.parametric_sort binder
           in
+          let* name =
+            match symbol.role with
+            | Vir.Logical_constant instance ->
+                let authenticated =
+                  List.exists
+                    (Logical_constant_instance_private.equal instance)
+                    !(logical_constants.completed)
+                  || List.exists
+                       (fun equation ->
+                         Logical_constant_instance_private.equal instance
+                           equation.Vir.logical_constant_instance)
+                       obligation.logical_constant_equations
+                  || List.exists
+                       (Logical_constant_instance_private.equal instance)
+                       obligation.logical_constant_instances
+                in
+                if authenticated then (
+                  [%log.trace
+                    "resolved recursive proof logical constant symbol"
+                    ~stage:
+                      (Delator.Field.string "recursive-logical-constant")
+                    ~instance:
+                      (Delator.Field.string
+                         (Logical_constant_instance_private.identity_digest
+                            instance))
+                    ~backend_head:
+                      (Delator.Field.string
+                         (Logical_constant_instance_private.backend_head
+                            instance))
+                    ~decision:(Delator.Field.string "accepted")];
+                  Ok (Logical_constant_instance_private.backend_head instance))
+                else
+                  fail symbol.span
+                    "logical constant symbol lacks a recursive-query equation"
+            | Vir.Input | Vir.Local | Vir.Result ->
+                Ok
+                  (Printf.sprintf "f%d_s%d"
+                     obligation.function_ref.function_index symbol.symbol_id)
+          in
           let* function_ =
-            of_logic
-              (Logic_ir.declare_function sorts.builder
-                 ~name:
-                   (Printf.sprintf "f%d_s%d"
-                      obligation.function_ref.function_index symbol.symbol_id)
-                 ~domain:[] ~range ~span:symbol.span)
+            match Hashtbl.find_opt sorts.datatype_functions name with
+            | Some (domain, existing_range, function_)
+              when domain = []
+                   && Logic_ir.sort_equal existing_range range ->
+                Ok function_
+            | Some _ ->
+                fail symbol.span
+                  "recursive proof symbol has inconsistent backend sorts"
+            | None ->
+                let* function_ =
+                  of_logic
+                    (Logic_ir.declare_function sorts.builder ~name ~domain:[]
+                       ~range ~span:symbol.span)
+                in
+                Hashtbl.add sorts.datatype_functions name ([], range, function_);
+                Ok function_
           in
           Hashtbl.add declared_symbols key function_;
           Ok function_
@@ -1933,6 +2396,8 @@ let declare_proof_query_environment (preparation : proof_query_preparation)
     Logical_adt_encoding_private.routed_selector routing
   and logical_constructor_function =
     Logical_adt_encoding_private.routed_constructor routing
+  and logical_record_constructor_function =
+    Logical_adt_encoding_private.routed_record_constructor routing
   in
   let aggregate_tag = Logical_adt_encoding_private.routed_tag routing in
   Ok
@@ -1945,6 +2410,8 @@ let declare_proof_query_environment (preparation : proof_query_preparation)
       parametric_sort = sorts.parametric_sort;
       find_symbols;
       axioms;
+      logical_constant_instances = !(logical_constants.completed);
+      logical_constant_equations;
       activation_terms;
       rank_domains = Hashtbl.create 4;
       rank_axioms = ref [];
@@ -1953,6 +2420,7 @@ let declare_proof_query_environment (preparation : proof_query_preparation)
       declare_aggregate_function;
       logical_selector_function;
       logical_constructor_function;
+      logical_record_constructor_function;
       aggregate_tag;
     }
 let rec symbol_term environment expected_sort symbol =
@@ -1972,6 +2440,7 @@ let rec symbol_term environment expected_sort symbol =
 and logic_sort environment = function
   | Vir.Integer -> Logic_ir.Int
   | Vir.Boolean -> Logic_ir.Bool
+  | Vir.Bit_vector width -> Logic_ir.Bv width
   | Vir.Aggregate aggregate -> environment.aggregate_sort aggregate
   | Vir.Parametric binder -> environment.parametric_sort binder
 let rank_member_name aggregate =
@@ -2184,6 +2653,7 @@ let rec translate_integer environment term =
         symbol = symbol_term environment Vir.Integer;
         translate_integer = translate_integer environment;
         translate_boolean = translate_boolean environment;
+        translate_bit_vector = translate_bit_vector environment;
         translate_arguments = translate_recursive_arguments environment;
         recursive_function =
           (fun callee type_arguments ->
@@ -2242,8 +2712,49 @@ let rec translate_integer environment term =
   | Vir.Integer_constant _ | Vir.Integer_symbol _ | Vir.Integer_add _
   | Vir.Integer_subtract _ | Vir.Integer_negate _ | Vir.Integer_multiply _
   | Vir.Integer_multiply_constant _ | Vir.Integer_absolute_value _
-  | Vir.Integer_conditional _ | Vir.Integer_recursive_spec_application _ ->
+  | Vir.Integer_conditional _ | Vir.Integer_recursive_spec_application _
+  | Vir.Integer_bv_to_int_unsigned _ | Vir.Integer_bv_to_int_signed _ ->
       assert false)
+and translate_bit_vector environment term =
+  Vir_logic_ir_translation_private.translate_bit_vector_core
+    {
+      span = environment.span;
+      symbol =
+        (fun width symbol ->
+          symbol_term environment (Vir.Bit_vector width) symbol);
+      translate_integer = translate_integer environment;
+      translate_boolean = translate_boolean environment;
+      translate_bit_vector = translate_bit_vector environment;
+      translate_selector =
+        (fun width selector source ->
+          [%log.debug
+            "routing recursive-definition BV selector through normalization owner"
+            ~stage:(Delator.Field.string "recursive-bv-selector-translation")
+            ~selector_index:(Delator.Field.int selector.selector_index)
+            ~width:(Delator.Field.int (Bv_width.to_int width))];
+          Vir_logic_ir_translation_private.translate_bit_vector_selector
+            (scalar_selector_services environment) ~width
+            ~translate_bit_vector:(translate_bit_vector environment)
+            selector source);
+      translate_arguments = translate_recursive_arguments environment;
+      recursive_function =
+        (fun callee type_arguments width ->
+          let* symbols = environment.find_symbols callee type_arguments in
+          if
+            Logic_ir.sort_equal
+              (Logic_ir.View.function_range symbols.public)
+              (Logic_ir.Bv width)
+          then Ok symbols.public
+          else
+            fail environment.span
+              "bit-vector recursive application has a mismatched result width");
+      symbolic_application =
+        (fun width application ->
+          translate_symbolic_application environment (Logic_ir.Bv width)
+            application);
+      term_result = of_logic;
+    }
+    term
 and translate_boolean environment term =
   let* core =
     Vir_logic_ir_translation_private.translate_boolean_core
@@ -2252,6 +2763,7 @@ and translate_boolean environment term =
         symbol = symbol_term environment Vir.Boolean;
         translate_boolean = translate_boolean environment;
         translate_integer = translate_integer environment;
+        translate_bit_vector = translate_bit_vector environment;
         term_result = of_logic;
       }
       term
@@ -2325,7 +2837,8 @@ and translate_boolean environment term =
         environment.span
   | Vir.Boolean_constant _ | Vir.Logical_adt_schema _ | Vir.Boolean_symbol _
   | Vir.Boolean_not _ | Vir.Boolean_and _ | Vir.Boolean_or _
-  | Vir.Integer_compare _ | Vir.Boolean_equal _ | Vir.Boolean_not_equal _ ->
+  | Vir.Integer_compare _ | Vir.Boolean_equal _ | Vir.Boolean_not_equal _
+  | Vir.Bv_equal _ | Vir.Bv_not_equal _ | Vir.Bv_compare _ ->
       assert false)
 and translate_user_quantifier environment universal quantifier =
   Vir_logic_ir_translation_private.translate_user_quantifier
@@ -2408,12 +2921,14 @@ and translate_aggregate environment (term : Vir.aggregate_term) =
       if term.aggregate_type.aggregate_type_index <> record_type.type_index then
         fail environment.span "aggregate record has a mismatched result type"
       else
-        translate_callback_relation
-          ~range:(environment.aggregate_sort term.aggregate_type)
-          environment
-          (Aggregate_logic_symbol_private.record_constructor
-             term.aggregate_type record_type)
-          (List.map snd fields) environment.span
+        let* arguments =
+          translate_recursive_arguments environment (List.map snd fields)
+        in
+        let* function_ =
+          environment.logical_record_constructor_function term.aggregate_type
+            record_type (List.map Logic_ir.term_sort arguments)
+        in
+        of_logic (Logic_ir.apply ~span:environment.span function_ arguments)
   | Vir.Aggregate_conditional (condition, consequent, alternative) ->
       if
         consequent.aggregate_type <> term.aggregate_type
@@ -2499,12 +3014,14 @@ and translate_parametric environment term =
 and translate_application environment = function
   | Vir.Integer_application term -> translate_integer environment term
   | Boolean_application term -> translate_boolean environment term
+  | Bv_application term -> translate_bit_vector environment term
   | Aggregate_application term -> translate_aggregate environment term
   | Parametric_application term -> translate_parametric environment term
 and translate_recursive_arguments environment arguments =
   Vir_logic_ir_translation_private.translate_arguments
     ~integer:(translate_integer environment)
     ~boolean:(translate_boolean environment)
+    ~bit_vector:(translate_bit_vector environment)
     ~aggregate:(translate_aggregate environment)
     ~parametric:(translate_parametric environment)
     arguments
@@ -2572,6 +3089,56 @@ let specialization_assertions environment specialization =
           (Logic_ir.and_ ~span:environment.span [ exact_result; exact_tag ])
       in
       Ok [ fact ]
+let translate_logical_constant_equations environment equations =
+  List.fold_left
+    (fun result equation ->
+      let* translated = result in
+      let instance = equation.Vir.logical_constant_instance in
+      if
+        List.exists
+          (Logical_constant_instance_private.equal instance)
+          environment.logical_constant_instances
+      then (
+        [%log.trace
+          "reused recursive body logical constant equation for proof query"
+          ~stage:(Delator.Field.string "recursive-logical-constant")
+          ~instance:
+            (Delator.Field.string
+               (Logical_constant_instance_private.identity_digest instance))
+          ~decision:(Delator.Field.string "reused")];
+        Ok translated)
+      else
+        let* rhs =
+          translate_application environment equation.logical_constant_rhs
+        in
+        let range = Logic_ir.term_sort rhs in
+        let* function_ =
+          environment.declare_aggregate_function
+            (Logical_constant_instance_private.backend_head instance)
+            [] range equation.logical_constant_span
+        in
+        let* lhs =
+          of_logic
+            (Logic_ir.apply ~span:equation.logical_constant_span function_ [])
+        in
+        let* equality =
+          of_logic
+            (Logic_ir.equal ~span:equation.logical_constant_span lhs rhs)
+        in
+        [%log.debug
+          "translated proof-obligation logical constant equation in recursive query"
+          ~stage:(Delator.Field.string "recursive-logical-constant")
+          ~instance:
+            (Delator.Field.string
+               (Logical_constant_instance_private.identity_digest instance))
+          ~backend_head:
+            (Delator.Field.string
+               (Logical_constant_instance_private.backend_head instance))
+          ~result_sort:(Delator.Field.string (Logic_ir.sort_to_string range))
+          ~decision:(Delator.Field.string "materialized")];
+        Ok (equality :: translated))
+    (Ok []) equations
+  |> Result.map List.rev
 let finish_proof_query environment specialization (obligation : Vir.obligation)
     =
   let* assumptions =
@@ -2584,12 +3151,18 @@ let finish_proof_query environment specialization (obligation : Vir.obligation)
   let* specialization_assertions =
     specialization_assertions environment specialization
   in
+  let* obligation_logical_constant_equations =
+    translate_logical_constant_equations environment
+      obligation.logical_constant_equations
+  in
   of_logic
     (Logic_ir.query environment.builder
        ~axioms:(environment.axioms @ List.rev !(environment.rank_axioms))
        ~assertions:
-         (environment.activation_terms @ assumptions @ specialization_assertions
-        @ [ negated_goal ])
+         (environment.logical_constant_equations
+        @ obligation_logical_constant_equations
+        @ environment.activation_terms @ assumptions
+        @ specialization_assertions @ [ negated_goal ])
        ~requires:required_features ~span:environment.span)
 let build_proof_obligation_query ?specialization ?solver_controls
     ?(record_construction = true) verified ~activations
@@ -2681,6 +3254,7 @@ let rec nullary_scalar_integer_argument = function
   | Vir.Aggregate_tag _
   | Vir.Integer_selector _ ->
       false
+  | Vir.Integer_bv_to_int_unsigned _ | Vir.Integer_bv_to_int_signed _ -> false
 and nullary_scalar_boolean_argument = function
   | Vir.Forall_term _ | Vir.Exists_term _ -> false
   | Vir.Boolean_constant _ | Vir.Boolean_symbol _
@@ -2696,6 +3270,7 @@ and nullary_scalar_boolean_argument = function
   | Vir.Integer_compare (_, left, right) ->
       nullary_scalar_integer_argument left
       && nullary_scalar_integer_argument right
+  | Vir.Bv_equal _ | Vir.Bv_not_equal _ | Vir.Bv_compare _ -> false
   | Vir.Parametric_equal (left, right) ->
       nullary_scalar_parametric_argument left
       && nullary_scalar_parametric_argument right
@@ -2745,6 +3320,7 @@ let nullary_branch_argument_supported = function
       { Vir.aggregate_desc = Vir.Aggregate_symbol { role = Vir.Input; _ }; _ } ->
       true
   | Vir.Recursive_aggregate_argument _
+  | Vir.Recursive_bv_argument _
   | Vir.Recursive_parametric_argument _ -> false
 let nullary_branch_specialization ?solver_controls verified ~activations
     ~(ground_constructors : (Vir.symbol * Sst.constructor_id) list)
@@ -2922,12 +3498,16 @@ let nullary_branch_specialization ?solver_controls verified ~activations
                           | Some
                               (Vir.Recursive_integer_argument _
                               | Vir.Recursive_boolean_argument _
+                              | Vir.Recursive_bv_argument _
                               | Vir.Recursive_aggregate_argument _
                               | Vir.Recursive_parametric_argument _)
                           | None ->
                               abstain ()))
                   | Sst.Int_constant _ | Sst.Bool_constant _
-                  | Sst.Unit_constant | Sst.Variable _ | Sst.Tuple_value _
+                  | Sst.Unit_constant | Sst.Bv_literal _
+                  | Sst.Bv_int_to_bv_mod _ | Sst.Bv_to_int_unsigned _
+                  | Sst.Bv_to_int_signed _ | Sst.Bv_not _ | Sst.Bv_binary _
+                  | Sst.Bv_compare _ | Sst.Variable _ | Sst.Tuple_value _
                   | Sst.Record_value _ | Sst.Constructor_value _
                   | Sst.Field_read _ | Sst.Field_write _
                   | Sst.Shared_scalar_field_write _
@@ -2945,7 +3525,8 @@ let nullary_branch_specialization ?solver_controls verified ~activations
                   | Sst.Lift_runtime_int _ | Sst.Local_assert _
                   | Sst.Proof_region _ | Sst.Old _
                   | Sst.Forall _ | Sst.Exists _
-                  | Sst.Symbolic_application _ ->
+                  | Sst.Symbolic_application _
+                  | Sst.Logical_constant_reference _ ->
                       abstain ())
   | Vir.Arithmetic_safety _ | Vir.Assertion _ | Vir.Postcondition _
   | Vir.Call_precondition _ | Vir.Callback_precondition _
@@ -3214,6 +3795,9 @@ let rec ground_sst_expression fuel environment
       Some (Ground_aggregate constructor)
   | Sst.Direct_call { recursive = true; _ } when fuel <= 0 -> None
   | Sst.Direct_call _ | Sst.Callback_call _ | Sst.Callback_requires _
+  | Sst.Bv_literal _ | Sst.Bv_int_to_bv_mod _
+  | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+  | Sst.Bv_binary _ | Sst.Bv_compare _
   | Sst.Callback_ensures _ | Sst.Tuple_value _ | Sst.Record_value _
   | Sst.Constructor_value { arguments = _ :: _; _ } | Sst.Field_read _
   | Sst.Field_write _ | Sst.Shared_scalar_field_write _
@@ -3222,7 +3806,7 @@ let rec ground_sst_expression fuel environment
   | Sst.Mutable_write _ | Sst.Reveal _ | Sst.Reveal_with_fuel _
   | Sst.Use_type_invariant _ | Sst.Local_assert _ | Sst.Proof_region _
   | Sst.Old _ | Sst.Forall _ | Sst.Exists _
-  | Sst.Symbolic_application _ ->
+  | Sst.Symbolic_application _ | Sst.Logical_constant_reference _ ->
       None
 let exact_nullary_constructor source constructor =
   List.exists
@@ -3349,6 +3933,7 @@ let rec ground_vir_integer context = function
               None)
   | Vir.Integer_conditional _ -> None
   | Vir.Integer_rank_project _ | Vir.Integer_selector _ -> None
+  | Vir.Integer_bv_to_int_unsigned _ | Vir.Integer_bv_to_int_signed _ -> None
 and ground_vir_aggregate context aggregate =
   match aggregate.Vir.aggregate_desc with
   | Vir.Aggregate_symbol symbol -> ground_symbol context symbol
@@ -3376,6 +3961,7 @@ and ground_vir_argument context = function
       Option.map
         (fun value -> Ground_boolean value)
         (ground_vir_boolean context term)
+  | Vir.Recursive_bv_argument _ -> None
   | Vir.Recursive_aggregate_argument term ->
       Option.map
         (fun value -> Ground_aggregate value)
@@ -3436,6 +4022,7 @@ and ground_vir_boolean context = function
       with
       | Some left, Some right -> Some (not (Bool.equal left right))
       | None, _ | _, None -> None)
+  | Vir.Bv_equal _ | Vir.Bv_not_equal _ | Vir.Bv_compare _ -> None
   | Vir.Aggregate_equal (left, right) -> (
       match
         ( ground_vir_aggregate context left,
@@ -3602,6 +4189,78 @@ let error_to_string error =
     error.span.start_pos.line error.span.start_pos.column error.span.end_pos.line
     error.span.end_pos.column
 module For_testing = struct
+  let internal_bv_proof_query ~span goal =
+    let builder = Logic_ir.create () in
+    let* aggregate_sort =
+      of_logic
+        (Logic_ir.declare_sort builder ~name:"internal_bv_proof_aggregate"
+           ~span)
+    in
+    let sort = function
+      | Vir.Integer -> Logic_ir.Int
+      | Vir.Boolean -> Logic_ir.Bool
+      | Vir.Bit_vector width -> Logic_ir.Bv width
+      | Vir.Aggregate _ | Vir.Parametric _ -> aggregate_sort
+    in
+    let declare name domain range declaration_span =
+      of_logic
+        (Logic_ir.declare_function builder ~name ~domain ~range
+           ~span:declaration_span)
+    in
+    let declare_vir_symbol expected (symbol : Vir.symbol) =
+      if not (Vir.sort_equal expected symbol.sort) then
+        fail symbol.span "recursive BV proof-test symbol has a mismatched sort"
+      else declare symbol.source_name [] (sort expected) symbol.span
+    in
+    let environment =
+      {
+        builder;
+        span;
+        reached_application_identities = [];
+        aggregate_sort = (fun _ -> aggregate_sort);
+        parametric_sort = (fun _ -> aggregate_sort);
+        find_symbols =
+          (fun _ _ ->
+            fail span
+              "recursive BV proof-test query has no recursive application authority");
+        axioms = [];
+        logical_constant_instances = [];
+        logical_constant_equations = [];
+        activation_terms = [];
+        rank_domains = Hashtbl.create 0;
+        rank_axioms = ref [];
+        bound_symbols = [];
+        declare_vir_symbol;
+        declare_aggregate_function = declare;
+        logical_selector_function =
+          (fun selector domain range ->
+            declare
+              (Printf.sprintf "selector_%d" selector.Vir.selector_index)
+              [ domain ] range span);
+        logical_constructor_function =
+          (fun aggregate constructor domain ->
+            declare
+              (Printf.sprintf "constructor_%d_%d"
+                 aggregate.Vir.aggregate_type_index
+                 constructor.Sst.constructor_index)
+              domain aggregate_sort span);
+        logical_record_constructor_function =
+          (fun aggregate record_type domain ->
+            declare
+              (Printf.sprintf "record_constructor_%d_%d"
+                 aggregate.Vir.aggregate_type_index record_type.Sst.type_index)
+              domain aggregate_sort span);
+        aggregate_tag =
+          (fun _ _ ->
+            fail span "recursive BV proof-test query has no rank authority");
+      }
+    in
+    let* translated = translate_boolean environment goal in
+    let* negated = of_logic (Logic_ir.not_ ~span translated) in
+    of_logic
+      (Logic_ir.query builder ~axioms:[] ~assertions:[ negated ]
+         ~requires:required_features ~span)
+
   let termination_obligations = Spec_unfolding_private.termination_obligations
   let verify_with_requirements = verify_with_requirements
   let proof_obligation_query = proof_obligation_query

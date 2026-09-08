@@ -7,6 +7,9 @@ type function_ref
 type provenance
 type diagnostic
 type model_binding
+type native_bv_provenance =
+  Numeric_bv_projection_evidence_private.source_observation
+type native_bv_result_provenance
 type trusted_external_observation
 type scope_role = Scope_root | Scope_dependency
 type scoped_plan_error
@@ -80,6 +83,7 @@ type model_value =
   | Integer of string
   | Boolean of bool
   | Aggregate_identity of string
+  | Bit_vector of Bv_value.t
 
 type inconclusive_reason =
   | Resource_exhausted
@@ -89,6 +93,15 @@ type inconclusive_reason =
 type diagnostic_outcome =
   | Diagnostic_counterexample
   | Diagnostic_inconclusive of {
+      configured_timeout_ms : int;
+      configured_rlimit : int;
+      reason : inconclusive_reason;
+    }
+
+type native_bv_result_outcome =
+  | Native_bv_verified
+  | Native_bv_counterexample
+  | Native_bv_inconclusive of {
       configured_timeout_ms : int;
       configured_rlimit : int;
       reason : inconclusive_reason;
@@ -189,6 +202,17 @@ val provenance_direct_dependencies : provenance -> (string * string) list
 val provenance_transitive_dependencies : provenance -> (string * string) list
 
 val diagnostics : result -> diagnostic list
+val native_bv_provenance : result -> native_bv_provenance list
+val native_bv_results : result -> native_bv_result_provenance list
+val native_bv_result_function : native_bv_result_provenance -> function_ref
+val native_bv_result_obligation_identity :
+  native_bv_result_provenance -> string
+val native_bv_result_obligation_span :
+  native_bv_result_provenance -> Diagnostic.span
+val native_bv_result_outcome :
+  native_bv_result_provenance -> native_bv_result_outcome
+val native_bv_result_source_observations :
+  native_bv_result_provenance -> native_bv_provenance list
 val diagnostic_function : diagnostic -> function_ref
 val function_name : function_ref -> string
 val function_index : function_ref -> int
@@ -196,8 +220,11 @@ val diagnostic_kind : diagnostic -> diagnostic_kind
 val diagnostic_span : diagnostic -> Diagnostic.span
 val diagnostic_outcome : diagnostic -> diagnostic_outcome
 val diagnostic_model_bindings : diagnostic -> model_binding list
+val diagnostic_native_bv_provenance :
+  diagnostic -> native_bv_provenance list
 val model_binding_source_name : model_binding -> string
 val model_binding_symbol_id : model_binding -> int
+val model_binding_source_span : model_binding -> Diagnostic.span
 val model_binding_value : model_binding -> model_value option
 
 val trusted_external_observations :
@@ -205,3 +232,10 @@ val trusted_external_observations :
 
 val trusted_external_view :
   trusted_external_observation -> trusted_external_view
+
+module For_testing : sig
+  (** Applies the same service association boundary to actual coordinator
+      results without constructing a second service verification request. *)
+  val native_bv_results :
+    Solver_backend.obligation_result list -> native_bv_result_provenance list
+end

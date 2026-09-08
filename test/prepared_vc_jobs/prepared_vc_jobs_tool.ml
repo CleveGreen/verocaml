@@ -41,6 +41,8 @@ let obligation
       path_condition = [];
       goal;
       projection_symbols;
+      logical_constant_instances = [];
+      logical_constant_equations = [];
     }
 
 let policy rlimit =
@@ -347,6 +349,8 @@ let run_production ?before_configure input =
       ~implementation:input.implementation ~program:input.program
       ~validated:input.validated ~invariants:input.invariants
       ~preflight:run_preflight ~proof_entry_activations ~configure_solver
+      ~numeric_bv_source:None
+      ~on_function_commit:(fun _ _ _ -> ())
       ~on_result:(fun _ -> ())
   with
   | Ok report -> report
@@ -607,6 +611,7 @@ let recursive_local filename =
              Some symbol
          | Vir.Recursive_integer_argument _
          | Vir.Recursive_boolean_argument _
+         | Vir.Recursive_bv_argument _
          | Vir.Recursive_aggregate_argument _
          | Vir.Recursive_parametric_argument _ ->
              None)

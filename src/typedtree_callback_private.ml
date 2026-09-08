@@ -220,14 +220,16 @@ let deeply_immutable ~parametric_adts ~definitions typ =
               &&
               match field.field_type with
               | Sst.Aggregate nested -> aggregate (type_id :: visiting) nested
-              | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> true
+              | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+              | Sst.Bit_vector _ -> true
               | Sst.Tuple _ | Sst.Parameter _ | Sst.Application _ ->
                   Parametric_adt.deeply_immutable_instance descriptors
                     field.field_type)
             fields
   in
   match typ with
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> true
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+  | Sst.Bit_vector _ -> true
   | Sst.Aggregate type_id -> aggregate [] type_id
   | Sst.Tuple _ | Sst.Application _ | Sst.Parameter _ ->
       Parametric_adt.deeply_immutable_instance descriptors typ

@@ -27,6 +27,7 @@ val definition_visibility : definition -> [ `Opaque | `Revealed ]
 val definition_span : definition -> Diagnostic.span
 val definition_types : definition -> Sst.type_definition list
 val definition_parametric_adts : definition -> Parametric_adt.t list
+val definition_program : definition -> Sst.program
 
 module For_testing : sig
   val recursive_lowering_count : unit -> int

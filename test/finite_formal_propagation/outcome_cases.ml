@@ -138,7 +138,7 @@ let public_interface_rejections =
     [ "Generic_explicit_alias"; "Generic_explicit_nested" ]
     (rejected
        [ "Generic_explicit_alias"; "Generic_explicit_nested" ]
-       [ "VERO_UNSUPPORTED_AGGREGATE"; "VERO_UNSUPPORTED_GENERIC_USE" ])
+       [ "VERO_UNSUPPORTED_TYPE"; "VERO_UNSUPPORTED_GENERIC_USE" ])
 
 let same_cmt_signature_rejections =
   case "same-cmt-signature-rejections"

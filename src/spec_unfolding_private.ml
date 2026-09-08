@@ -10,6 +10,7 @@ type definition = {
   visibility : [ `Opaque | `Revealed ];
   types : Sst.type_definition list;
   parametric_adts : Parametric_adt.t list;
+  program : Sst.program;
 }
 type activation = Spec_unfolding.activation = {
   function_id : Sst.function_id;
@@ -26,6 +27,7 @@ let recursive_lowerings = ref 0
 type value =
   | Integer of Vir.integer_term
   | Boolean of Vir.boolean_term
+  | Bit_vector of Vir.bit_vector_term
   | Aggregate of Vir.aggregate_term
   | Parametric of Vir.parametric_term
   | Function of {
@@ -69,7 +71,8 @@ let vir_aggregate_type_of_sst descriptors = function
                 ^ ">";
               aggregate_type_arguments = arguments })
           (Parametric_adt.find descriptors constructor)
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+  | Sst.Bit_vector _ | Sst.Tuple _
   | Sst.Parameter _ ->
       None
 let symbol_of_binding parametric_adts (binding : Sst.binding) =
@@ -77,6 +80,7 @@ let symbol_of_binding parametric_adts (binding : Sst.binding) =
     match binding.typ with
     | Sst.Int | Sst.Mathematical_int -> Vir.Integer
     | Sst.Bool -> Vir.Boolean
+    | Sst.Bit_vector width -> Vir.Bit_vector width
     | Sst.Aggregate type_id ->
         Vir.Aggregate
           {
@@ -108,6 +112,7 @@ let quantifier_value parametric_adts (binding : Sst.binding) =
     match binding.typ with
     | Sst.Int | Sst.Mathematical_int -> Integer (Vir.Integer_symbol symbol)
     | Sst.Bool -> Boolean (Vir.Boolean_symbol symbol)
+    | Sst.Bit_vector _ -> Bit_vector (Result.get_ok (Vir.bv_symbol symbol))
     | Sst.Application _ when Parametric_type.is_spec_function binding.typ ->
         Function
           {
@@ -157,6 +162,8 @@ let initial_environment parametric_adts parameters =
             | Sst.Int | Sst.Mathematical_int ->
                 Integer (Vir.Integer_symbol symbol)
             | Sst.Bool -> Boolean (Vir.Boolean_symbol symbol)
+            | Sst.Bit_vector _ ->
+                Bit_vector (Result.get_ok (Vir.bv_symbol symbol))
             | Sst.Aggregate type_id ->
                 Aggregate
                   {
@@ -198,15 +205,19 @@ let lookup span environment binding =
   | None -> fail span "unbound recursive-spec binding %s#%d" binding.name binding.id
 let integer span = function
   | Integer term -> Ok term
-  | Boolean _ | Aggregate _ | Parametric _ | Function _ ->
+  | Boolean _ | Bit_vector _ | Aggregate _ | Parametric _ | Function _ ->
       fail span "expected an integer recursive-spec term"
 let boolean span = function
   | Boolean term -> Ok term
-  | Integer _ | Aggregate _ | Parametric _ | Function _ ->
+  | Integer _ | Bit_vector _ | Aggregate _ | Parametric _ | Function _ ->
       fail span "expected a Boolean recursive-spec term"
+let bit_vector span = function
+  | Bit_vector term -> Ok term
+  | Integer _ | Boolean _ | Aggregate _ | Parametric _ | Function _ ->
+      fail span "expected a bit-vector recursive-spec term"
 let aggregate span = function
   | Aggregate term -> Ok term
-  | Integer _ | Boolean _ | Parametric _ | Function _ ->
+  | Integer _ | Boolean _ | Bit_vector _ | Parametric _ | Function _ ->
       fail span "expected an aggregate recursive-spec term"
 let vir_aggregate_type (type_id : Sst.type_id) =
   {
@@ -218,6 +229,7 @@ let selector_range parametric_adts typ =
   match typ with
   | Sst.Int | Sst.Mathematical_int -> Vir.Integer
   | Sst.Bool -> Vir.Boolean
+  | Sst.Bit_vector width -> Vir.Bit_vector width
   | Sst.Aggregate type_id -> Vir.Aggregate (vir_aggregate_type type_id)
   | Sst.Parameter binder -> Vir.Parametric binder
   | Sst.Application _ when Parametric_type.is_spec_function typ ->
@@ -275,6 +287,8 @@ let selected_argument parametric_adts aggregate constructor index typ =
   | Sst.Int | Sst.Mathematical_int ->
       Integer (Vir.Integer_selector (selector, aggregate))
   | Sst.Bool -> Boolean (Vir.Boolean_selector (selector, aggregate))
+  | Sst.Bit_vector _ ->
+      Bit_vector (Result.get_ok (Vir.bv_selector selector aggregate))
   | Sst.Aggregate type_id ->
       Aggregate
         {
@@ -300,6 +314,8 @@ let selected_field parametric_adts aggregate field typ =
   | Sst.Int | Sst.Mathematical_int ->
       Integer (Vir.Integer_selector (selector, aggregate))
   | Sst.Bool -> Boolean (Vir.Boolean_selector (selector, aggregate))
+  | Sst.Bit_vector _ ->
+      Bit_vector (Result.get_ok (Vir.bv_selector selector aggregate))
   | Sst.Aggregate type_id ->
       Aggregate
         {
@@ -320,6 +336,7 @@ let selected_field parametric_adts aggregate field typ =
 let recursive_argument = function
   | Integer term -> Vir.Recursive_integer_argument term
   | Boolean term -> Vir.Recursive_boolean_argument term
+  | Bit_vector term -> Vir.Recursive_bv_argument term
   | Aggregate term -> Vir.Recursive_aggregate_argument term
   | Parametric term -> Vir.Recursive_parametric_argument term
   | Function function_ ->
@@ -328,6 +345,7 @@ let recursive_argument = function
 let application_term = function
   | Integer term -> Vir.Integer_application term
   | Boolean term -> Vir.Boolean_application term
+  | Bit_vector term -> Vir.Bv_application term
   | Aggregate term -> Vir.Aggregate_application term
   | Parametric term -> Vir.Parametric_application term
   | Function function_ -> Vir.Parametric_application function_.function_term
@@ -339,6 +357,10 @@ let value_of_application parametric_adts span typ application =
         Integer (Vir.Integer_symbolic_application application));
       boolean = (fun application ->
         Boolean (Vir.Boolean_symbolic_application application));
+      bit_vector = (fun width application ->
+        Bit_vector
+          { Vir.bit_vector_width = width;
+            bit_vector_desc = Vir.Bv_symbolic_application application });
       parametric = (fun binder application ->
         Parametric
           {
@@ -472,7 +494,93 @@ let bind_match_pattern parametric_adts translate environment scrutinee pattern =
       let* scrutinee = translate environment scrutinee in
       bind_pattern parametric_adts environment pattern scrutinee
 
-let translate_boolean_match parametric_adts translate environment
+let bind_let_pattern parametric_adts translate environment pattern value =
+  match (pattern.Sst.pattern_desc, value.Sst.expression_desc) with
+  | Sst.Tuple_pattern _, Sst.Tuple_value _ ->
+      let* environment, _condition =
+        bind_match_pattern parametric_adts translate environment value pattern
+      in
+      [%log.trace
+        "lower exact tuple destructuring in recursive specification"
+        ~stage:(Delator.Field.string "recursive-spec-unfolding")
+        ~decision:(Delator.Field.string "tuple-binding-preserved")];
+      Ok environment
+  | _ ->
+      let* value = translate environment value in
+      let* environment, _condition =
+        bind_pattern parametric_adts environment pattern value
+      in
+      if irrefutable_pattern pattern then Ok environment
+      else
+        fail pattern.span
+          "recursive-spec termination requires irrefutable lets"
+
+let conditional_value span condition consequent alternative =
+  match (consequent, alternative) with
+  | Boolean consequent, Boolean alternative ->
+      Ok
+        (Boolean
+           (Vir.Boolean_or
+              ( Vir.Boolean_and (condition, consequent),
+                Vir.Boolean_and (Vir.Boolean_not condition, alternative) )))
+  | Bit_vector consequent, Bit_vector alternative ->
+      Vir.bv_conditional condition consequent alternative
+      |> Result.map (fun value -> Bit_vector value)
+      |> Result.map_error (fun message -> { span; message })
+  | Aggregate consequent, Aggregate alternative
+    when consequent.aggregate_type = alternative.aggregate_type ->
+      Ok
+        (Aggregate
+           {
+             Vir.aggregate_type = consequent.aggregate_type;
+             aggregate_desc =
+               Vir.Aggregate_conditional (condition, consequent, alternative);
+           })
+  | Parametric consequent, Parametric alternative
+    when
+      Parametric_type.compare_binder consequent.parametric_sort
+        alternative.parametric_sort
+      = 0 ->
+      [%log.trace
+        "lower recursive-spec conditional with an exact parametric sort"
+        ~stage:(Delator.Field.string "recursive-spec-unfolding")
+        ~decision:(Delator.Field.string "conditional-preserved")
+        ~sort:
+          (Delator.Field.string
+             (Parametric_type.to_string
+                (Sst.Parameter consequent.parametric_sort)))];
+      Ok
+        (Parametric
+           {
+             Vir.parametric_sort = consequent.parametric_sort;
+             parametric_desc =
+               Vir.Parametric_conditional
+                 (condition, consequent, alternative);
+           })
+  | Function consequent, Function alternative
+    when
+      Parametric_type.equal consequent.function_arrow
+        alternative.function_arrow ->
+      Ok
+        (Function
+           {
+             function_term =
+               {
+                 Vir.parametric_sort =
+                   consequent.function_term.parametric_sort;
+                 parametric_desc =
+                   Vir.Parametric_conditional
+                     ( condition,
+                       consequent.function_term,
+                       alternative.function_term );
+               };
+             function_arrow = consequent.function_arrow;
+           })
+  | Integer _, Integer _ ->
+      fail span "integer recursive-spec conditionals are not termination terms"
+  | _ -> fail span "recursive-spec conditional sort mismatch"
+
+let translate_match parametric_adts translate environment
     (expression : Sst.expression) scrutinee cases =
   let* cases =
     List.fold_left
@@ -492,7 +600,6 @@ let translate_boolean_match parametric_adts translate environment
               Ok (Vir.Boolean_and (condition, guard))
         in
         let* body = translate case_environment case.case_body in
-        let* body = boolean case.case_body.span body in
         Ok ((condition, body) :: translated))
       (Ok []) cases
     |> Result.map List.rev
@@ -500,15 +607,11 @@ let translate_boolean_match parametric_adts translate environment
   match List.rev cases with
   | [] -> fail expression.Sst.span "recursive-spec helper match has no cases"
   | (_, fallback) :: remaining ->
-      Ok
-        (Boolean
-           (List.fold_left
-              (fun alternative (condition, consequent) ->
-                Vir.Boolean_or
-                  ( Vir.Boolean_and (condition, consequent),
-                    Vir.Boolean_and
-                      (Vir.Boolean_not condition, alternative) ))
-              fallback remaining))
+      List.fold_left
+        (fun result (condition, consequent) ->
+          let* alternative = result in
+          conditional_value expression.span condition consequent alternative)
+        (Ok fallback) remaining
 
 let rec translate parametric_adts environment (expression : Sst.expression) =
   let translate = translate parametric_adts in
@@ -516,6 +619,7 @@ let rec translate parametric_adts environment (expression : Sst.expression) =
   match expression.expression_desc with
   | Sst.Int_constant value -> Ok (Integer (Vir.Integer_constant value))
   | Sst.Bool_constant value -> Ok (Boolean (Vir.Boolean_constant value))
+  | Sst.Bv_literal value -> Ok (Bit_vector (Vir.bv_literal value))
   | Sst.Variable { binding; _ } -> lookup expression.span environment binding
   | Sst.Lift_runtime_int operand ->
       [%log.trace "lower recursive-spec runtime-integer lift"
@@ -526,6 +630,49 @@ let rec translate parametric_adts environment (expression : Sst.expression) =
       let* operand = recurse operand in
       let* operand = integer expression.span operand in
       Ok (Integer operand)
+  | Sst.Bv_int_to_bv_mod { width; input; source_authority } ->
+      let* input = recurse input in
+      let* input = integer expression.span input in
+      Ok
+        (Bit_vector
+           (Vir.bv_int_to_bv_mod ~width ~input ~source_authority))
+  | Sst.Bv_to_int_unsigned operand | Sst.Bv_to_int_signed operand ->
+      let signed =
+        match expression.expression_desc with
+        | Sst.Bv_to_int_signed _ -> true
+        | Sst.Bv_to_int_unsigned _ -> false
+        | _ -> assert false
+      in
+      let* operand = recurse operand in
+      let* operand = bit_vector expression.span operand in
+      Ok
+        (Integer
+           (if signed then Vir.bv_to_int_signed operand
+            else Vir.bv_to_int_unsigned operand))
+  | Sst.Bv_not operand ->
+      let* operand = recurse operand in
+      let* operand = bit_vector expression.span operand in
+      Ok (Bit_vector (Vir.bv_not operand))
+  | Sst.Bv_binary (operation, left, right) ->
+      let* left = recurse left in
+      let* right = recurse right in
+      let* left = bit_vector expression.span left in
+      let* right = bit_vector expression.span right in
+      let* result =
+        Vir.bv_binary operation left right
+        |> Result.map_error (fun message -> { span = expression.span; message })
+      in
+      Ok (Bit_vector result)
+  | Sst.Bv_compare (comparison, left, right) ->
+      let* left = recurse left in
+      let* right = recurse right in
+      let* left = bit_vector expression.span left in
+      let* right = bit_vector expression.span right in
+      let* result =
+        Vir.bv_compare comparison left right
+        |> Result.map_error (fun message -> { span = expression.span; message })
+      in
+      Ok (Boolean result)
   | Sst.Checked_arithmetic (operation, operands) ->
       let* operands =
         List.fold_left
@@ -575,6 +722,19 @@ let rec translate parametric_adts environment (expression : Sst.expression) =
           | Sst.Not_equal ->
               Ok (Boolean (Vir.Boolean_not_equal (left, right)))
           | _ -> fail expression.span "ordered comparison on booleans")
+      | Bit_vector left, Bit_vector right -> (
+          match comparison with
+          | Sst.Equal ->
+              Vir.bv_equal left right
+              |> Result.map (fun value -> Boolean value)
+              |> Result.map_error (fun message ->
+                     { span = expression.span; message })
+          | Sst.Not_equal ->
+              Vir.bv_not_equal left right
+              |> Result.map (fun value -> Boolean value)
+              |> Result.map_error (fun message ->
+                     { span = expression.span; message })
+          | _ -> fail expression.span "ordered generic comparison on bit vectors")
       | Aggregate left, Aggregate right -> (
           match comparison with
           | Sst.Equal -> Ok (Boolean (Vir.Aggregate_equal (left, right)))
@@ -633,7 +793,7 @@ let rec translate parametric_adts environment (expression : Sst.expression) =
         | Function _ ->
             fail expression.span
               "specification-function application has the wrong arrow"
-        | Integer _ | Boolean _ | Aggregate _ | Parametric _ ->
+        | Integer _ | Boolean _ | Bit_vector _ | Aggregate _ | Parametric _ ->
             fail expression.span
               "specification-function application head is not a function"
       in
@@ -715,6 +875,7 @@ let rec translate parametric_adts environment (expression : Sst.expression) =
             | Parametric_type.Int | Parametric_type.Mathematical_int ->
                 Ok Vir.Integer
             | Bool -> Ok Vir.Boolean
+            | Bit_vector width -> Ok (Vir.Bit_vector width)
             | Parameter binder -> Ok (Vir.Parametric binder)
             | Application _ as typ
               when Parametric_type.is_spec_function typ ->
@@ -748,14 +909,7 @@ let rec translate parametric_adts environment (expression : Sst.expression) =
         List.fold_left
           (fun result (pattern, value) ->
             let* environment = result in
-            let* value = translate environment value in
-            let* environment, _condition =
-              bind_pattern parametric_adts environment pattern value
-            in
-            if irrefutable_pattern pattern then Ok environment
-            else
-                fail pattern.span
-                  "recursive-spec termination requires irrefutable lets")
+            bind_let_pattern parametric_adts translate environment pattern value)
           (Ok environment) bindings
       in
       translate environment body
@@ -766,46 +920,7 @@ let rec translate parametric_adts environment (expression : Sst.expression) =
       let* condition = boolean condition_span condition in
       let* consequent = translate environment consequent in
       let* alternative = translate environment alternative in
-      match (consequent, alternative) with
-      | Boolean consequent, Boolean alternative ->
-          Ok
-            (Boolean
-               (Vir.Boolean_or
-                  ( Vir.Boolean_and (condition, consequent),
-                    Vir.Boolean_and (Vir.Boolean_not condition, alternative) )))
-      | Aggregate consequent, Aggregate alternative
-        when consequent.aggregate_type = alternative.aggregate_type ->
-          Ok
-            (Aggregate
-               {
-                 Vir.aggregate_type = consequent.aggregate_type;
-                 aggregate_desc =
-                   Vir.Aggregate_conditional
-                     (condition, consequent, alternative);
-               })
-      | Function consequent, Function alternative
-        when
-          Parametric_type.equal consequent.function_arrow
-            alternative.function_arrow ->
-          Ok
-            (Function
-               {
-                 function_term =
-                   {
-                     Vir.parametric_sort =
-                       consequent.function_term.parametric_sort;
-                     parametric_desc =
-                       Vir.Parametric_conditional
-                         ( condition,
-                           consequent.function_term,
-                           alternative.function_term );
-                   };
-                 function_arrow = consequent.function_arrow;
-               })
-      | Integer _, Integer _ ->
-          fail expression.span
-            "integer recursive-spec conditionals are not termination terms"
-      | _ -> fail expression.span "recursive-spec conditional sort mismatch")
+      conditional_value expression.span condition consequent alternative)
   | Sst.Constructor_value { constructor; arguments } ->
       let* arguments =
         List.fold_left
@@ -853,9 +968,9 @@ let rec translate parametric_adts environment (expression : Sst.expression) =
               field.field_index expression.typ
         | Sst.Record_owner _ ->
             selected_field parametric_adts record field expression.typ)
-  | Sst.Match (scrutinee, cases) when expression.typ = Sst.Bool ->
-      translate_boolean_match parametric_adts translate environment expression
-        scrutinee cases
+  | Sst.Match (scrutinee, cases) ->
+      translate_match parametric_adts translate environment expression scrutinee
+        cases
   | _ ->
       fail expression.span
         "expression is outside scalar recursive-spec termination terms"
@@ -977,14 +1092,14 @@ let obligations_for_definition rank_domains definition =
                  frozen.frozen_link.type_name ->
             Ok (Vir.Integer_constant Z.zero)
         | Aggregate _ -> Ok (Vir.Integer_constant Z.one)
-        | Integer _ | Boolean _ | Parametric _ | Function _ ->
+        | Integer _ | Boolean _ | Bit_vector _ | Parametric _ | Function _ ->
             fail span "frozen-spine decrease must remain an aggregate")
     | Termination.Parametric_direct_edge _, None -> (
         match value with
         | Aggregate { Vir.aggregate_desc = Vir.Aggregate_selector _; _ } ->
             Ok (Vir.Integer_constant Z.zero)
         | Aggregate _ -> Ok (Vir.Integer_constant Z.one)
-        | Integer _ | Boolean _ | Parametric _ | Function _ ->
+        | Integer _ | Boolean _ | Bit_vector _ | Parametric _ | Function _ ->
             fail span "parametric decrease must remain an aggregate")
     | ( ( Termination.Integer_height
       | Termination.Structural_rank _
@@ -999,6 +1114,8 @@ let obligations_for_definition rank_domains definition =
         match value with
         | Integer (Vir.Integer_symbol symbol)
         | Boolean (Vir.Boolean_symbol symbol)
+        | Bit_vector
+            { Vir.bit_vector_desc = Vir.Bv_symbol symbol; _ }
         | Aggregate
             {
               Vir.aggregate_desc = Vir.Aggregate_symbol symbol;
@@ -1019,6 +1136,8 @@ let obligations_for_definition rank_domains definition =
       path_condition = List.rev path;
       goal;
       projection_symbols = inputs;
+      logical_constant_instances = [];
+      logical_constant_equations = [];
     }
   in
   let entry_obligation =
@@ -1065,14 +1184,7 @@ let obligations_for_definition rank_domains definition =
           List.fold_left
             (fun result (pattern, value) ->
               let* environment = result in
-              let* value = translate environment value in
-              let* environment, _condition =
-                bind_pattern parametric_adts environment pattern value
-              in
-              if irrefutable_pattern pattern then Ok environment
-              else
-                  fail pattern.span
-                    "recursive-spec termination requires irrefutable lets")
+              bind_let_pattern parametric_adts translate environment pattern value)
             (Ok environment) bindings
         in
         walk environment path obligations body
@@ -1295,6 +1407,7 @@ let prepare_validated validated =
                         types = (Sst_validation.program validated).types;
                         parametric_adts =
                           (Sst_validation.program validated).parametric_adts;
+                        program = Sst_validation.program validated;
                       })
         | _ -> None)
       (Sst_validation.callable_descriptors validated)
@@ -1395,6 +1508,7 @@ let definition_span definition =
   (Sst_validation.callable_definition definition.descriptor).Sst.span
 let definition_types definition = definition.types
 let definition_parametric_adts definition = definition.parametric_adts
+let definition_program definition = definition.program
 
 module For_testing = struct
   let recursive_lowering_count () = !recursive_lowerings

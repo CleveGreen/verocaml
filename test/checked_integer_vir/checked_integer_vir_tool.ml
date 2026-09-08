@@ -106,7 +106,7 @@ let run_unit_checks () =
   let program =
     match
       Symbolic_executor.lower_program
-        Sst.{ policy = Default_linear_z3; parametric_adts = []; types = []; functions = definitions }
+        Sst.{ policy = Default_linear_z3; parametric_adts = []; types = []; logical_constants = []; functions = definitions }
     with
     | Ok program -> program
     | Error error -> fail "%s" (Symbolic_executor.error_to_string error)
@@ -221,6 +221,7 @@ let run_unit_checks () =
         policy = Default_linear_z3;
         parametric_adts = [];
         types = [];
+        logical_constants = [];
         functions =
           List.mapi
             (fun index (name, _, _, body) ->

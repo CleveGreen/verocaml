@@ -4,6 +4,7 @@ type value = Spec_function_logic_private.value =
   | Unit_value
   | Integer_value of Vir.integer_term
   | Boolean_value of Vir.boolean_term
+  | Bit_vector_value of Vir.bit_vector_term
   | Tuple_value of value list
   | Aggregate_value of Vir.aggregate_term
   | Parametric_value of Vir.parametric_term
@@ -45,6 +46,15 @@ type call_target = Logical_spec_capability_private.call_target =
 
 type permit = Logical_spec_authentication_private.permit
 type strict_permit = Logical_spec_capability_private.permit
+
+type native_integer_projection = {
+  projection_width : Bv_width.t;
+  projection_input : Sst.expression;
+  projection_authority : Numeric_bv_projection_evidence_private.t;
+}
+
+val native_unsigned_projection_fragment :
+  span:Diagnostic.span -> native_integer_projection -> Sst.expression
 
 val authenticate :
   classify:(Sst.function_id -> call_target) ->
@@ -92,6 +102,12 @@ type ('context, 'state, 'error) callbacks = {
     Vir.aggregate_term ->
     (Vir.aggregate_term * 'state, 'error) result;
   enter_definition : 'context -> Sst.function_definition -> 'context;
+  native_integer_projection :
+    'context ->
+    Sst.expression ->
+    (native_integer_projection option, 'error) result;
+  evaluate_constant :
+    'context -> Sst.expression -> 'state -> (value * 'state, 'error) result;
   evaluate_recursive :
     'context -> Sst.expression -> 'state -> (value * 'state, 'error) result;
   error : Diagnostic.span -> string -> 'error;

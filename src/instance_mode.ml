@@ -1965,6 +1965,12 @@ let validate program =
     (String.split_on_char ';' signature
     |> List.for_all (String.ends_with ~suffix:"=default"))
   in
+  let default_only_value_signature signature =
+    (not (String.equal signature ""))
+    &&
+    (String.split_on_char ';' signature
+    |> List.for_all (String.ends_with ~suffix:"=default"))
+  in
   let* () =
     match registration with
     | Some
@@ -1988,7 +1994,36 @@ let validate program =
               when String.starts_with ~prefix:"type:" key
                    && default_only_type_signature actual ->
                 Ok ()
-            | Some _, Some _ ->
+            | Some expected, Some actual
+              when String.starts_with ~prefix:"value:" key
+                   && default_only_value_signature expected
+                   && default_only_value_signature actual ->
+                [%log.trace
+                  "accepted compiler-normalized callable alias with default modes"
+                  ~stage:(Delator.Field.string "instance-mode-seal")
+                  ~route:(Delator.Field.string key)
+                  ~interface_slot_count:
+                    (Delator.Field.int
+                       (List.length (String.split_on_char ';' expected)))
+                  ~semantic_slot_count:
+                    (Delator.Field.int
+                       (List.length (String.split_on_char ';' actual)))
+                  ~decision:(Delator.Field.string "accepted")];
+                Ok ()
+            | Some (expected [@log_value.debug]),
+              Some (actual [@log_value.debug]) ->
+                [%log.debug "rejected retained interface mode signature mismatch"
+                  ~stage:(Delator.Field.string "instance-mode-seal")
+                  ~route:(Delator.Field.string key)
+                  ~expected_signature:
+                    (Delator.Field.string
+                       (expected [@log_value.debug]))
+                  ~actual_signature:
+                    (Delator.Field.string
+                       (actual [@log_value.debug]))
+                  ~decision:(Delator.Field.string "rejected")
+                  ~reason_class:
+                    (Delator.Field.string "normalized-signature-mismatch")];
                 Error
                   {
                     function_id = None;

@@ -36,6 +36,20 @@ type public_type = {
   field_modes : (Sst.field_id * Sst.instance_mode) list;
 }
 
+type public_logical_constant =
+  | Public_defined_logical_value of {
+      logical_constant : Sst.logical_constant_definition;
+      logical_constant_path : string;
+      logical_constant_uid : string;
+      logical_constant_dependency_closure : string;
+      logical_constant_trust_dependencies : string list;
+    }
+  | Public_symbolic_logical_value of {
+      symbolic_callable : public_callable;
+      logical_constant_path : string;
+      logical_constant_uid : string;
+    }
+
 type public_model = {
   callable : public_callable;
   domain : Sst.type_id;
@@ -56,12 +70,14 @@ type public_invariant = {
 
 type handle = {
   issuer : unit ref;
+  authentication_index : int;
   nonserializable : unit -> unit;
   unit_name : string;
   interface_digest : string;
   mode_signature_digest : string;
   types : public_type list;
   callables : public_callable list;
+  logical_constants : public_logical_constant list;
   external_specifications : public_callable list;
   models : public_model list;
   invariants : public_invariant list;
@@ -69,6 +85,7 @@ type handle = {
   transitive_dependencies : handle list;
   semantic_snapshot : Sst_validation.validated_program;
   private_driver_completion : Verification_driver_private.completion;
+  numeric_provider : Numeric_provider_private.t;
   private_implementation : Cmt_input.implementation;
   source_digest : string;
   family_digest : string;
@@ -107,10 +124,22 @@ end
 module Error_diagnostics = Ephemeron.K1.Make (Error_identity)
 module Internal_errors = Ephemeron.K1.Make (Error_identity)
 
+module Handle_identity = struct
+  type t = handle
+
+  let equal left right = left == right
+  let hash handle = handle.authentication_index
+end
+
+module Issued_handles = Ephemeron.K1.Make (Handle_identity)
+
 let process_issuer = ref ()
 let error_diagnostics = Error_diagnostics.create 8
 let internal_errors = Internal_errors.create 8
 let error_diagnostics_lock = Mutex.create ()
+let issued_handles = Issued_handles.create 32
+let issued_handles_lock = Mutex.create ()
+let next_handle_authentication_index = ref 0
 
 let ( let* ) result continuation =
   match result with Ok value -> continuation value | Error _ as error -> error
@@ -120,6 +149,21 @@ let with_error_diagnostics action =
   Fun.protect
     ~finally:(fun () -> Mutex.unlock error_diagnostics_lock)
     action
+
+let with_issued_handles action =
+  Mutex.lock issued_handles_lock;
+  Fun.protect ~finally:(fun () -> Mutex.unlock issued_handles_lock) action
+
+let issue_handle make =
+  with_issued_handles (fun () ->
+      let authentication_index = !next_handle_authentication_index in
+      next_handle_authentication_index := authentication_index + 1;
+      let handle = make authentication_index in
+      Issued_handles.replace issued_handles handle ();
+      handle)
+
+let handle_was_issued handle =
+  with_issued_handles (fun () -> Issued_handles.mem issued_handles handle)
 
 let rec public_dependency_message message =
   let prefix = "[VERO_DEPENDENCY] " in
@@ -221,12 +265,29 @@ let exact_import = Cmt_input.exact_import
 let exact_imports = Cmt_input.exact_imports
 
 let rec handle_is_authentic (handle : handle) =
-  handle.issuer == process_issuer
-  && Verification_driver_private.completion_matches
-       handle.private_driver_completion
-       ~implementation:handle.private_implementation
-       ~validated:handle.semantic_snapshot
-  && List.for_all handle_is_authentic handle.transitive_dependencies
+  let issued = handle_was_issued handle in
+  let completion_matches =
+    issued && handle.issuer == process_issuer
+    && Verification_driver_private.completion_matches
+         handle.private_driver_completion
+         ~implementation:handle.private_implementation
+         ~validated:handle.semantic_snapshot
+  in
+  let dependencies_authentic =
+    completion_matches
+    && List.for_all handle_is_authentic handle.transitive_dependencies
+  in
+  let authentic = completion_matches && dependencies_authentic in
+  if not authentic then
+    [%log.warn "rejected unissued or stale verified-interface handle"
+      ~provider:(Delator.Field.string handle.unit_name)
+      ~stage:(Delator.Field.string "handle-authentication")
+      ~issued:(Delator.Field.bool issued)
+      ~completion_matches:(Delator.Field.bool completion_matches)
+      ~dependencies_authentic:(Delator.Field.bool dependencies_authentic)
+      ~decision:(Delator.Field.string "rejected")
+      ~reason_class:(Delator.Field.string "capability-authentication")];
+  authentic
 
 let require_handle (handle : handle) =
   ignore handle.semantic_snapshot;
@@ -250,11 +311,13 @@ type staged_dependency = {
   mode_signature_digest : string;
   types : public_type list;
   callables : public_callable list;
+  logical_constants : public_logical_constant list;
   external_specifications : public_callable list;
   models : public_model list;
   invariants : public_invariant list;
   semantic_snapshot : Sst_validation.validated_program;
   private_driver_completion : Verification_driver_private.completion;
+  numeric_provider : Numeric_provider_private.t;
   direct_dependencies : staged_dependency list;
 }
 
@@ -290,26 +353,41 @@ let construct_handle staged direct_dependencies transitive_dependencies =
   let source_digest = candidate_source_digest staged.candidate in
   let family_digest = candidate_family_digest staged.candidate in
   let import_digest = candidate_import_digest staged.candidate in
-  {
-    issuer = process_issuer;
-    nonserializable = (fun () -> ());
-    unit_name = staged.candidate.unit_name;
-    interface_digest = staged.interface_digest;
-    mode_signature_digest = staged.mode_signature_digest;
-    types = staged.types;
-    callables = staged.callables;
-    external_specifications = staged.external_specifications;
-    models = staged.models;
-    invariants = staged.invariants;
-    direct_dependencies;
-    transitive_dependencies;
-    semantic_snapshot = staged.semantic_snapshot;
-    private_driver_completion = staged.private_driver_completion;
-    private_implementation = staged.candidate;
-    source_digest;
-    family_digest;
-    import_digest;
-  }
+  let handle =
+    issue_handle (fun authentication_index ->
+        {
+          issuer = process_issuer;
+          authentication_index;
+          nonserializable = (fun () -> ());
+          unit_name = staged.candidate.unit_name;
+          interface_digest = staged.interface_digest;
+          mode_signature_digest = staged.mode_signature_digest;
+          types = staged.types;
+          callables = staged.callables;
+          logical_constants = staged.logical_constants;
+          external_specifications = staged.external_specifications;
+          models = staged.models;
+          invariants = staged.invariants;
+          direct_dependencies;
+          transitive_dependencies;
+          semantic_snapshot = staged.semantic_snapshot;
+          private_driver_completion = staged.private_driver_completion;
+          numeric_provider = staged.numeric_provider;
+          private_implementation = staged.candidate;
+          source_digest;
+          family_digest;
+          import_digest;
+        })
+  in
+  [%log.trace "issued verified-interface handle capability"
+    ~provider:(Delator.Field.string handle.unit_name)
+    ~stage:(Delator.Field.string "handle-authentication")
+    ~direct_dependency_count:
+      (Delator.Field.int (List.length direct_dependencies))
+    ~transitive_dependency_count:
+      (Delator.Field.int (List.length transitive_dependencies))
+    ~decision:(Delator.Field.string "issued")];
+  handle
 
 type provider_root =
   | Handle_root of handle
@@ -338,6 +416,9 @@ and root_completion = function
 and root_callables = function
   | Handle_root handle -> handle.callables
   | Staged_root staged -> staged.callables
+and root_logical_constants = function
+  | Handle_root handle -> handle.logical_constants
+  | Staged_root staged -> staged.logical_constants
 and root_external_specifications = function
   | Handle_root handle -> handle.external_specifications
   | Staged_root staged -> staged.external_specifications
@@ -915,8 +996,15 @@ let rec provider_of_root_internal root =
   let callable_descriptors =
     Sst_validation.callable_descriptors semantic_snapshot
   and public_models = root_models root in
+  let logical_value_callables =
+    root_logical_constants root
+    |> List.filter_map (function
+         | Public_symbolic_logical_value { symbolic_callable; _ } ->
+             Some symbolic_callable
+         | Public_defined_logical_value _ -> None)
+  in
   let callables =
-    root_callables root
+    (root_callables root @ logical_value_callables)
     |> List.filter_map (fun (callable : public_callable) ->
            let definition = callable.definition in
            let binding_path =
@@ -1550,6 +1638,77 @@ let rec provider_of_root_internal root =
              rank_profile_digest;
            })
   in
+  let defined_logical_values =
+    root_logical_constants root
+    |> List.filter_map (function
+         | Public_symbolic_logical_value _ -> None
+         | Public_defined_logical_value constant ->
+           let interface_receipts =
+             implementation.Cmt_input.interface_logical_values
+             |> List.filter (fun receipt ->
+                    String.equal
+                      receipt.Retained_interface_authority_private.logical_value_path
+                      constant.logical_constant_path
+                    && String.equal
+                         receipt.Retained_interface_authority_private.logical_value_uid
+                         constant.logical_constant_uid)
+           in
+           match interface_receipts with
+           | [ constant_interface_receipt ] ->
+               Some (Imported_callable.Provider_defined_logical_value
+                 { constant_path = constant.logical_constant_path;
+                   constant_uid = constant.logical_constant_uid;
+                   constant_definition = constant.logical_constant;
+                   constant_dependency_closure =
+                     constant.logical_constant_dependency_closure;
+                   constant_trust_dependencies =
+                     constant.logical_constant_trust_dependencies;
+                   constant_interface_receipt })
+           | [] | _ :: _ :: _ ->
+               invalid_arg
+                 "authenticated logical constant lost its exact interface receipt")
+  in
+  let symbolic_logical_values =
+    implementation.Cmt_input.interface_logical_values
+    |> List.filter_map (fun receipt ->
+           if
+             receipt.Retained_interface_authority_private.logical_value_class
+             <> Retained_interface_authority_private.Symbolic_value
+           then None
+           else
+             match
+               List.filter
+                 (fun (callable : Imported_callable.provider_callable) ->
+                   String.equal callable.Imported_callable.resolved_path
+                     receipt.logical_value_path
+                   && String.equal callable.binding_uid
+                        receipt.logical_value_uid)
+                 callables
+             with
+             | [ constant_symbolic ] ->
+                 Some
+                   (Imported_callable.Provider_symbolic_logical_value
+                      { constant_symbolic; constant_interface_receipt = receipt })
+             | [] | _ :: _ :: _ ->
+                 invalid_arg
+                   "authenticated symbolic logical value lost its VERO-115 descriptor")
+  in
+  let logical_constants =
+    defined_logical_values @ symbolic_logical_values
+  in
+  let callables =
+    List.filter
+      (fun callable ->
+        not
+          (List.exists
+             (function
+               | Imported_callable.Provider_symbolic_logical_value
+                   { constant_symbolic; _ } ->
+                   constant_symbolic == callable
+               | Imported_callable.Provider_defined_logical_value _ -> false)
+             symbolic_logical_values))
+      callables
+  in
   [%log.debug "prepared authenticated provider exports"
     ~provider:(Delator.Field.string unit_name)
     ~stage:(Delator.Field.string "environment-sealing")
@@ -1560,6 +1719,8 @@ let rec provider_of_root_internal root =
       (Delator.Field.int (List.length broadcast_declarations))
     ~broadcast_group_count:(Delator.Field.int (List.length broadcast_groups))
     ~type_count:(Delator.Field.int (List.length types))
+    ~logical_constant_count:
+      (Delator.Field.int (List.length logical_constants))
     ~decision:(Delator.Field.string "prepared")];
   let description =
   {
@@ -1573,6 +1734,7 @@ let rec provider_of_root_internal root =
     broadcast_groups;
     types;
     logical_sorts = implementation.Cmt_input.interface_logical_sorts;
+    logical_constants;
     external_specifications;
   }
   in

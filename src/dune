@@ -19,6 +19,54 @@
    %{ghost}
    %{targets})))
 
+(executable
+ (name numeric_build_target_generator)
+ (modules numeric_build_target_generator))
+
+(executable
+ (name bv_backend_capability_generator)
+ (modules bv_backend_capability_generator))
+
+(rule
+ (targets bv_backend_capability_generated.ml)
+ (action
+  (with-stdout-to
+   %{targets}
+   (run
+    %{exe:bv_backend_capability_generator.exe}
+    --issuer
+    official-verocaml-verifier-build
+    --build-input-schema
+    verocaml.bv-build-inputs.v1
+    --z3-package
+    z3.4.15.2+verocaml.1
+    --z3-portability-patch-sha256
+    7d4f99c060b72154d3fc9948226191e95a721c0c8d8d8110b385f480610ea071
+    --maximum-bv-width
+    4096))))
+
+(rule
+ (targets numeric_build_target_generated.ml)
+ (action
+  (with-stdout-to
+   %{targets}
+   (run
+    %{exe:numeric_build_target_generator.exe}
+    --profile
+    verocaml-portable-word-matrix-v1
+    --logical-bv-widths
+    positive
+    --layout
+    portable-word-layout
+    portable-word-layout-32-v1
+    32
+    true
+    --layout
+    portable-word-layout
+    portable-word-layout-64-v1
+    64
+    true))))
+
 (library
  (name verocaml_core)
  (public_name verocaml.core)
@@ -26,7 +74,44 @@
  (modules
   diagnostic
   rewrite_private
+  numeric_receipt_private
+  vir_identity_private
+  numeric_original_obligation_private
+  numeric_abstract_coverage_private
+  numeric_required_target_set_private
+  numeric_relation_match_private
+  numeric_provider_private
+  numeric_runtime_refinement_private
+  numeric_admitted_descriptor_private
+  numeric_source_claim_private
+  numeric_interface_claim_private
+  numeric_carrier_layout_private
+  numeric_callable_domain_private
+  numeric_artifact_binding_private
+  numeric_base_int_binding_private
+  numeric_semantics_correlation_private
+  numeric_semantics_binding_private
+  numeric_law_match_private
+  verification_proof_evidence_private
+  numeric_proof_closure_walk_private
+  numeric_prior_law_closure_private
+  numeric_proof_dependencies_private
+  numeric_ghost_law_private
+  numeric_bv_imported_law_evidence_private
+  numeric_ghost_registry_private
+  numeric_bv_source_admission_private
+  target_profile_private
+  numeric_build_target_generated
+  build_target_profile_private
+  numeric_semantic_width_private
+  bv_backend_capability_generated
+  bv_backend_capability_receipt_private
+  bv_width
+  bv_value
+  bv_operation_private
+  numeric_bv_projection_evidence_private
   logical_sort_private
+  numeric_descriptor_private
   integer_narrowing_private
   mathematical_int_constant_private
   sst_expression_rewrite_private
@@ -60,6 +145,7 @@
   typedtree_logical_builtin_private
   typedtree_broadcast_private
   typedtree_symbolic_private
+  typedtree_logical_constant_private
   typedtree_callback_private
   typedtree_surface_private
   typedtree_adapter_private
@@ -81,6 +167,8 @@
   typedtree_spec_function_private
   spec_function_logic_private
   symbolic_declaration_private
+  logical_constant_private
+  logical_constant_instance_private
   broadcast_scope_private
   broadcast_declaration_private
   quantifier_validation_private
@@ -153,7 +241,23 @@
  (private_modules
  parametric_type
   rewrite_private
+  numeric_receipt_private
+  numeric_source_claim_private
+  numeric_interface_claim_private
+  numeric_carrier_layout_private
+  numeric_artifact_binding_private
+  numeric_semantics_correlation_private
+  numeric_proof_closure_walk_private
+  numeric_prior_law_closure_private
+  numeric_bv_source_admission_private
+  target_profile_private
+  numeric_build_target_generated
+  build_target_profile_private
+  numeric_semantic_width_private
+  bv_backend_capability_generated
+  bv_backend_capability_receipt_private
   logical_sort_private
+  numeric_descriptor_private
   integer_narrowing_private
   mathematical_int_constant_private
   sst_expression_rewrite_private
@@ -186,6 +290,7 @@
   typedtree_logical_builtin_private
   typedtree_broadcast_private
   typedtree_symbolic_private
+  typedtree_logical_constant_private
   typedtree_callback_private
   typedtree_surface_private
   typedtree_adapter_private
@@ -259,7 +364,7 @@
   verification_driver_private)
  (foreign_stubs
   (language c)
-  (names physical_core_count_stubs))
+  (names physical_core_count_stubs bv_backend_capability_stubs))
  (libraries
   compiler-libs.common
   delator

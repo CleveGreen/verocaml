@@ -21,6 +21,7 @@ type value = Logical_spec_evaluation_private.value =
   | Unit_value
   | Integer_value of Vir.integer_term
   | Boolean_value of Vir.boolean_term
+  | Bit_vector_value of Vir.bit_vector_term
   | Tuple_value of value list
   | Aggregate_value of Vir.aggregate_term
   | Parametric_value of Vir.parametric_term
@@ -835,6 +836,8 @@ let emit_checked function_ref span operation mathematical_result state =
       path_condition = state.path_condition;
       goal;
       projection_symbols = state.projection_symbols;
+      logical_constant_instances = [];
+      logical_constant_equations = [];
     }
   in
   let obligations =
@@ -870,6 +873,8 @@ let emit_goal function_ref kind span goal state =
       path_condition = state.path_condition;
       goal;
       projection_symbols = state.projection_symbols;
+      logical_constant_instances = [];
+      logical_constant_equations = [];
     }
   in
   let state =
@@ -932,6 +937,8 @@ let emit_closed_invariant_goal ?(verified_assumptions = []) context handle
           path_condition = state.path_condition;
           goal;
           projection_symbols = state.projection_symbols;
+          logical_constant_instances = [];
+          logical_constant_equations = [];
         }
       in
       let state =
@@ -4324,6 +4331,58 @@ let definition_has_mathematical_int (definition : Sst.function_definition) =
   || List.exists parameter_has_mathematical_int definition.parameters
   || List.exists expression_has_mathematical_int (clauses @ body)
 
+let rec expression_has_bit_vector (expression : Sst.expression) =
+  Parametric_type.contains_bit_vector expression.typ
+  || List.exists expression_has_bit_vector
+       (Sst_callback_private.expression_children expression)
+
+let definition_has_bit_vector (definition : Sst.function_definition) =
+  let pattern_has_bit_vector (pattern : Sst.pattern) =
+    Parametric_type.contains_bit_vector pattern.typ
+  in
+  let parameter_has_bit_vector = function
+    | Sst.Value_parameter parameter ->
+        pattern_has_bit_vector parameter.pattern
+        || Option.fold ~none:false
+             ~some:(fun default ->
+               pattern_has_bit_vector default.Sst.optional_pattern
+               || expression_has_bit_vector default.optional_expression)
+             parameter.optional_default
+    | Sst.Callback_parameter formal ->
+        List.exists Parametric_type.contains_bit_vector
+          (Callback_shape_private.endpoint_types formal.binding.callback_shape)
+        || Parametric_type.contains_bit_vector
+             (Callback_shape_private.result formal.binding.callback_shape)
+  in
+  let clauses =
+    List.map
+      (fun (clause : Sst.predicate_clause) -> clause.predicate.expression)
+      definition.contracts.requires
+    @ List.map
+        (fun (clause : Sst.predicate_clause) -> clause.predicate.expression)
+        definition.contracts.decreases
+    @ List.map
+        (fun (clause : Sst.predicate_clause) -> clause.predicate.expression)
+        definition.contracts.assertions
+    @ List.map
+        (fun (clause : Sst.ensures_clause) -> clause.predicate.expression)
+        definition.contracts.ensures
+  in
+  let body =
+    match definition.body with
+    | Sst.Checked_exec { body; _ } | Sst.Spec_definition body ->
+        [ body.expression ]
+    | Sst.Recursive_spec_definition { body; _ }
+    | Sst.Proof_body { body; _ } ->
+        [ body.expression ]
+    | Sst.External_specification _ | Sst.Trusted_external_spec_target _
+    | Sst.Trusted_external_body _ | Sst.Symbolic_declaration _ ->
+        []
+  in
+  Parametric_type.contains_bit_vector definition.result_type
+  || List.exists parameter_has_bit_vector definition.parameters
+  || List.exists expression_has_bit_vector (clauses @ body)
+
 let error_of_private (error : Symbolic_executor_private.error) =
   let unsupported =
     match error.unsupported with
@@ -4347,6 +4406,7 @@ let lower_function (definition : Sst.function_definition) =
   if
     Quantifier_validation_private.definition_has_quantifier definition
     || definition_has_mathematical_int definition
+    || definition_has_bit_vector definition
   then
     ( [%log.debug "routing function through generalized symbolic executor"
         ~function_name:
@@ -4358,6 +4418,8 @@ let lower_function (definition : Sst.function_definition) =
                 definition))
         ~has_mathematical_int:
           (Delator.Field.bool (definition_has_mathematical_int definition))
+        ~has_bit_vector:
+          (Delator.Field.bool (definition_has_bit_vector definition))
         ~decision:(Delator.Field.string "generalized")];
     Symbolic_executor_private.lower_function definition
     |> Result.map_error error_of_private )
@@ -4370,6 +4432,7 @@ let lower_function (definition : Sst.function_definition) =
       Sst.policy = definition.policy;
       parametric_adts = [];
       types = [];
+      logical_constants = [];
       functions = [ definition ];
     }
   in
@@ -4425,9 +4488,27 @@ let lower_program (program : Sst.program) =
              fields)
          program.types
   in
+  let has_bit_vector =
+    List.exists definition_has_bit_vector program.functions
+    || List.exists
+         (fun (definition : Sst.type_definition) ->
+           let fields =
+             match definition.type_kind with
+             | Sst.Record_definition fields -> fields
+             | Sst.Variant_definition constructors ->
+                 List.concat_map
+                   (fun constructor -> constructor.Sst.constructor_fields)
+                   constructors
+           in
+           List.exists
+             (fun field ->
+               Parametric_type.contains_bit_vector field.Sst.field_type)
+             fields)
+         program.types
+  in
   if
     Quantifier_validation_private.program_has_quantifier program
-    || has_mathematical_int
+    || has_mathematical_int || has_bit_vector
   then
     ( [%log.debug "routing program through generalized symbolic executor"
         ~stage:(Delator.Field.string "symbolic-executor-routing")
@@ -4436,6 +4517,7 @@ let lower_program (program : Sst.program) =
           (Delator.Field.bool
              (Quantifier_validation_private.program_has_quantifier program))
         ~has_mathematical_int:(Delator.Field.bool has_mathematical_int)
+        ~has_bit_vector:(Delator.Field.bool has_bit_vector)
         ~decision:(Delator.Field.string "generalized")];
     Symbolic_executor_private.lower_program program
     |> Result.map_error error_of_private )

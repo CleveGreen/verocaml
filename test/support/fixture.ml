@@ -287,6 +287,10 @@ let load_cmt ?(artifact_directories = []) path =
       | Invalid_symbolic_application _
       | Invalid_symbolic_authentication _
       | Invalid_symbolic_dependency _
+      | Invalid_logical_constant_declaration _
+      | Invalid_logical_constant_use _
+      | Invalid_logical_constant_authentication _
+      | Invalid_numeric_declaration _
       | Executable_function_in_specification _
       | Unannotated_erased_call _
       | Invalid_verification_call _
@@ -305,6 +309,77 @@ let disposition projection =
   | Inconclusive -> Unit_inconclusive
   | Incomplete_source -> Unit_incomplete_source
   | Frontend_rejected -> Unit_frontend_rejected
+
+let dependency_closure implementations consumer =
+  let exact_dependencies owner (imported : Cmt_input.import) =
+    implementations
+    |> List.filter_map (fun (unit_name, implementation) ->
+           if
+             String.equal unit_name owner.Cmt_input.unit_name
+             || not (String.equal unit_name imported.unit_name)
+           then None
+           else if Cmt_input.exact_import ~owner ~dependency:implementation imported
+           then Some implementation
+           else None)
+  in
+  let select owner imported =
+    match exact_dependencies owner imported with
+    | [] -> Ok None
+    | [ dependency ] -> Ok (Some dependency)
+    | candidates ->
+        let digests =
+          candidates
+          |> List.map (fun candidate -> candidate.Cmt_input.raw_artifact_digest)
+          |> List.sort_uniq String.compare
+        in
+        (match digests with
+        | [ digest ] ->
+            Ok
+              (List.find_opt
+                 (fun candidate ->
+                   String.equal candidate.Cmt_input.raw_artifact_digest digest)
+                 candidates)
+        | [] | _ :: _ :: _ ->
+            Error
+              (Failure.make Failure.Verifier_outcome
+                 ("ambiguous exact dependency artifacts for "
+                 ^ imported.unit_name)))
+  in
+  let rec visit visiting visited implementation =
+    if List.mem implementation.Cmt_input.unit_name visiting then
+      Error
+        (Failure.make Failure.Verifier_outcome
+           ("cyclic exact dependency graph at "
+           ^ implementation.Cmt_input.unit_name))
+    else if
+      List.exists
+        (fun candidate ->
+          String.equal candidate.Cmt_input.raw_artifact_digest
+            implementation.Cmt_input.raw_artifact_digest)
+        visited
+    then Ok visited
+    else
+      implementation.Cmt_input.imports
+      |> Array.fold_left
+           (fun result imported ->
+             let* visited = result in
+             let* dependency = select implementation imported in
+             match dependency with
+             | None -> Ok visited
+             | Some dependency ->
+                 visit (implementation.unit_name :: visiting) visited dependency)
+           (Ok visited)
+      |> Result.map (fun visited -> implementation :: visited)
+  in
+  let* closure = visit [] [] consumer in
+  Ok
+    (closure
+    |> List.filter (fun implementation ->
+           not
+             (String.equal implementation.Cmt_input.raw_artifact_digest
+                consumer.Cmt_input.raw_artifact_digest))
+    |> List.sort (fun left right ->
+           String.compare left.Cmt_input.unit_name right.Cmt_input.unit_name))
 
 let verify_loaded ~providers loaded =
   let configuration =
@@ -337,18 +412,7 @@ let verify_loaded ~providers loaded =
                |> Outcome.with_unit unit_name Outcome.Unit_frontend_rejected
                |> Result.ok
            | unit_name, `Implementation consumer ->
-               let imported_units =
-                 consumer.Cmt_input.imports
-                 |> Array.to_list
-                 |> List.map (fun (import : Cmt_input.import) -> import.unit_name)
-               in
-               let dependencies =
-                 implementations
-                 |> List.filter_map (fun (other_name, implementation) ->
-                        if other_name = unit_name || not (List.mem other_name imported_units)
-                        then None
-                        else Some implementation)
-               in
+               let* dependencies = dependency_closure implementations consumer in
                let request =
                  Verifier_service.request ~configuration ~consumer ~dependencies
                in

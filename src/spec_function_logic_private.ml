@@ -10,7 +10,8 @@ let of_symbol ~arrow symbol =
           Vir.parametric_sort = candidate;
           parametric_desc = Vir.Parametric_symbol symbol;
         }
-  | Vir.Integer | Vir.Boolean | Vir.Aggregate _ | Vir.Parametric _ ->
+  | Vir.Integer | Vir.Boolean | Vir.Bit_vector _ | Vir.Aggregate _
+  | Vir.Parametric _ ->
       Error "specification-function symbol has the wrong exact arrow sort"
 
 let ( let* ) result continuation =
@@ -20,6 +21,7 @@ type value =
   | Unit_value
   | Integer_value of Vir.integer_term
   | Boolean_value of Vir.boolean_term
+  | Bit_vector_value of Vir.bit_vector_term
   | Tuple_value of value list
   | Aggregate_value of Vir.aggregate_term
   | Parametric_value of Vir.parametric_term
@@ -74,6 +76,7 @@ let conditional condition consequent alternative =
 let recursive_argument ~error ~span = function
   | Integer_value term -> Ok (Vir.Recursive_integer_argument term)
   | Boolean_value term -> Ok (Vir.Recursive_boolean_argument term)
+  | Bit_vector_value term -> Ok (Vir.Recursive_bv_argument term)
   | Aggregate_value term -> Ok (Vir.Recursive_aggregate_argument term)
   | Parametric_value term -> Ok (Vir.Recursive_parametric_argument term)
   | Function_value function_ ->
@@ -86,6 +89,7 @@ let recursive_argument ~error ~span = function
 let application_term ~error ~span = function
   | Integer_value term -> Ok (Vir.Integer_application term)
   | Boolean_value term -> Ok (Vir.Boolean_application term)
+  | Bit_vector_value term -> Ok (Vir.Bv_application term)
   | Aggregate_value term -> Ok (Vir.Aggregate_application term)
   | Parametric_value term -> Ok (Vir.Parametric_application term)
   | Function_value function_ ->
@@ -100,6 +104,11 @@ let value_of_application ~aggregate_type ~error ~span typ application =
       Ok (Integer_value (Vir.Integer_symbolic_application application))
   | Sst.Bool ->
       Ok (Boolean_value (Vir.Boolean_symbolic_application application))
+  | Sst.Bit_vector width ->
+      Ok
+        (Bit_vector_value
+           { Vir.bit_vector_width = width;
+             bit_vector_desc = Vir.Bv_symbolic_application application })
   | Sst.Parameter binder ->
       Ok
         (Parametric_value
@@ -135,14 +144,15 @@ let value_of_application ~aggregate_type ~error ~span typ application =
 let sort_of_type ~aggregate_type = function
   | Parametric_type.Int | Parametric_type.Mathematical_int -> Ok Vir.Integer
   | Bool -> Ok Vir.Boolean
+  | Bit_vector width -> Ok (Vir.Bit_vector width)
   | Parameter binder -> Ok (Vir.Parametric binder)
   | Application _ as typ when Parametric_type.is_spec_function typ ->
       Ok (Vir.Parametric (binder typ))
-  | Application _ as typ -> (
+  | (Application _ | Aggregate _) as typ -> (
       match aggregate_type typ with
       | Some aggregate -> Ok (Vir.Aggregate aggregate)
       | None -> Error "application sort is unavailable")
-  | Unit | Tuple _ | Aggregate _ -> Error "unsupported first-order sort"
+  | Unit | Tuple _ -> Error "unsupported first-order sort"
 
 let quantified_value ~aggregate_type ~error (binding : Sst.binding) =
   let make sort value =
@@ -166,6 +176,10 @@ let quantified_value ~aggregate_type ~error (binding : Sst.binding) =
         Some
           (make Vir.Boolean (fun symbol ->
                Boolean_value (Vir.Boolean_symbol symbol)))
+    | Bit_vector_binder width ->
+        Some
+          (make (Vir.Bit_vector width) (fun symbol ->
+               Bit_vector_value (Result.get_ok (Vir.bv_symbol symbol))))
     | Parameter_binder parameter ->
         Some
           (make (Vir.Parametric parameter) (fun symbol ->
@@ -577,7 +591,8 @@ let rec materialize_named_stages services ~context ~span
       let next_term =
         match right with
         | Function_value function_ -> function_.function_term
-        | Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _
+        | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
+        | Tuple_value _
         | Aggregate_value _ | Parametric_value _ ->
             current_term
       in
@@ -627,6 +642,10 @@ type ('value, 'error) application_value_services = {
     Vir.recursive_spec_argument Symbolic_application_private.t -> 'value;
   boolean :
     Vir.recursive_spec_argument Symbolic_application_private.t -> 'value;
+  bit_vector :
+    Bv_width.t ->
+    Vir.recursive_spec_argument Symbolic_application_private.t ->
+    'value;
   parametric :
     Parametric_type.binder ->
     Vir.recursive_spec_argument Symbolic_application_private.t ->
@@ -647,6 +666,7 @@ let value_of_logic_application services typ application =
   match typ with
   | Sst.Int | Sst.Mathematical_int -> Ok (services.integer application)
   | Sst.Bool -> Ok (services.boolean application)
+  | Sst.Bit_vector width -> Ok (services.bit_vector width application)
   | Sst.Parameter binder -> Ok (services.parametric binder application)
   | Sst.Application _ when Parametric_type.is_spec_function typ ->
       Ok (services.function_ typ application)

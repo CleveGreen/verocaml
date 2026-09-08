@@ -112,6 +112,16 @@ let relation_argument = function
   | Logical_spec_evaluation_private.Integer_value term ->
       Ok (Vir.Recursive_integer_argument term)
   | Boolean_value term -> Ok (Vir.Recursive_boolean_argument term)
+  | Bit_vector_value term ->
+      [%log.trace "preserved BV callback relation argument"
+        ~stage:(Delator.Field.string "callback-contract-vector")
+        ~width:(Delator.Field.int (Bv_width.to_int term.Vir.bit_vector_width))
+        ~width_identity:
+          (Delator.Field.string
+             (Bv_width.structural_identity_material term.bit_vector_width))
+        ~position:(Delator.Field.string "argument")
+        ~decision:(Delator.Field.string "accepted")];
+      Ok (Vir.Recursive_bv_argument term)
   | Aggregate_value term -> Ok (Vir.Recursive_aggregate_argument term)
   | Parametric_value term -> Ok (Vir.Recursive_parametric_argument term)
   | Function_value _ ->
@@ -125,6 +135,19 @@ let rec callback_result = function
       Ok (Vir.Integer_result symbol)
   | Boolean_value (Vir.Boolean_symbol symbol) ->
       Ok (Vir.Boolean_result symbol)
+  | Bit_vector_value
+      { Vir.bit_vector_desc = Vir.Bv_symbol symbol; _ } ->
+      [%log.trace "preserved fresh BV callback result"
+        ~stage:(Delator.Field.string "callback-contract-vector")
+        ~symbol_id:(Delator.Field.int symbol.symbol_id)
+        ~width_identity:
+          (Delator.Field.string
+             (match symbol.sort with
+             | Vir.Bit_vector width -> Bv_width.structural_identity_material width
+             | Integer | Boolean | Aggregate _ | Parametric _ -> "invalid"))
+        ~position:(Delator.Field.string "result")
+        ~decision:(Delator.Field.string "accepted")];
+      Ok (Vir.Bv_result symbol)
   | Tuple_value values ->
       let rec collect results = function
         | [] -> Ok (Vir.Tuple_result (List.rev results))
@@ -141,7 +164,7 @@ let rec callback_result = function
       Ok (Vir.Parametric_result symbol)
   | Function_value _ ->
       Error "specification-function values cannot cross the callback ABI"
-  | Integer_value _ | Boolean_value _ | Aggregate_value _
+  | Integer_value _ | Boolean_value _ | Bit_vector_value _ | Aggregate_value _
   | Parametric_value _ ->
       Error "callback result is not one fresh first-order value"
 

@@ -85,6 +85,8 @@ let obligation ?(index = 0) ?(function_index = 0) ?(assumptions = [])
       path_condition;
       goal;
       projection_symbols;
+      logical_constant_instances = [];
+      logical_constant_equations = [];
     }
 
 let configured timeout_ms =

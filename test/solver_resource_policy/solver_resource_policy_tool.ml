@@ -30,6 +30,8 @@ let obligation goal =
       path_condition = [];
       goal;
       projection_symbols = [];
+      logical_constant_instances = [];
+      logical_constant_equations = [];
     }
 
 let direct_config = Z3_bridge.{ timeout_ms = 60_000; model = true }

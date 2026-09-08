@@ -190,6 +190,7 @@ let model_value = function
   | Verifier_service.Integer value -> value
   | Boolean value -> string_of_bool value
   | Aggregate_identity value -> "aggregate#" ^ value
+  | Bit_vector value -> Bv_value.render value
 
 let inconclusive_reason = function
   | Verifier_service.Resource_exhausted -> "reason=resource-exhausted"

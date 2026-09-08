@@ -269,7 +269,8 @@ let find_trigger_spans trigger_spans (definition : Sst.function_definition) =
   | _ -> Error "broadcast declaration has multiple authenticated outer triggers"
 
 let first_order_type = function
-  | Parametric_type.Int | Mathematical_int | Bool | Parameter _ | Application _ ->
+  | Parametric_type.Int | Mathematical_int | Bool | Bit_vector _ | Parameter _
+  | Application _ ->
       true
   | Unit | Tuple _ | Aggregate _ -> false
 
@@ -331,7 +332,7 @@ let contains_binder binder typ =
     | Application (_, arguments) -> List.exists contains arguments
     | Tuple arguments ->
         List.exists (fun (_, argument) -> contains argument) arguments
-    | Int | Mathematical_int | Bool | Unit | Aggregate _ -> false
+    | Int | Mathematical_int | Bool | Bit_vector _ | Unit | Aggregate _ -> false
   in
   contains typ
 
@@ -729,7 +730,8 @@ let infer_type_vector (theorem [@delator.skip])
           | Some _ ->
               Error "broadcast trigger type occurrence has inconsistent actuals"
           )
-      | Int | Mathematical_int | Bool | Unit | Aggregate _ | Parameter _ ->
+      | Int | Mathematical_int | Bool | Bit_vector _ | Unit | Aggregate _
+      | Parameter _ ->
           Ok
             (if Parametric_type.equal expected actual then Some substitutions
              else None)

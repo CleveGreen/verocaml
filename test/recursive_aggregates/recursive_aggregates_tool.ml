@@ -90,6 +90,8 @@ let unit () =
       path_condition = [];
       goal = Integer_compare (Equal, selected, selected);
       projection_symbols = [];
+      logical_constant_instances = [];
+      logical_constant_equations = [];
     }
   in
   let config =

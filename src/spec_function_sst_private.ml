@@ -343,12 +343,16 @@ let exact_owned_contents_construction ~owned_tree_prerequisite
     (transition : Sst.owned_tree_transition) value =
   let rec inspect owned destination reads (expression : Sst.expression) =
     match expression.expression_desc with
-    | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant -> Some reads
+    | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
+    | Sst.Bv_literal _
+    | Sst.Logical_constant_reference _ ->
+        Some reads
     | Sst.Variable { binding; _ }
       when binding.typ = expression.typ
            &&
            match expression.typ with
-           | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> true
+           | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+           | Sst.Bit_vector _ -> true
            | Sst.Tuple _ | Sst.Aggregate _ | Sst.Parameter _ | Sst.Application _
              ->
                false ->
@@ -393,7 +397,9 @@ let exact_owned_contents_construction ~owned_tree_prerequisite
     | Sst.Reveal _ | Sst.Reveal_with_fuel _ | Sst.Use_type_invariant _
     | Sst.Local_assert _ | Sst.Proof_region _ | Sst.Optional_absent
     | Sst.Optional_present _ | Sst.Optional_forward _
-    | Sst.Lift_runtime_int _ ->
+    | Sst.Lift_runtime_int _ | Sst.Bv_int_to_bv_mod _
+    | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+    | Sst.Bv_binary _ | Sst.Bv_compare _ ->
         None
   in
   match
@@ -468,7 +474,7 @@ let authenticate_rank1_recursion ~descriptor
       Parametric_adt_lowering_private.authenticate_direct_recursion ~descriptor
         ~definition:{ definition with parameters; body }
         ~measure:(Sst.map_expression_types expand measure)
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
   | Sst.Aggregate _
   | Sst.Parameter _ | Sst.Application _ ->
       Error "not a rank-1 function-parametric recursive specification"

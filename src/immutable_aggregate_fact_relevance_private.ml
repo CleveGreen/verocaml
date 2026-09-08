@@ -17,6 +17,7 @@ let rec is_exact_aggregate_construction_equality = function
   | Vir.Boolean_constant _ | Vir.Boolean_symbol _ | Vir.Boolean_not _
   | Vir.Boolean_and _ | Vir.Boolean_or _ | Vir.Integer_compare _
   | Vir.Boolean_equal _ | Vir.Boolean_not_equal _ | Vir.Boolean_selector _
+  | Vir.Bv_equal _ | Vir.Bv_not_equal _ | Vir.Bv_compare _
   | Vir.Boolean_invariant_application _
   | Vir.Logical_adt_schema _
   | Vir.Boolean_recursive_spec_application _
@@ -38,6 +39,7 @@ let rec goal_has_aggregate_equality = function
       goal_has_aggregate_equality left || goal_has_aggregate_equality right
   | Vir.Boolean_constant _ | Vir.Boolean_symbol _ | Vir.Integer_compare _
   | Vir.Boolean_equal _ | Vir.Boolean_not_equal _ | Vir.Boolean_selector _
+  | Vir.Bv_equal _ | Vir.Bv_not_equal _ | Vir.Bv_compare _
   | Vir.Boolean_invariant_application _
   | Vir.Logical_adt_schema _
   | Vir.Boolean_recursive_spec_application _
@@ -76,6 +78,7 @@ let rec aggregate_occurs needle term =
 and argument_contains needle = function
   | Vir.Recursive_integer_argument term -> integer_contains needle term
   | Vir.Recursive_boolean_argument term -> boolean_contains needle term
+  | Vir.Recursive_bv_argument term -> bit_vector_contains needle term
   | Vir.Recursive_aggregate_argument term -> aggregate_occurs needle term
   | Vir.Recursive_parametric_argument _ -> false
 
@@ -96,6 +99,24 @@ and integer_contains needle = function
   | Vir.Integer_recursive_spec_application { arguments; _ } ->
       List.exists (argument_contains needle) arguments
   | _ -> false
+
+and bit_vector_contains needle term =
+  match term.Vir.bit_vector_desc with
+  | Vir.Bv_symbol _ | Vir.Bv_literal _ -> false
+  | Vir.Bv_int_to_bv_mod { input; _ } -> integer_contains needle input
+  | Vir.Bv_conditional (condition, consequent, alternative) ->
+      boolean_contains needle condition
+      || bit_vector_contains needle consequent
+      || bit_vector_contains needle alternative
+  | Vir.Bv_selector (_, aggregate) -> aggregate_occurs needle aggregate
+  | Vir.Bv_not value -> bit_vector_contains needle value
+  | Vir.Bv_binary (_, left, right) ->
+      bit_vector_contains needle left || bit_vector_contains needle right
+  | Vir.Bv_recursive_spec_application { arguments; _ } ->
+      List.exists (argument_contains needle) arguments
+  | Vir.Bv_symbolic_application application ->
+      List.exists (argument_contains needle)
+        (Symbolic_application_private.arguments application)
 
 and boolean_contains needle = function
   | Vir.Forall_term quantifier | Vir.Exists_term quantifier ->
@@ -124,6 +145,9 @@ and boolean_contains needle = function
       boolean_contains needle left || boolean_contains needle right
   | Vir.Integer_compare (_, left, right) ->
       integer_contains needle left || integer_contains needle right
+  | Vir.Bv_equal (left, right) | Vir.Bv_not_equal (left, right)
+  | Vir.Bv_compare (_, left, right) ->
+      bit_vector_contains needle left || bit_vector_contains needle right
   | Vir.Boolean_selector (_, aggregate)
   | Vir.Boolean_invariant_application { value = aggregate; _ } ->
       aggregate_occurs needle aggregate
@@ -166,6 +190,7 @@ let rec facts_relevant_to_terms facts terms =
       | Vir.Boolean_constant _ | Vir.Boolean_symbol _ | Vir.Boolean_not _
       | Vir.Boolean_and _ | Vir.Boolean_or _ | Vir.Integer_compare _
       | Vir.Boolean_equal _ | Vir.Boolean_not_equal _ | Vir.Boolean_selector _
+      | Vir.Bv_equal _ | Vir.Bv_not_equal _ | Vir.Bv_compare _
       | Vir.Boolean_invariant_application _
       | Vir.Logical_adt_schema _
       | Vir.Boolean_recursive_spec_application _

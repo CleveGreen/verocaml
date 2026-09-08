@@ -9,10 +9,25 @@ type aggregate_type = {
 type sort =
   | Integer
   | Boolean
+  | Bit_vector of Bv_width.t
   | Aggregate of aggregate_type
   | Parametric of Parametric_type.binder
 
-type symbol_role = Input | Local | Result
+let sort_equal left right =
+  match (left, right) with
+  | Integer, Integer | Boolean, Boolean -> true
+  | Bit_vector left, Bit_vector right -> Bv_width.equal left right
+  | Aggregate left, Aggregate right -> left = right
+  | Parametric left, Parametric right ->
+      Parametric_type.compare_binder left right = 0
+  | (Integer | Boolean | Bit_vector _ | Aggregate _ | Parametric _), _ ->
+      false
+
+type symbol_role =
+  | Input
+  | Local
+  | Result
+  | Logical_constant of Logical_constant_instance_private.t
 
 type symbol = {
   symbol_id : int;
@@ -57,6 +72,33 @@ and parametric_term_desc =
   | Parametric_symbolic_application of
       recursive_spec_argument Symbolic_application_private.t
 
+and bit_vector_term = {
+  bit_vector_width : Bv_width.t;
+  bit_vector_desc : bit_vector_term_desc;
+}
+
+and bit_vector_term_desc =
+  | Bv_symbol of symbol
+  | Bv_literal of Bv_value.t
+  | Bv_int_to_bv_mod of {
+      input : integer_term;
+      source_authority : Numeric_bv_projection_evidence_private.t;
+    }
+  | Bv_conditional of
+      boolean_term * bit_vector_term * bit_vector_term
+  | Bv_not of bit_vector_term
+  | Bv_binary of
+      Bv_operation_private.binary * bit_vector_term * bit_vector_term
+  | Bv_selector of selector * aggregate_term
+  | Bv_recursive_spec_application of {
+      callee : Sst.function_id;
+      type_arguments : Parametric_type.t list;
+      arguments : recursive_spec_argument list;
+      span : span;
+    }
+  | Bv_symbolic_application of
+      recursive_spec_argument Symbolic_application_private.t
+
 and integer_term =
   | Integer_constant of Z.t
   | Integer_symbol of symbol
@@ -78,6 +120,8 @@ and integer_term =
     }
   | Integer_symbolic_application of
       recursive_spec_argument Symbolic_application_private.t
+  | Integer_bv_to_int_unsigned of bit_vector_term
+  | Integer_bv_to_int_signed of bit_vector_term
 
 and aggregate_term = {
   aggregate_type : aggregate_type;
@@ -138,6 +182,7 @@ and selector = {
 and recursive_spec_argument =
   | Recursive_integer_argument of integer_term
   | Recursive_boolean_argument of boolean_term
+  | Recursive_bv_argument of bit_vector_term
   | Recursive_aggregate_argument of aggregate_term
   | Recursive_parametric_argument of parametric_term
 
@@ -149,6 +194,9 @@ and callback_application = {
 
 and boolean_quantifier = {
   boolean_quantifier_schema : Logic_quantifier_private.vector;
+  boolean_quantifier_expected_schema : Logic_quantifier_private.vector;
+  boolean_quantifier_schema_types : Parametric_type.t list;
+  boolean_quantifier_expected_sorts : sort list;
   boolean_quantifier_binders : symbol list;
   boolean_quantifier_body : boolean_term;
   boolean_quantifier_trigger : application_term option;
@@ -157,6 +205,7 @@ and boolean_quantifier = {
 and application_term =
   | Integer_application of integer_term
   | Boolean_application of boolean_term
+  | Bv_application of bit_vector_term
   | Aggregate_application of aggregate_term
   | Parametric_application of parametric_term
 
@@ -172,6 +221,10 @@ and boolean_term =
   | Integer_compare of comparison * integer_term * integer_term
   | Boolean_equal of boolean_term * boolean_term
   | Boolean_not_equal of boolean_term * boolean_term
+  | Bv_equal of bit_vector_term * bit_vector_term
+  | Bv_not_equal of bit_vector_term * bit_vector_term
+  | Bv_compare of
+      Bv_operation_private.comparison * bit_vector_term * bit_vector_term
   | Boolean_selector of selector * aggregate_term
   | Aggregate_equal of aggregate_term * aggregate_term
   | Parametric_equal of parametric_term * parametric_term
@@ -211,9 +264,162 @@ and comparison =
 
 type spec_function_term = parametric_term
 
+let bv_symbol (symbol : symbol) =
+  match symbol.sort with
+  | Bit_vector bit_vector_width ->
+      [%log.trace "created typed VIR BV symbol"
+        ~stage:(Delator.Field.string "vir-bv-construction")
+        ~symbol_id:(Delator.Field.int symbol.symbol_id)
+        ~width:(Delator.Field.int (Bv_width.to_int bit_vector_width))
+        ~decision:(Delator.Field.string "accepted")];
+      Ok { bit_vector_width; bit_vector_desc = Bv_symbol symbol }
+  | Integer | Boolean | Aggregate _ | Parametric _ ->
+      [%log.debug "refused typed VIR BV symbol"
+        ~stage:(Delator.Field.string "vir-bv-construction")
+        ~symbol_id:(Delator.Field.int symbol.symbol_id)
+        ~reason_class:(Delator.Field.string "declared-sort-mismatch")
+        ~decision:(Delator.Field.string "rejected")];
+      Error "bit-vector symbol has a non-BV declared sort"
+
+let bv_literal value =
+  { bit_vector_width = value.Bv_value.width;
+    bit_vector_desc = Bv_literal value }
+
+let bv_int_to_bv_mod ~width:bit_vector_width ~input ~source_authority =
+  [%log.trace "created authenticated VIR Int-to-BV conversion"
+    ~stage:(Delator.Field.string "vir-bv-construction")
+    ~width:(Delator.Field.int (Bv_width.to_int bit_vector_width))
+    ~authority_present:(Delator.Field.bool true)
+    ~decision:(Delator.Field.string "deferred-authentication")];
+  {
+    bit_vector_width;
+    bit_vector_desc = Bv_int_to_bv_mod { input; source_authority };
+  }
+
+let bv_conditional condition consequent alternative =
+  if
+    not
+      (Bv_width.equal consequent.bit_vector_width
+         alternative.bit_vector_width)
+  then (
+    [%log.debug "refused typed VIR BV conditional"
+      ~stage:(Delator.Field.string "vir-bv-construction")
+      ~consequent_width:
+        (Delator.Field.int (Bv_width.to_int consequent.bit_vector_width))
+      ~alternative_width:
+        (Delator.Field.int (Bv_width.to_int alternative.bit_vector_width))
+      ~reason_class:(Delator.Field.string "width-mismatch")
+      ~decision:(Delator.Field.string "rejected")];
+    Error "bit-vector conditional branches have unequal widths")
+  else
+    let width = consequent.bit_vector_width in
+    [%log.trace "created typed VIR BV conditional"
+      ~stage:(Delator.Field.string "vir-bv-construction")
+      ~width:(Delator.Field.int (Bv_width.to_int width))
+      ~decision:(Delator.Field.string "accepted")];
+    Ok
+      {
+        bit_vector_width = width;
+        bit_vector_desc =
+          Bv_conditional (condition, consequent, alternative);
+      }
+
+let bv_not value =
+  { bit_vector_width = value.bit_vector_width; bit_vector_desc = Bv_not value }
+
+let bv_binary operation left right =
+  if not (Bv_width.equal left.bit_vector_width right.bit_vector_width) then (
+    [%log.debug "refused typed VIR BV binary operation"
+      ~stage:(Delator.Field.string "vir-bv-construction")
+      ~operation:
+        (Delator.Field.string (Bv_operation_private.binary_name operation))
+      ~left_width:(Delator.Field.int (Bv_width.to_int left.bit_vector_width))
+      ~right_width:(Delator.Field.int (Bv_width.to_int right.bit_vector_width))
+      ~reason_class:(Delator.Field.string "authenticated-width-mismatch")
+      ~decision:(Delator.Field.string "rejected")];
+    Error "bit-vector binary operands have unequal authenticated widths" )
+  else
+    Ok
+      { bit_vector_width = left.bit_vector_width;
+        bit_vector_desc = Bv_binary (operation, left, right) }
+
+let bv_selector selector source =
+  if selector.selector_domain <> source.aggregate_type then
+    ( [%log.debug "refused typed VIR BV selector"
+        ~stage:(Delator.Field.string "vir-bv-construction")
+        ~selector_index:(Delator.Field.int selector.selector_index)
+        ~reason_class:(Delator.Field.string "aggregate-owner-mismatch")
+        ~decision:(Delator.Field.string "rejected")];
+      Error "bit-vector selector has a mismatched aggregate owner" )
+  else
+    match selector.selector_range with
+    | Bit_vector bit_vector_width ->
+        [%log.trace "created typed VIR BV selector"
+          ~stage:(Delator.Field.string "vir-bv-construction")
+          ~selector_index:(Delator.Field.int selector.selector_index)
+          ~width:(Delator.Field.int (Bv_width.to_int bit_vector_width))
+          ~decision:(Delator.Field.string "accepted")];
+        Ok
+          {
+            bit_vector_width;
+            bit_vector_desc = Bv_selector (selector, source);
+          }
+    | Integer | Boolean | Aggregate _ | Parametric _ ->
+        [%log.debug "refused typed VIR BV selector"
+          ~stage:(Delator.Field.string "vir-bv-construction")
+          ~selector_index:(Delator.Field.int selector.selector_index)
+          ~reason_class:(Delator.Field.string "declared-range-mismatch")
+          ~decision:(Delator.Field.string "rejected")];
+        Error "bit-vector selector has a non-BV declared range"
+
+let bv_recursive_spec_application ~width:bit_vector_width
+    ~(callee : Sst.function_id)
+    ~type_arguments ~arguments ~span =
+  [%log.trace "prepared typed VIR BV recursive application"
+    ~stage:(Delator.Field.string "vir-bv-construction")
+    ~function_index:(Delator.Field.int callee.function_index)
+    ~width:(Delator.Field.int (Bv_width.to_int bit_vector_width))
+    ~type_arity:(Delator.Field.int (List.length type_arguments))
+    ~term_arity:(Delator.Field.int (List.length arguments))
+    ~decision:(Delator.Field.string "requires-schema-validation")];
+  {
+    bit_vector_width;
+    bit_vector_desc =
+      Bv_recursive_spec_application
+        { callee; type_arguments; arguments; span };
+  }
+
+let bv_comparison constructor left right =
+  if not (Bv_width.equal left.bit_vector_width right.bit_vector_width) then
+    ( [%log.debug "refused typed VIR BV comparison"
+        ~stage:(Delator.Field.string "vir-bv-construction")
+        ~left_width:(Delator.Field.int (Bv_width.to_int left.bit_vector_width))
+        ~right_width:(Delator.Field.int (Bv_width.to_int right.bit_vector_width))
+        ~reason_class:(Delator.Field.string "width-mismatch")
+        ~decision:(Delator.Field.string "rejected")];
+      Error "bit-vector comparison operands have unequal widths" )
+  else (
+    [%log.trace "created typed VIR BV comparison"
+      ~stage:(Delator.Field.string "vir-bv-construction")
+      ~width:(Delator.Field.int (Bv_width.to_int left.bit_vector_width))
+      ~decision:(Delator.Field.string "accepted")];
+    Ok (constructor (left, right)))
+
+let bv_equal = bv_comparison (fun (left, right) -> Bv_equal (left, right))
+let bv_not_equal =
+  bv_comparison (fun (left, right) -> Bv_not_equal (left, right))
+
+let bv_compare operation =
+  bv_comparison (fun (left, right) -> Bv_compare (operation, left, right))
+
+let bv_to_int_unsigned value = Integer_bv_to_int_unsigned value
+let bv_to_int_signed value = Integer_bv_to_int_signed value
+
 let symbolic_application_arguments = function
   | Integer_application (Integer_symbolic_application application)
   | Boolean_application (Boolean_symbolic_application application)
+  | Bv_application
+      { bit_vector_desc = Bv_symbolic_application application; _ }
   | Aggregate_application
       { aggregate_desc = Aggregate_symbolic_application application; _ }
   | Parametric_application
@@ -221,6 +427,7 @@ let symbolic_application_arguments = function
       Some (Symbolic_application_private.arguments application)
   | Integer_application _
   | Boolean_application _
+  | Bv_application _
   | Aggregate_application _
   | Parametric_application _ ->
       None
@@ -231,6 +438,11 @@ let symbolic_application ~aggregate_type application =
       Ok (Integer_application (Integer_symbolic_application application))
   | Bool ->
       Ok (Boolean_application (Boolean_symbolic_application application))
+  | Bit_vector width ->
+      Ok
+        (Bv_application
+           { bit_vector_width = width;
+             bit_vector_desc = Bv_symbolic_application application })
   | Parameter binder ->
       Ok
         (Parametric_application
@@ -260,6 +472,7 @@ let boolean_term_symbol_ids term =
   let rec argument ids = function
     | Recursive_integer_argument term -> integer ids term
     | Recursive_boolean_argument term -> boolean ids term
+    | Recursive_bv_argument term -> bit_vector ids term
     | Recursive_aggregate_argument term -> aggregate ids term
     | Recursive_parametric_argument term -> parametric ids term
   and arguments ids values = List.fold_left argument ids values
@@ -293,6 +506,23 @@ let boolean_term_symbol_ids term =
     | Integer_symbolic_application application ->
         arguments ids
           (Symbolic_application_private.arguments application)
+    | Integer_bv_to_int_unsigned term | Integer_bv_to_int_signed term -> bit_vector ids term
+  and bit_vector ids term =
+    match term.bit_vector_desc with
+    | Bv_symbol symbol -> add symbol ids
+    | Bv_literal _ -> ids
+    | Bv_int_to_bv_mod { input; _ } -> integer ids input
+    | Bv_conditional (condition, consequent, alternative) ->
+        bit_vector
+          (bit_vector (boolean ids condition) consequent)
+          alternative
+    | Bv_selector (_, source) -> aggregate ids source
+    | Bv_not value -> bit_vector ids value
+    | Bv_binary (_, left, right) -> bit_vector (bit_vector ids left) right
+    | Bv_recursive_spec_application { arguments = values; _ } ->
+        arguments ids values
+    | Bv_symbolic_application application ->
+        arguments ids (Symbolic_application_private.arguments application)
   and aggregate ids term =
     match term.aggregate_desc with
     | Aggregate_symbol symbol -> add symbol ids
@@ -331,6 +561,9 @@ let boolean_term_symbol_ids term =
         in
         List.filter (fun id -> not (List.mem id bound)) nested
     | Integer_compare (_, left, right) -> integer (integer ids left) right
+    | Bv_equal (left, right) | Bv_not_equal (left, right)
+    | Bv_compare (_, left, right) ->
+        bit_vector (bit_vector ids left) right
     | Boolean_selector (_, value)
     | Boolean_invariant_application { value; _ } ->
         aggregate ids value
@@ -348,6 +581,7 @@ let boolean_term_symbol_ids term =
   and application ids = function
     | Integer_application term -> integer ids term
     | Boolean_application term -> boolean ids term
+    | Bv_application term -> bit_vector ids term
     | Aggregate_application term -> aggregate ids term
     | Parametric_application term -> parametric ids term
   in
@@ -359,6 +593,7 @@ let application_term_symbol_ids term =
     | Integer_application term ->
         Integer_compare (Equal, term, term)
     | Boolean_application term -> term
+    | Bv_application term -> Bv_equal (term, term)
     | Aggregate_application term -> Aggregate_equal (term, term)
     | Parametric_application term -> Parametric_equal (term, term)
   in
@@ -377,6 +612,8 @@ let application_head = function
       arguments <> []
   | Integer_application (Integer_symbolic_application application)
   | Boolean_application (Boolean_symbolic_application application)
+  | Bv_application
+      { bit_vector_desc = Bv_symbolic_application application; _ }
   | Aggregate_application
       { aggregate_desc = Aggregate_symbolic_application application; _ }
   | Parametric_application
@@ -384,46 +621,48 @@ let application_head = function
       not (Symbolic_application_private.is_nullary application)
   | Integer_application _
   | Boolean_application _
+  | Bv_application _
   | Aggregate_application _
   | Parametric_application _ ->
       false
 
-let make_boolean_quantifier ~sort_of_type ~schema ~binders ~body ~trigger =
+let validate_boolean_quantifier ~expected_kind quantifier =
+  let schema = quantifier.boolean_quantifier_schema in
+  let expected_schema = quantifier.boolean_quantifier_expected_schema in
   let metadata = Logic_quantifier_private.vector_binders schema in
   let kind = Logic_quantifier_private.vector_kind schema in
-  let ids = List.map (fun binder -> binder.symbol_id) binders in
-  let expected_sorts =
-    List.fold_left
-      (fun result metadata ->
-        match result with
-        | Error _ as error -> error
-        | Ok sorts ->
-            Result.map
-              (fun sort -> sort :: sorts)
-              (sort_of_type
-                 (Logic_quantifier_private.binder_type metadata)))
-      (Ok []) metadata
-    |> Result.map List.rev
+  let binders = quantifier.boolean_quantifier_binders in
+  let expected_types = quantifier.boolean_quantifier_schema_types in
+  let expected_sorts = quantifier.boolean_quantifier_expected_sorts in
+  let metadata_types =
+    List.map Logic_quantifier_private.binder_type metadata
   in
+  let ids = List.map (fun binder -> binder.symbol_id) binders in
   if Result.is_error (Logic_quantifier_private.validate_vector_identity schema)
   then Error "VIR user quantifier schema identity is invalid"
+  else if not (Logic_quantifier_private.vector_equal schema expected_schema) then
+    Error "VIR user quantifier schema differs from its issued identity"
+  else if kind <> expected_kind then
+    Error "VIR user quantifier kind disagrees with authenticated metadata"
   else if binders = [] then Error "VIR user quantifier binder vector is empty"
-  else if List.length binders <> List.length metadata then
-    Error "VIR user quantifier schema and symbol vector arities differ"
+  else if
+    List.length binders <> List.length metadata
+    || List.length expected_types <> List.length metadata
+    || List.length expected_sorts <> List.length metadata
+  then Error "VIR user quantifier schema and symbol vector arities differ"
+  else if not (List.for_all2 Parametric_type.equal metadata_types expected_types)
+  then Error "VIR user quantifier schema type vector is stale"
   else if List.sort_uniq Int.compare ids <> List.sort Int.compare ids then
     Error "VIR user quantifier duplicates a binder symbol"
+  else if
+    not
+      (List.for_all2
+         (fun symbol expected -> sort_equal symbol.sort expected)
+         binders expected_sorts)
+  then Error "VIR user quantifier binder sort differs from its schema"
   else
-    match expected_sorts with
-    | Error message -> Error message
-    | Ok expected_sorts
-      when not
-             (List.for_all2
-                (fun symbol expected -> symbol.sort = expected)
-                binders expected_sorts) ->
-        Error "VIR user quantifier binder sort differs from its schema"
-    | Ok _ ->
     let trigger_policy =
-      match (kind, trigger) with
+      match (kind, quantifier.boolean_quantifier_trigger) with
       | Logic_quantifier_private.Forall, Some trigger ->
           let used = application_term_symbol_ids trigger in
           application_head trigger
@@ -435,14 +674,42 @@ let make_boolean_quantifier ~sort_of_type ~schema ~binders ~body ~trigger =
     in
     if not trigger_policy then
       Error "VIR user quantifier trigger policy or vector coverage is invalid"
-    else
-      Ok
+    else Ok ()
+
+let make_boolean_quantifier ~sort_of_type ~schema ~binders ~body ~trigger =
+  let metadata = Logic_quantifier_private.vector_binders schema in
+  let schema_types =
+    List.map Logic_quantifier_private.binder_type metadata
+  in
+  let expected_sorts =
+    List.fold_left
+      (fun result typ ->
+        match result with
+        | Error _ as error -> error
+        | Ok sorts ->
+            Result.map (fun sort -> sort :: sorts) (sort_of_type typ))
+      (Ok []) schema_types
+    |> Result.map List.rev
+  in
+  match expected_sorts with
+  | Error _ as error -> error
+  | Ok expected_sorts ->
+      let quantifier =
         {
           boolean_quantifier_schema = schema;
+          boolean_quantifier_expected_schema = schema;
+          boolean_quantifier_schema_types = schema_types;
+          boolean_quantifier_expected_sorts = expected_sorts;
           boolean_quantifier_binders = binders;
           boolean_quantifier_body = body;
           boolean_quantifier_trigger = trigger;
         }
+      in
+      Result.map
+        (fun () -> quantifier)
+        (validate_boolean_quantifier
+           ~expected_kind:(Logic_quantifier_private.vector_kind schema)
+           quantifier)
 
 type checked_operation =
   | Add
@@ -541,12 +808,21 @@ type obligation = {
   path_condition : boolean_term list;
   goal : boolean_term;
   projection_symbols : symbol list;
+  logical_constant_instances : Logical_constant_instance_private.t list;
+  logical_constant_equations : logical_constant_equation list;
+}
+
+and logical_constant_equation = {
+  logical_constant_instance : Logical_constant_instance_private.t;
+  logical_constant_rhs : application_term;
+  logical_constant_span : span;
 }
 
 type result_value =
   | Unit_result
   | Integer_result of symbol
   | Boolean_result of symbol
+  | Bv_result of symbol
   | Tuple_result of result_value list
   | Aggregate_result of symbol
   | Parametric_result of symbol
@@ -783,6 +1059,7 @@ let rank_selector_is_positive_child domain selector =
                    | Aggregate aggregate -> aggregate.aggregate_type_name
                    | Integer -> "int"
                    | Boolean -> "bool"
+                   | Bit_vector width -> "bv" ^ Bv_width.to_string width
                    | Parametric _ -> "parameter"))
               ~child_type:
                 (Delator.Field.string child_type.aggregate_type_name)];
@@ -955,10 +1232,51 @@ and integer_term_to_string = function
   | Integer_symbolic_application application ->
       Symbolic_application_private.to_string
         recursive_spec_argument_to_string application
+  | Integer_bv_to_int_unsigned value ->
+      Printf.sprintf "(bv-to-int-unsigned %s)"
+        (bit_vector_term_to_string value)
+  | Integer_bv_to_int_signed value ->
+      Printf.sprintf "(bv-to-int-signed %s)"
+        (bit_vector_term_to_string value)
+
+and bit_vector_term_to_string term =
+  match term.bit_vector_desc with
+  | Bv_symbol symbol -> symbol_to_string symbol
+  | Bv_literal value -> Bv_value.render value
+  | Bv_int_to_bv_mod { input; _ } ->
+      Printf.sprintf "((_ int-to-bv %s) %s)"
+        (Bv_width.to_string term.bit_vector_width)
+        (integer_term_to_string input)
+  | Bv_conditional (condition, consequent, alternative) ->
+      Printf.sprintf "(ite %s %s %s)" (boolean_term_to_string condition)
+        (bit_vector_term_to_string consequent)
+        (bit_vector_term_to_string alternative)
+  | Bv_not value ->
+      Printf.sprintf "(bv-not %s)" (bit_vector_term_to_string value)
+  | Bv_binary (operation, left, right) ->
+      Printf.sprintf "(bv-%s %s %s)"
+        (Bv_operation_private.binary_name operation)
+        (bit_vector_term_to_string left) (bit_vector_term_to_string right)
+  | Bv_selector (selector, aggregate) ->
+      Printf.sprintf "(%s %s)" (selector_to_string selector)
+        (aggregate_term_to_string aggregate)
+  | Bv_recursive_spec_application { callee; arguments; _ } ->
+      Printf.sprintf "(spec.%d.%s%s)" callee.function_index
+        callee.function_name
+        (match arguments with
+        | [] -> ""
+        | _ ->
+            " "
+            ^ String.concat " "
+                (List.map recursive_spec_argument_to_string arguments))
+  | Bv_symbolic_application application ->
+      Symbolic_application_private.to_string
+        recursive_spec_argument_to_string application
 
 and recursive_spec_argument_to_string = function
   | Recursive_integer_argument term -> integer_term_to_string term
   | Recursive_boolean_argument term -> boolean_term_to_string term
+  | Recursive_bv_argument term -> bit_vector_term_to_string term
   | Recursive_aggregate_argument term -> aggregate_term_to_string term
   | Recursive_parametric_argument term -> parametric_term_to_string term
 
@@ -1008,6 +1326,8 @@ and boolean_term_to_string = function
                  (match binder.sort with
                  | Integer -> "Int"
                  | Boolean -> "Bool"
+                 | Bit_vector width ->
+                     Printf.sprintf "BV<%s>" (Bv_width.to_string width)
                  | Aggregate aggregate -> aggregate_type_to_string aggregate
                  | Parametric binder ->
                      Parametric_type.binder_to_string binder))
@@ -1036,6 +1356,16 @@ and boolean_term_to_string = function
   | Boolean_not_equal (left, right) ->
       Printf.sprintf "(distinct %s %s)" (boolean_term_to_string left)
         (boolean_term_to_string right)
+  | Bv_equal (left, right) ->
+      Printf.sprintf "(bv-eq %s %s)" (bit_vector_term_to_string left)
+        (bit_vector_term_to_string right)
+  | Bv_not_equal (left, right) ->
+      Printf.sprintf "(bv-distinct %s %s)" (bit_vector_term_to_string left)
+        (bit_vector_term_to_string right)
+  | Bv_compare (comparison, left, right) ->
+      Printf.sprintf "(bv-%s %s %s)"
+        (Bv_operation_private.comparison_name comparison)
+        (bit_vector_term_to_string left) (bit_vector_term_to_string right)
   | Boolean_selector (selector, aggregate) ->
       Printf.sprintf "(%s %s)" (selector_to_string selector)
         (aggregate_term_to_string aggregate)
@@ -1088,6 +1418,7 @@ and boolean_term_to_string = function
 and application_term_to_string = function
   | Integer_application term -> integer_term_to_string term
   | Boolean_application term -> boolean_term_to_string term
+  | Bv_application term -> bit_vector_term_to_string term
   | Aggregate_application term -> aggregate_term_to_string term
   | Parametric_application term -> parametric_term_to_string term
 
@@ -1131,6 +1462,7 @@ let rec aggregate_has_recursive_specification term =
 and argument_has_recursive_specification = function
   | Recursive_integer_argument term -> integer_has_recursive_specification term
   | Recursive_boolean_argument term -> boolean_has_recursive_specification term
+  | Recursive_bv_argument term -> bit_vector_has_recursive_specification term
   | Recursive_aggregate_argument term -> aggregate_has_recursive_specification term
   | Recursive_parametric_argument term ->
       parametric_has_recursive_specification term
@@ -1169,6 +1501,27 @@ and integer_has_recursive_specification = function
       aggregate_has_recursive_specification aggregate
   | Integer_constant _ | Integer_symbol _ ->
       false
+  | Integer_bv_to_int_unsigned term | Integer_bv_to_int_signed term ->
+      bit_vector_has_recursive_specification term
+
+and bit_vector_has_recursive_specification term =
+  match term.bit_vector_desc with
+  | Bv_recursive_spec_application _ -> true
+  | Bv_symbolic_application application ->
+      List.exists argument_has_recursive_specification
+        (Symbolic_application_private.arguments application)
+  | Bv_int_to_bv_mod { input; _ } ->
+      integer_has_recursive_specification input
+  | Bv_conditional (condition, consequent, alternative) ->
+      boolean_has_recursive_specification condition
+      || bit_vector_has_recursive_specification consequent
+      || bit_vector_has_recursive_specification alternative
+  | Bv_selector (_, source) -> aggregate_has_recursive_specification source
+  | Bv_not value -> bit_vector_has_recursive_specification value
+  | Bv_binary (_, left, right) ->
+      bit_vector_has_recursive_specification left
+      || bit_vector_has_recursive_specification right
+  | Bv_symbol _ | Bv_literal _ -> false
 
 and boolean_has_recursive_specification = function
   | Logical_adt_schema _ -> false
@@ -1189,6 +1542,10 @@ and boolean_has_recursive_specification = function
   | Integer_compare (_, left, right) ->
       integer_has_recursive_specification left
       || integer_has_recursive_specification right
+  | Bv_equal (left, right) | Bv_not_equal (left, right)
+    | Bv_compare (_, left, right) ->
+      bit_vector_has_recursive_specification left
+      || bit_vector_has_recursive_specification right
   | Boolean_selector (_, aggregate) ->
       aggregate_has_recursive_specification aggregate
   | Aggregate_equal (left, right) ->
@@ -1204,8 +1561,19 @@ and boolean_has_recursive_specification = function
 let recursive_spec_argument_has_recursive_specification =
   argument_has_recursive_specification
 
+let application_has_recursive_specification = function
+  | Integer_application term -> integer_has_recursive_specification term
+  | Boolean_application term -> boolean_has_recursive_specification term
+  | Bv_application term -> bit_vector_has_recursive_specification term
+  | Aggregate_application term -> aggregate_has_recursive_specification term
+  | Parametric_application term -> parametric_has_recursive_specification term
+
 let obligation_has_recursive_specification (obligation : obligation) =
-  List.exists boolean_has_recursive_specification obligation.assumptions
+  List.exists
+    (fun equation ->
+      application_has_recursive_specification equation.logical_constant_rhs)
+    obligation.logical_constant_equations
+  || List.exists boolean_has_recursive_specification obligation.assumptions
   || List.exists boolean_has_recursive_specification
        obligation.required_preceding_safety
   || List.exists boolean_has_recursive_specification obligation.path_condition
@@ -1252,6 +1620,7 @@ let obligation_aggregate_recursive_specifications (obligation : obligation) =
   and argument applications = function
     | Recursive_integer_argument term -> integer applications term
     | Recursive_boolean_argument term -> boolean applications term
+    | Recursive_bv_argument term -> bit_vector applications term
     | Recursive_aggregate_argument term -> aggregate applications term
     | Recursive_parametric_argument term -> parametric applications term
   and parametric applications term =
@@ -1292,6 +1661,25 @@ let obligation_aggregate_recursive_specifications (obligation : obligation) =
     | Integer_rank_project (_, value) ->
         aggregate applications value
     | Integer_constant _ | Integer_symbol _ -> Ok applications
+    | Integer_bv_to_int_unsigned term | Integer_bv_to_int_signed term -> bit_vector applications term
+  and bit_vector applications term =
+    match term.bit_vector_desc with
+    | Bv_recursive_spec_application { arguments; _ } ->
+        arguments_fold applications arguments
+    | Bv_symbolic_application application ->
+        arguments_fold applications
+          (Symbolic_application_private.arguments application)
+    | Bv_int_to_bv_mod { input; _ } -> integer applications input
+    | Bv_conditional (condition, consequent, alternative) ->
+        let* applications = boolean applications condition in
+        let* applications = bit_vector applications consequent in
+        bit_vector applications alternative
+    | Bv_selector (_, source) -> aggregate applications source
+    | Bv_not value -> bit_vector applications value
+    | Bv_binary (_, left, right) ->
+        let* applications = bit_vector applications left in
+        bit_vector applications right
+    | Bv_symbol _ | Bv_literal _ -> Ok applications
   and boolean applications = function
     | Logical_adt_schema _ -> Ok applications
     | Forall_term quantifier | Exists_term quantifier ->
@@ -1314,6 +1702,10 @@ let obligation_aggregate_recursive_specifications (obligation : obligation) =
     | Integer_compare (_, left, right) ->
         let* applications = integer applications left in
         integer applications right
+    | Bv_equal (left, right) | Bv_not_equal (left, right)
+    | Bv_compare (_, left, right) ->
+        let* applications = bit_vector applications left in
+        bit_vector applications right
     | Boolean_selector (_, value)
     | Boolean_invariant_application { value; _ } ->
         aggregate applications value
@@ -1324,16 +1716,29 @@ let obligation_aggregate_recursive_specifications (obligation : obligation) =
         let* applications = parametric applications left in
         parametric applications right
     | Boolean_constant _ | Boolean_symbol _ -> Ok applications
+  and application applications = function
+    | Integer_application term -> integer applications term
+    | Boolean_application term -> boolean applications term
+    | Bv_application term -> bit_vector applications term
+    | Aggregate_application term -> aggregate applications term
+    | Parametric_application term -> parametric applications term
   in
   let terms =
     obligation.assumptions @ obligation.required_preceding_safety
     @ obligation.path_condition @ [ obligation.goal ]
   in
-  List.fold_left
+  let* applications =
+    List.fold_left
     (fun result term ->
       let* applications = result in
       boolean applications term)
     (Ok []) terms
+  in
+  List.fold_left
+    (fun result equation ->
+      let* applications = result in
+      application applications equation.logical_constant_rhs)
+    (Ok applications) obligation.logical_constant_equations
   |> Result.map List.rev
 
 let obligation_aggregate_types (obligation : obligation) =
@@ -1351,7 +1756,7 @@ let obligation_aggregate_types (obligation : obligation) =
   in
   let sort types = function
     | Aggregate type_ -> add type_ types
-    | Integer | Boolean | Parametric _ -> types
+    | Integer | Boolean | Bit_vector _ | Parametric _ -> types
   in
   let field_owner types (field : Sst.field_id) =
     match field.field_owner with
@@ -1391,6 +1796,7 @@ let obligation_aggregate_types (obligation : obligation) =
   and argument types = function
     | Recursive_integer_argument term -> integer types term
     | Recursive_boolean_argument term -> boolean types term
+    | Recursive_bv_argument term -> bit_vector types term
     | Recursive_aggregate_argument term -> aggregate types term
     | Recursive_parametric_argument term -> parametric types term
   and parametric types term =
@@ -1432,6 +1838,27 @@ let obligation_aggregate_types (obligation : obligation) =
           value
     | Integer_constant _ -> types
     | Integer_symbol symbol -> sort types symbol.sort
+    | Integer_bv_to_int_unsigned term | Integer_bv_to_int_signed term -> bit_vector types term
+  and bit_vector types term =
+    match term.bit_vector_desc with
+    | Bv_symbol symbol -> sort types symbol.sort
+    | Bv_literal value -> sort types (Bit_vector value.Bv_value.width)
+    | Bv_int_to_bv_mod { input; _ } -> integer types input
+    | Bv_conditional (condition, consequent, alternative) ->
+        bit_vector
+          (bit_vector (boolean types condition) consequent)
+          alternative
+    | Bv_selector (selector, source) ->
+        aggregate
+          (sort (add selector.selector_domain types) selector.selector_range)
+          source
+    | Bv_not value -> bit_vector types value
+    | Bv_binary (_, left, right) -> bit_vector (bit_vector types left) right
+    | Bv_recursive_spec_application { arguments; _ } ->
+        arguments_fold types arguments
+    | Bv_symbolic_application application ->
+        arguments_fold types
+          (Symbolic_application_private.arguments application)
   and boolean types = function
     | Logical_adt_schema _ -> types
     | Forall_term quantifier | Exists_term quantifier ->
@@ -1454,6 +1881,9 @@ let obligation_aggregate_types (obligation : obligation) =
     | Boolean_equal (left, right) | Boolean_not_equal (left, right) ->
         boolean (boolean types left) right
     | Integer_compare (_, left, right) -> integer (integer types left) right
+    | Bv_equal (left, right) | Bv_not_equal (left, right)
+    | Bv_compare (_, left, right) ->
+        bit_vector (bit_vector types left) right
     | Boolean_selector (selector, value) ->
         aggregate
           (sort (add selector.selector_domain types) selector.selector_range)
@@ -1465,10 +1895,22 @@ let obligation_aggregate_types (obligation : obligation) =
         parametric (parametric types left) right
     | Boolean_constant _ -> types
     | Boolean_symbol symbol -> sort types symbol.sort
+  and application types = function
+    | Integer_application term -> integer types term
+    | Boolean_application term -> boolean types term
+    | Bv_application term -> bit_vector types term
+    | Aggregate_application term -> aggregate types term
+    | Parametric_application term -> parametric types term
   in
-  obligation.assumptions @ obligation.required_preceding_safety
-  @ obligation.path_condition @ [ obligation.goal ]
-  |> List.fold_left boolean []
+  let types =
+    obligation.assumptions @ obligation.required_preceding_safety
+    @ obligation.path_condition @ [ obligation.goal ]
+    |> List.fold_left boolean []
+  in
+  obligation.logical_constant_equations
+  |> List.fold_left
+       (fun types equation -> application types equation.logical_constant_rhs)
+       types
   |> List.rev
 
 let rec aggregate_has_structural_rank term =
@@ -1509,10 +1951,31 @@ and integer_has_structural_rank = function
   | Aggregate_tag (_, aggregate) | Integer_selector (_, aggregate) ->
       aggregate_has_structural_rank aggregate
   | Integer_constant _ | Integer_symbol _ -> false
+  | Integer_bv_to_int_unsigned term | Integer_bv_to_int_signed term -> bit_vector_has_structural_rank term
+
+and bit_vector_has_structural_rank term =
+  match term.bit_vector_desc with
+  | Bv_symbol _ | Bv_literal _ -> false
+  | Bv_int_to_bv_mod { input; _ } -> integer_has_structural_rank input
+  | Bv_conditional (condition, consequent, alternative) ->
+      boolean_has_structural_rank condition
+      || bit_vector_has_structural_rank consequent
+      || bit_vector_has_structural_rank alternative
+  | Bv_selector (_, source) -> aggregate_has_structural_rank source
+  | Bv_not value -> bit_vector_has_structural_rank value
+  | Bv_binary (_, left, right) ->
+      bit_vector_has_structural_rank left
+      || bit_vector_has_structural_rank right
+  | Bv_recursive_spec_application { arguments; _ } ->
+      List.exists argument_has_structural_rank arguments
+  | Bv_symbolic_application application ->
+      List.exists argument_has_structural_rank
+        (Symbolic_application_private.arguments application)
 
 and argument_has_structural_rank = function
   | Recursive_integer_argument term -> integer_has_structural_rank term
   | Recursive_boolean_argument term -> boolean_has_structural_rank term
+  | Recursive_bv_argument term -> bit_vector_has_structural_rank term
   | Recursive_aggregate_argument term -> aggregate_has_structural_rank term
   | Recursive_parametric_argument term -> parametric_has_structural_rank term
 
@@ -1538,6 +2001,10 @@ and boolean_has_structural_rank = function
       boolean_has_structural_rank left || boolean_has_structural_rank right
   | Integer_compare (_, left, right) ->
       integer_has_structural_rank left || integer_has_structural_rank right
+  | Bv_equal (left, right) | Bv_not_equal (left, right)
+    | Bv_compare (_, left, right) ->
+      bit_vector_has_structural_rank left
+      || bit_vector_has_structural_rank right
   | Boolean_recursive_spec_application { arguments; _ }
   | Boolean_specification_application { arguments; _ }
   | Callback_requires { arguments; _ } ->
@@ -1560,7 +2027,17 @@ and boolean_has_structural_rank = function
   | Boolean_constant _ | Boolean_symbol _ -> false
 
 let obligation_has_structural_rank (obligation : obligation) =
-  List.exists boolean_has_structural_rank obligation.assumptions
+  let application = function
+    | Integer_application term -> integer_has_structural_rank term
+    | Boolean_application term -> boolean_has_structural_rank term
+    | Bv_application term -> bit_vector_has_structural_rank term
+    | Aggregate_application term -> aggregate_has_structural_rank term
+    | Parametric_application term -> parametric_has_structural_rank term
+  in
+  List.exists
+    (fun equation -> application equation.logical_constant_rhs)
+    obligation.logical_constant_equations
+  || List.exists boolean_has_structural_rank obligation.assumptions
   || List.exists boolean_has_structural_rank
        obligation.required_preceding_safety
   || List.exists boolean_has_structural_rank obligation.path_condition
@@ -1602,12 +2079,36 @@ and integer_has_logical_construction = function
   | Integer_rank_project (_, aggregate) ->
       aggregate_has_logical_construction aggregate
   | Integer_constant _ | Integer_symbol _ -> false
+  | Integer_bv_to_int_unsigned term | Integer_bv_to_int_signed term ->
+      bit_vector_has_logical_construction term
+
+and bit_vector_has_logical_construction term =
+  match term.bit_vector_desc with
+  | Bv_symbol _ | Bv_literal _ -> false
+  | Bv_int_to_bv_mod { input; _ } ->
+      integer_has_logical_construction input
+  | Bv_conditional (condition, consequent, alternative) ->
+      boolean_has_logical_construction condition
+      || bit_vector_has_logical_construction consequent
+      || bit_vector_has_logical_construction alternative
+  | Bv_selector (_, source) -> aggregate_has_logical_construction source
+  | Bv_not value -> bit_vector_has_logical_construction value
+  | Bv_binary (_, left, right) ->
+      bit_vector_has_logical_construction left
+      || bit_vector_has_logical_construction right
+  | Bv_recursive_spec_application { arguments; _ } ->
+      List.exists argument_has_logical_construction arguments
+  | Bv_symbolic_application application ->
+      List.exists argument_has_logical_construction
+        (Symbolic_application_private.arguments application)
 
 and argument_has_logical_construction = function
   | Recursive_integer_argument term ->
       integer_has_logical_construction term
   | Recursive_boolean_argument term ->
       boolean_has_logical_construction term
+  | Recursive_bv_argument term ->
+      bit_vector_has_logical_construction term
   | Recursive_aggregate_argument term ->
       aggregate_has_logical_construction term
   | Recursive_parametric_argument term ->
@@ -1638,6 +2139,10 @@ and boolean_has_logical_construction = function
   | Integer_compare (_, left, right) ->
       integer_has_logical_construction left
       || integer_has_logical_construction right
+  | Bv_equal (left, right) | Bv_not_equal (left, right)
+    | Bv_compare (_, left, right) ->
+      bit_vector_has_logical_construction left
+      || bit_vector_has_logical_construction right
   | Boolean_recursive_spec_application { arguments; _ }
   | Boolean_specification_application { arguments; _ }
   | Callback_requires { arguments; _ } ->
@@ -1659,9 +2164,313 @@ and boolean_has_logical_construction = function
       || parametric_has_logical_construction right
   | Boolean_constant _ | Boolean_symbol _ -> false
 
+let rec aggregate_has_native_bv_projection term =
+  match term.aggregate_desc with
+  | Aggregate_symbol _ -> false
+  | Aggregate_selector (_, source) ->
+      aggregate_has_native_bv_projection source
+  | Aggregate_constructor { arguments; _ }
+  | Aggregate_recursive_spec_application { arguments; _ }
+  | Aggregate_imported_model_application { arguments; _ } ->
+      List.exists argument_has_native_bv_projection arguments
+  | Aggregate_record { fields; _ } ->
+      List.exists
+        (fun (_, argument) -> argument_has_native_bv_projection argument)
+        fields
+  | Aggregate_conditional (condition, consequent, alternative) ->
+      boolean_has_native_bv_projection condition
+      || aggregate_has_native_bv_projection consequent
+      || aggregate_has_native_bv_projection alternative
+  | Aggregate_symbolic_application application ->
+      List.exists argument_has_native_bv_projection
+        (Symbolic_application_private.arguments application)
+
+and integer_has_native_bv_projection = function
+  | Integer_bv_to_int_unsigned _ | Integer_bv_to_int_signed _ -> true
+  | Integer_add (left, right) | Integer_subtract (left, right)
+  | Integer_multiply (left, right) ->
+      integer_has_native_bv_projection left
+      || integer_has_native_bv_projection right
+  | Integer_negate value | Integer_multiply_constant (_, value)
+  | Integer_absolute_value value -> integer_has_native_bv_projection value
+  | Integer_conditional (condition, consequent, alternative) ->
+      boolean_has_native_bv_projection condition
+      || integer_has_native_bv_projection consequent
+      || integer_has_native_bv_projection alternative
+  | Integer_rank_project (_, aggregate) | Aggregate_tag (_, aggregate)
+  | Integer_selector (_, aggregate) -> aggregate_has_native_bv_projection aggregate
+  | Integer_recursive_spec_application { arguments; _ } ->
+      List.exists argument_has_native_bv_projection arguments
+  | Integer_symbolic_application application ->
+      List.exists argument_has_native_bv_projection
+        (Symbolic_application_private.arguments application)
+  | Integer_constant _ | Integer_symbol _ -> false
+
+and bit_vector_has_native_bv_projection _ = true
+
+and parametric_has_native_bv_projection term =
+  match term.parametric_desc with
+  | Parametric_symbol _ -> false
+  | Parametric_selector (_, source) -> aggregate_has_native_bv_projection source
+  | Parametric_conditional (condition, consequent, alternative) ->
+      boolean_has_native_bv_projection condition
+      || parametric_has_native_bv_projection consequent
+      || parametric_has_native_bv_projection alternative
+  | Parametric_symbolic_application application ->
+      List.exists argument_has_native_bv_projection
+        (Symbolic_application_private.arguments application)
+
+and argument_has_native_bv_projection = function
+  | Recursive_integer_argument term -> integer_has_native_bv_projection term
+  | Recursive_boolean_argument term -> boolean_has_native_bv_projection term
+  | Recursive_bv_argument term -> bit_vector_has_native_bv_projection term
+  | Recursive_aggregate_argument term -> aggregate_has_native_bv_projection term
+  | Recursive_parametric_argument term ->
+      parametric_has_native_bv_projection term
+
+and application_has_native_bv_projection = function
+  | Integer_application term -> integer_has_native_bv_projection term
+  | Boolean_application term -> boolean_has_native_bv_projection term
+  | Bv_application term -> bit_vector_has_native_bv_projection term
+  | Aggregate_application term -> aggregate_has_native_bv_projection term
+  | Parametric_application term -> parametric_has_native_bv_projection term
+
+and boolean_has_native_bv_projection = function
+  | Boolean_not value -> boolean_has_native_bv_projection value
+  | Boolean_and (left, right) | Boolean_or (left, right)
+  | Boolean_equal (left, right) | Boolean_not_equal (left, right) ->
+      boolean_has_native_bv_projection left
+      || boolean_has_native_bv_projection right
+  | Forall_term quantifier | Exists_term quantifier ->
+      boolean_has_native_bv_projection quantifier.boolean_quantifier_body
+      || Option.fold ~none:false ~some:application_has_native_bv_projection
+           quantifier.boolean_quantifier_trigger
+  | Integer_compare (_, left, right) ->
+      integer_has_native_bv_projection left
+      || integer_has_native_bv_projection right
+  | Bv_equal (left, right) | Bv_not_equal (left, right)
+    | Bv_compare (_, left, right) ->
+      bit_vector_has_native_bv_projection left
+      || bit_vector_has_native_bv_projection right
+  | Boolean_selector (_, aggregate)
+  | Boolean_invariant_application { value = aggregate; _ } ->
+      aggregate_has_native_bv_projection aggregate
+  | Aggregate_equal (left, right) ->
+      aggregate_has_native_bv_projection left
+      || aggregate_has_native_bv_projection right
+  | Parametric_equal (left, right) ->
+      parametric_has_native_bv_projection left
+      || parametric_has_native_bv_projection right
+  | Boolean_recursive_spec_application { arguments; _ }
+  | Boolean_specification_application { arguments; _ }
+  | Callback_requires { arguments; _ } ->
+      List.exists argument_has_native_bv_projection arguments
+  | Boolean_symbolic_application application ->
+      List.exists argument_has_native_bv_projection
+        (Symbolic_application_private.arguments application)
+  | Callback_ensures { application = { arguments; _ }; result } ->
+      List.exists argument_has_native_bv_projection arguments
+      || argument_has_native_bv_projection result
+  | Logical_adt_schema _ | Boolean_constant _ | Boolean_symbol _ -> false
+
+let function_execution_has_native_bv_projection
+    (execution : function_execution) =
+  let boolean_terms terms =
+    List.exists boolean_has_native_bv_projection terms
+  in
+  let obligation (obligation : obligation) =
+    boolean_terms obligation.assumptions
+    || boolean_terms obligation.required_preceding_safety
+    || boolean_terms obligation.path_condition
+    || boolean_has_native_bv_projection obligation.goal
+    || List.exists
+         (fun equation ->
+           application_has_native_bv_projection
+             equation.logical_constant_rhs)
+         obligation.logical_constant_equations
+    ||
+    match obligation.kind with
+    | Arithmetic_safety { mathematical_result; _ } ->
+        integer_has_native_bv_projection mathematical_result
+    | _ -> false
+  in
+  List.exists obligation execution.obligations
+  || List.exists
+       (fun reached ->
+         boolean_has_native_bv_projection reached.ensures
+         || List.exists argument_has_native_bv_projection
+              reached.application.arguments)
+       execution.reached_callback_calls
+  || List.exists
+       (fun read ->
+         aggregate_has_native_bv_projection read.shared_read_location
+         || integer_has_native_bv_projection read.shared_read_term)
+       execution.shared_scalar_heap_reads
+  || List.exists
+       (fun write ->
+         aggregate_has_native_bv_projection write.shared_write_location
+         || integer_has_native_bv_projection write.shared_write_value)
+       execution.shared_scalar_heap_writes
+  || List.exists
+       (fun exit ->
+         boolean_terms exit.assumptions || boolean_terms exit.path_condition)
+       execution.exits
+
+let rec aggregate_bv_source_evidence term =
+  match term.aggregate_desc with
+  | Aggregate_symbol _ -> []
+  | Aggregate_selector (_, source) -> aggregate_bv_source_evidence source
+  | Aggregate_constructor { arguments; _ }
+  | Aggregate_recursive_spec_application { arguments; _ }
+  | Aggregate_imported_model_application { arguments; _ } ->
+      List.concat_map argument_bv_source_evidence arguments
+  | Aggregate_record { fields; _ } ->
+      List.concat_map
+        (fun (_, argument) -> argument_bv_source_evidence argument)
+        fields
+  | Aggregate_conditional (condition, consequent, alternative) ->
+      boolean_bv_source_evidence condition
+      @ aggregate_bv_source_evidence consequent
+      @ aggregate_bv_source_evidence alternative
+  | Aggregate_symbolic_application application ->
+      List.concat_map argument_bv_source_evidence
+        (Symbolic_application_private.arguments application)
+
+and integer_bv_source_evidence = function
+  | Integer_bv_to_int_unsigned term | Integer_bv_to_int_signed term -> bit_vector_bv_source_evidence term
+  | Integer_add (left, right) | Integer_subtract (left, right)
+  | Integer_multiply (left, right) ->
+      integer_bv_source_evidence left @ integer_bv_source_evidence right
+  | Integer_negate value | Integer_multiply_constant (_, value)
+  | Integer_absolute_value value -> integer_bv_source_evidence value
+  | Integer_conditional (condition, consequent, alternative) ->
+      boolean_bv_source_evidence condition
+      @ integer_bv_source_evidence consequent
+      @ integer_bv_source_evidence alternative
+  | Integer_rank_project (_, aggregate) | Aggregate_tag (_, aggregate)
+  | Integer_selector (_, aggregate) -> aggregate_bv_source_evidence aggregate
+  | Integer_recursive_spec_application { arguments; _ } ->
+      List.concat_map argument_bv_source_evidence arguments
+  | Integer_symbolic_application application ->
+      List.concat_map argument_bv_source_evidence
+        (Symbolic_application_private.arguments application)
+  | Integer_constant _ | Integer_symbol _ -> []
+
+and bit_vector_bv_source_evidence term =
+  match term.bit_vector_desc with
+  | Bv_int_to_bv_mod { input; source_authority } ->
+      source_authority :: integer_bv_source_evidence input
+  | Bv_conditional (condition, consequent, alternative) ->
+      boolean_bv_source_evidence condition
+      @ bit_vector_bv_source_evidence consequent
+      @ bit_vector_bv_source_evidence alternative
+  | Bv_selector (_, source) -> aggregate_bv_source_evidence source
+  | Bv_not value -> bit_vector_bv_source_evidence value
+  | Bv_binary (_, left, right) ->
+      bit_vector_bv_source_evidence left @ bit_vector_bv_source_evidence right
+  | Bv_recursive_spec_application { arguments; _ } ->
+      List.concat_map argument_bv_source_evidence arguments
+  | Bv_symbolic_application application ->
+      List.concat_map argument_bv_source_evidence
+        (Symbolic_application_private.arguments application)
+  | Bv_symbol _ | Bv_literal _ -> []
+
+and parametric_bv_source_evidence term =
+  match term.parametric_desc with
+  | Parametric_symbol _ -> []
+  | Parametric_selector (_, source) -> aggregate_bv_source_evidence source
+  | Parametric_conditional (condition, consequent, alternative) ->
+      boolean_bv_source_evidence condition
+      @ parametric_bv_source_evidence consequent
+      @ parametric_bv_source_evidence alternative
+  | Parametric_symbolic_application application ->
+      List.concat_map argument_bv_source_evidence
+        (Symbolic_application_private.arguments application)
+
+and argument_bv_source_evidence = function
+  | Recursive_integer_argument term -> integer_bv_source_evidence term
+  | Recursive_boolean_argument term -> boolean_bv_source_evidence term
+  | Recursive_bv_argument term -> bit_vector_bv_source_evidence term
+  | Recursive_aggregate_argument term -> aggregate_bv_source_evidence term
+  | Recursive_parametric_argument term -> parametric_bv_source_evidence term
+
+and application_bv_source_evidence = function
+  | Integer_application term -> integer_bv_source_evidence term
+  | Boolean_application term -> boolean_bv_source_evidence term
+  | Bv_application term -> bit_vector_bv_source_evidence term
+  | Aggregate_application term -> aggregate_bv_source_evidence term
+  | Parametric_application term -> parametric_bv_source_evidence term
+
+and boolean_bv_source_evidence = function
+  | Boolean_not value -> boolean_bv_source_evidence value
+  | Boolean_and (left, right) | Boolean_or (left, right)
+  | Boolean_equal (left, right) | Boolean_not_equal (left, right) ->
+      boolean_bv_source_evidence left @ boolean_bv_source_evidence right
+  | Forall_term quantifier | Exists_term quantifier ->
+      boolean_bv_source_evidence quantifier.boolean_quantifier_body
+      @ Option.fold ~none:[] ~some:application_bv_source_evidence
+          quantifier.boolean_quantifier_trigger
+  | Integer_compare (_, left, right) ->
+      integer_bv_source_evidence left @ integer_bv_source_evidence right
+  | Bv_equal (left, right) | Bv_not_equal (left, right)
+    | Bv_compare (_, left, right) ->
+      bit_vector_bv_source_evidence left @ bit_vector_bv_source_evidence right
+  | Boolean_selector (_, aggregate)
+  | Boolean_invariant_application { value = aggregate; _ } ->
+      aggregate_bv_source_evidence aggregate
+  | Aggregate_equal (left, right) ->
+      aggregate_bv_source_evidence left @ aggregate_bv_source_evidence right
+  | Parametric_equal (left, right) ->
+      parametric_bv_source_evidence left @ parametric_bv_source_evidence right
+  | Boolean_recursive_spec_application { arguments; _ }
+  | Boolean_specification_application { arguments; _ }
+  | Callback_requires { arguments; _ } ->
+      List.concat_map argument_bv_source_evidence arguments
+  | Boolean_symbolic_application application ->
+      List.concat_map argument_bv_source_evidence
+        (Symbolic_application_private.arguments application)
+  | Callback_ensures { application = { arguments; _ }; result } ->
+      List.concat_map argument_bv_source_evidence arguments
+      @ argument_bv_source_evidence result
+  | Logical_adt_schema _ | Boolean_constant _ | Boolean_symbol _ -> []
+
+let obligation_native_bv_source_observations (obligation : obligation) =
+  let evidence =
+    List.concat_map boolean_bv_source_evidence obligation.assumptions
+    @ List.concat_map boolean_bv_source_evidence
+        obligation.required_preceding_safety
+    @ List.concat_map boolean_bv_source_evidence obligation.path_condition
+    @ boolean_bv_source_evidence obligation.goal
+    @ List.concat_map
+        (fun equation ->
+          application_bv_source_evidence equation.logical_constant_rhs)
+        obligation.logical_constant_equations
+    @
+    match obligation.kind with
+    | Arithmetic_safety { mathematical_result; _ } ->
+        integer_bv_source_evidence mathematical_result
+    | _ -> []
+  in
+  evidence
+  |> List.sort_uniq (fun left right ->
+         String.compare
+           (Numeric_bv_projection_evidence_private.full_key left)
+           (Numeric_bv_projection_evidence_private.full_key right))
+  |> List.map Numeric_bv_projection_evidence_private.source_observation
+
 let obligation_has_logical_aggregate_construction
     (obligation : obligation) =
-  List.exists boolean_has_logical_construction obligation.assumptions
+  let application = function
+    | Integer_application term -> integer_has_logical_construction term
+    | Boolean_application term -> boolean_has_logical_construction term
+    | Bv_application term -> bit_vector_has_logical_construction term
+    | Aggregate_application term -> aggregate_has_logical_construction term
+    | Parametric_application term -> parametric_has_logical_construction term
+  in
+  List.exists
+    (fun equation -> application equation.logical_constant_rhs)
+    obligation.logical_constant_equations
+  || List.exists boolean_has_logical_construction obligation.assumptions
   || List.exists boolean_has_logical_construction
        obligation.required_preceding_safety
   || List.exists boolean_has_logical_construction obligation.path_condition
@@ -1704,10 +2513,29 @@ and integer_rank_domains = function
   | Aggregate_tag (_, aggregate) | Integer_selector (_, aggregate) ->
       aggregate_rank_domains aggregate
   | Integer_constant _ | Integer_symbol _ -> []
+  | Integer_bv_to_int_unsigned term | Integer_bv_to_int_signed term -> bit_vector_rank_domains term
+
+and bit_vector_rank_domains term =
+  match term.bit_vector_desc with
+  | Bv_symbol _ | Bv_literal _ -> []
+  | Bv_int_to_bv_mod { input; _ } -> integer_rank_domains input
+  | Bv_conditional (condition, consequent, alternative) ->
+      boolean_rank_domains condition @ bit_vector_rank_domains consequent
+      @ bit_vector_rank_domains alternative
+  | Bv_selector (_, source) -> aggregate_rank_domains source
+  | Bv_not value -> bit_vector_rank_domains value
+  | Bv_binary (_, left, right) ->
+      bit_vector_rank_domains left @ bit_vector_rank_domains right
+  | Bv_recursive_spec_application { arguments; _ } ->
+      List.concat_map argument_rank_domains arguments
+  | Bv_symbolic_application application ->
+      List.concat_map argument_rank_domains
+        (Symbolic_application_private.arguments application)
 
 and argument_rank_domains = function
   | Recursive_integer_argument term -> integer_rank_domains term
   | Recursive_boolean_argument term -> boolean_rank_domains term
+  | Recursive_bv_argument term -> bit_vector_rank_domains term
   | Recursive_aggregate_argument term -> aggregate_rank_domains term
   | Recursive_parametric_argument term -> parametric_rank_domains term
 
@@ -1732,6 +2560,9 @@ and boolean_rank_domains = function
       boolean_rank_domains left @ boolean_rank_domains right
   | Integer_compare (_, left, right) ->
       integer_rank_domains left @ integer_rank_domains right
+  | Bv_equal (left, right) | Bv_not_equal (left, right)
+    | Bv_compare (_, left, right) ->
+      bit_vector_rank_domains left @ bit_vector_rank_domains right
   | Boolean_recursive_spec_application { arguments; _ }
   | Boolean_specification_application { arguments; _ }
   | Callback_requires { arguments; _ } ->
@@ -1752,7 +2583,16 @@ and boolean_rank_domains = function
   | Boolean_constant _ | Boolean_symbol _ -> []
 
 let obligation_rank_domains (obligation : obligation) =
-  (List.concat_map boolean_rank_domains obligation.assumptions
+  (List.concat_map
+     (fun equation ->
+       match equation.logical_constant_rhs with
+       | Integer_application term -> integer_rank_domains term
+       | Boolean_application term -> boolean_rank_domains term
+       | Bv_application term -> bit_vector_rank_domains term
+       | Aggregate_application term -> aggregate_rank_domains term
+       | Parametric_application term -> parametric_rank_domains term)
+     obligation.logical_constant_equations
+  @ List.concat_map boolean_rank_domains obligation.assumptions
   @ List.concat_map boolean_rank_domains obligation.required_preceding_safety
   @ List.concat_map boolean_rank_domains obligation.path_condition
   @ boolean_rank_domains obligation.goal)
@@ -1763,6 +2603,7 @@ let role_to_string = function
   | Input -> "input"
   | Local -> "local"
   | Result -> "result"
+  | Logical_constant _ -> "logical-constant"
 
 let operation_to_string = function
   | Add -> "add"
@@ -1839,12 +2680,54 @@ let print_symbols buffer indent symbols =
             (match symbol.sort with
             | Integer -> "int"
             | Boolean -> "bool"
+            | Bit_vector width -> "bv" ^ Bv_width.to_string width
             | Parametric binder ->
                 "parameter " ^ Parametric_type.binder_to_string binder
             | Aggregate type_ -> "aggregate " ^ aggregate_type_to_string type_)
             (role_to_string symbol.role)
             (span_to_string symbol.span))
         symbols
+
+let print_logical_constant_equations buffer indent equations =
+  line buffer indent "logical-constant-equations";
+  match equations with
+  | [] -> line buffer (indent + 2) "(none)"
+  | equations ->
+      List.iter
+        (fun equation ->
+          let instance = equation.logical_constant_instance in
+          let constant =
+            Logical_constant_instance_private.constant_id instance
+          in
+          line buffer (indent + 2)
+            "constant=%s#%d instance=%s type-arguments=[%s] rhs=%s @ %s"
+            constant.constant_name constant.constant_index
+            (Logical_constant_instance_private.identity_digest instance)
+            (String.concat ","
+               (List.map Parametric_type.to_string
+                  (Logical_constant_instance_private.type_arguments instance)))
+            (application_term_to_string equation.logical_constant_rhs)
+            (span_to_string equation.logical_constant_span))
+        equations
+
+let print_logical_constant_instances buffer indent instances =
+  line buffer indent "logical-constant-instances";
+  match instances with
+  | [] -> line buffer (indent + 2) "(none)"
+  | instances ->
+      List.iter
+        (fun instance ->
+          let constant =
+            Logical_constant_instance_private.constant_id instance
+          in
+          line buffer (indent + 2)
+            "constant=%s#%d instance=%s type-arguments=[%s]"
+            constant.constant_name constant.constant_index
+            (Logical_constant_instance_private.identity_digest instance)
+            (String.concat ","
+               (List.map Parametric_type.to_string
+                  (Logical_constant_instance_private.type_arguments instance))))
+        instances
 
 let print_result buffer indent =
   let rec loop indent = function
@@ -1853,6 +2736,8 @@ let print_result buffer indent =
         line buffer indent "int %s" (symbol_to_string symbol)
     | Boolean_result symbol ->
         line buffer indent "bool %s" (symbol_to_string symbol)
+    | Bv_result symbol ->
+        line buffer indent "bv %s" (symbol_to_string symbol)
     | Tuple_result components ->
         line buffer indent "tuple";
         List.iter (loop (indent + 2)) components
@@ -1862,7 +2747,7 @@ let print_result buffer indent =
         let sort =
           match symbol.sort with
           | Parametric binder -> Parametric_type.binder_to_string binder
-          | Integer | Boolean | Aggregate _ -> assert false
+          | Integer | Boolean | Bit_vector _ | Aggregate _ -> assert false
         in
         line buffer indent "parameter %s sort=%s" (symbol_to_string symbol) sort
   in
@@ -2092,7 +2977,7 @@ let to_string program =
         execution.shared_scalar_heap_reads;
       List.iter
         (fun obligation ->
-          match obligation.kind with
+          (match obligation.kind with
           | Arithmetic_safety
               { operation; mathematical_result; violated_bound } ->
               line buffer 2 "vc %d arithmetic-%s operation=%s @ %s"
@@ -2272,7 +3157,11 @@ let to_string program =
               print_terms buffer 4 "path" obligation.path_condition;
               line buffer 4 "goal %s"
                 (boolean_term_to_string obligation.goal);
-              print_symbols buffer 4 obligation.projection_symbols)
+              print_symbols buffer 4 obligation.projection_symbols);
+          print_logical_constant_instances buffer 4
+            obligation.logical_constant_instances;
+          print_logical_constant_equations buffer 4
+            obligation.logical_constant_equations)
         execution.obligations;
       List.iteri
         (fun index exit ->
@@ -2285,3 +3174,14 @@ let to_string program =
         execution.exits)
     program.functions;
   Buffer.contents buffer
+
+module For_testing = struct
+  let replace_boolean_quantifier_schema quantifier schema =
+    { quantifier with boolean_quantifier_schema = schema }
+
+  let replace_boolean_quantifier_binders quantifier binders =
+    { quantifier with boolean_quantifier_binders = binders }
+
+  let replace_boolean_quantifier_trigger quantifier trigger =
+    { quantifier with boolean_quantifier_trigger = trigger }
+end

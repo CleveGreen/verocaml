@@ -273,6 +273,7 @@ let classify_closure_matrix () =
           policy = Default_linear_z3;
           parametric_adts = [];
           types = [ malformed_definition ];
+          logical_constants = [];
           functions = [ malformed_callable ];
         }
   in

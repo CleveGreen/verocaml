@@ -19,7 +19,7 @@ let decrease n expression =
   Sst.{clause_index=0; predicate={stage=Logical; expression}; span=span n}
 let structural () =
   let a=id 0 "a" and b=id 1 "b" in
-  let cyclic = Sst.{policy=Default_linear_z3; parametric_adts=[]; types=[]; functions=[proof 0 "a" (proof_call 1 b); proof 1 "b" (proof_call 2 a)]} in
+  let cyclic = Sst.{policy=Default_linear_z3; parametric_adts=[]; types=[]; logical_constants=[]; functions=[proof 0 "a" (proof_call 1 b); proof 1 "b" (proof_call 2 a)]} in
   (match Sst_validation.validate cyclic with Error _ -> print_endline "rejected: cyclic proof graph" | Ok _ -> fail "cycle accepted");
   let self = id 3 "self" in
   let wrong_marker =
@@ -30,7 +30,7 @@ let structural () =
       ~contracts:{Sst.empty_contracts with decreases=[decrease 4 (expr 4 Sst.Int (Sst.Int_constant Z.zero))]}
       3 "self" (proof_call ~recursive:false 5 self)
   in
-  (match Sst_validation.validate Sst.{policy=Default_linear_z3;parametric_adts=[];types=[];functions=[wrong_marker]} with
+  (match Sst_validation.validate Sst.{policy=Default_linear_z3;parametric_adts=[];types=[];logical_constants=[];functions=[wrong_marker]} with
   | Error {kind=Invalid_recursive_marker _;_} ->
       print_endline "rejected: counterfeit recursive proof marker"
   | Error error -> fail "wrong marker produced %s" (Sst_validation.error_to_string error)
@@ -56,7 +56,7 @@ let structural () =
       returns_unique_parameter=None; span=span 5}
   in
   let cross_mode =
-    Sst.{policy=Default_linear_z3;parametric_adts=[];types=[];functions=[proof_side;spec_side]}
+    Sst.{policy=Default_linear_z3;parametric_adts=[];types=[];logical_constants=[];functions=[proof_side;spec_side]}
   in
   let analysis = Termination.analyze_raw cross_mode in
   (match Termination.precheck analysis with
@@ -67,7 +67,7 @@ let structural () =
   | Ok () -> fail "cross-mode SCC accepted");
   let region=expr 3 Sst.Unit (Sst.Proof_region (expr 3 Sst.Unit Sst.Unit_constant)) in
   let exec=Sst_normalize.checked_exec_raw ~function_id:(id 2 "bad_region") ~recursive:false ~parameters:[] ~contracts:Sst.empty_contracts ~body:region ~result_type:Sst.Unit ~returns_unique_parameter:None ~span:(span 3) in
-  (match Sst_validation.validate Sst.{policy=Default_linear_z3;parametric_adts=[];types=[];functions=[exec]} with Error _ -> print_endline "rejected: proof region outside statement position" | Ok _ -> fail "region accepted");
+  (match Sst_validation.validate Sst.{policy=Default_linear_z3;parametric_adts=[];types=[];logical_constants=[];functions=[exec]} with Error _ -> print_endline "rejected: proof region outside statement position" | Ok _ -> fail "region accepted");
   print_endline "raw proof graph, marker, stage, and statement-position checks passed"
 let load filename = match Typedtree_lowering.lower_file filename with Ok s -> s | Error d -> fail "%s" d.Diagnostic.message
 let lower filename = let s=load filename in match Symbolic_executor.lower_program s with Ok v -> s,v | Error e -> fail "%s" (Symbolic_executor.error_to_string e)

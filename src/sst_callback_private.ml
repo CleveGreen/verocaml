@@ -151,6 +151,8 @@ let expression_children expression =
   | Sst.Let (bindings, body) -> List.map snd bindings @ [ body ]
   | Sst.Sequence (left, right)
   | Sst.Compare (_, left, right)
+  | Sst.Bv_binary (_, left, right)
+  | Sst.Bv_compare (_, left, right)
   | Sst.Boolean_binary (_, left, right) ->
       [ left; right ]
   | Sst.If (condition, left, right) ->
@@ -161,7 +163,9 @@ let expression_children expression =
            (fun case ->
              Option.to_list case.Sst.case_guard @ [ case.case_body ])
            cases
-  | Sst.Lift_runtime_int operand -> [ operand ]
+  | Sst.Lift_runtime_int operand | Sst.Bv_to_int_unsigned operand
+  | Sst.Bv_to_int_signed operand | Sst.Bv_not operand -> [ operand ]
+  | Sst.Bv_int_to_bv_mod { input; _ } -> [ input ]
   | Sst.Checked_arithmetic (_, operands) -> operands
   | Sst.Boolean_not operand | Sst.Old operand -> [ operand ]
   | Sst.Direct_call { arguments; _ } ->
@@ -183,8 +187,10 @@ let expression_children expression =
       [ quantifier.quantifier_body ]
   | Sst.Optional_present payload | Sst.Optional_forward payload -> [ payload ]
   | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
+  | Sst.Bv_literal _
   | Sst.Variable _ | Sst.Mutable_read _ | Sst.Owned_tree_rebase _
-  | Sst.Reveal _ | Sst.Reveal_with_fuel _ | Sst.Optional_absent ->
+  | Sst.Reveal _ | Sst.Reveal_with_fuel _ | Sst.Optional_absent
+  | Sst.Logical_constant_reference _ ->
       []
 
 let definition_roots definition =
@@ -237,10 +243,13 @@ let callback_bindings roots =
           application.callback :: callbacks
       | Sst.Callback_ensures { application; _ } ->
           application.callback :: callbacks
-      | Sst.Symbolic_application _ ->
+      | Sst.Symbolic_application _ | Sst.Logical_constant_reference _ ->
           callbacks
       | Sst.Forall _ | Sst.Exists _
       | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
+      | Sst.Bv_literal _ | Sst.Bv_int_to_bv_mod _
+      | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+      | Sst.Bv_binary _ | Sst.Bv_compare _
       | Sst.Variable _ | Sst.Tuple_value _ | Sst.Record_value _
       | Sst.Constructor_value _ | Sst.Field_read _ | Sst.Field_write _
       | Sst.Shared_scalar_field_write _ | Sst.Mutable_read _
@@ -320,10 +329,13 @@ let authenticate_program ~compilation_identity ~session program =
       | Sst.Callback_ensures { application; _ } ->
           authenticate_binding ~compilation_identity ~session ~definition
             ~span:expression.span application.callback
-      | Sst.Symbolic_application _ ->
+      | Sst.Symbolic_application _ | Sst.Logical_constant_reference _ ->
           Ok ()
       | Sst.Forall _ | Sst.Exists _
       | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
+      | Sst.Bv_literal _ | Sst.Bv_int_to_bv_mod _
+      | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+      | Sst.Bv_binary _ | Sst.Bv_compare _
       | Sst.Variable _ | Sst.Tuple_value _ | Sst.Record_value _
       | Sst.Constructor_value _ | Sst.Field_read _ | Sst.Field_write _
       | Sst.Shared_scalar_field_write _ | Sst.Mutable_read _
@@ -373,6 +385,9 @@ let find_binding capture roots =
             && binding.typ = capture.typ ->
             Some binding
         | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
+        | Sst.Bv_literal _ | Sst.Bv_int_to_bv_mod _
+        | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+        | Sst.Bv_binary _ | Sst.Bv_compare _
         | Sst.Variable _ | Sst.Tuple_value _ | Sst.Record_value _
         | Sst.Constructor_value _ | Sst.Field_read _ | Sst.Field_write _
         | Sst.Shared_scalar_field_write _ | Sst.Mutable_read _
@@ -385,6 +400,7 @@ let find_binding capture roots =
         | Sst.Callback_call _ | Sst.Callback_requires _
         | Sst.Callback_ensures _ | Sst.Use_type_invariant _
         | Sst.Forall _ | Sst.Exists _ | Sst.Symbolic_application _
+        | Sst.Logical_constant_reference _
         | Sst.Local_assert _ | Sst.Proof_region _ | Sst.Reveal _
         | Sst.Reveal_with_fuel _ | Sst.Old _ | Sst.Optional_absent
         | Sst.Optional_present _ | Sst.Optional_forward _ ->
@@ -610,6 +626,7 @@ type authenticated_spec_carrier = {
 type top_function_kind =
   | Top_exec
   | Top_spec of authenticated_spec_carrier
+  | Top_logical_constant of Typedtree_logical_constant_private.declaration
   | Top_type_invariant of authenticated_spec_carrier
   | Top_recursive_spec of authenticated_spec_carrier
   | Top_proof of authenticated_spec_carrier
@@ -644,6 +661,8 @@ let source_definition_body function_ =
   match function_.function_kind with
   | Top_spec carrier | Top_recursive_spec carrier | Top_proof carrier ->
       Some carrier.definition_body
+  | Top_logical_constant declaration ->
+      Some (Typedtree_logical_constant_private.body declaration)
   | Top_external_body (Sst.Proof, carrier) -> Some carrier.definition_body
   | Top_exec | Top_type_invariant _ | Top_external_specification _
   | Top_external_body (Sst.Exec, _)

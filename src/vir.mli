@@ -9,10 +9,17 @@ type aggregate_type = {
 type sort =
   | Integer
   | Boolean
+  | Bit_vector of Bv_width.t
   | Aggregate of aggregate_type
   | Parametric of Parametric_type.binder
 
-type symbol_role = Input | Local | Result
+val sort_equal : sort -> sort -> bool
+
+type symbol_role =
+  | Input
+  | Local
+  | Result
+  | Logical_constant of Logical_constant_instance_private.t
 
 type symbol = {
   symbol_id : int;
@@ -36,6 +43,33 @@ and parametric_term_desc =
   | Parametric_symbolic_application of
       recursive_spec_argument Symbolic_application_private.t
 
+and bit_vector_term = {
+  bit_vector_width : Bv_width.t;
+  bit_vector_desc : bit_vector_term_desc;
+}
+
+and bit_vector_term_desc =
+  | Bv_symbol of symbol
+  | Bv_literal of Bv_value.t
+  | Bv_int_to_bv_mod of {
+      input : integer_term;
+      source_authority : Numeric_bv_projection_evidence_private.t;
+    }
+  | Bv_conditional of
+      boolean_term * bit_vector_term * bit_vector_term
+  | Bv_not of bit_vector_term
+  | Bv_binary of
+      Bv_operation_private.binary * bit_vector_term * bit_vector_term
+  | Bv_selector of selector * aggregate_term
+  | Bv_recursive_spec_application of {
+      callee : Sst.function_id;
+      type_arguments : Parametric_type.t list;
+      arguments : recursive_spec_argument list;
+      span : span;
+    }
+  | Bv_symbolic_application of
+      recursive_spec_argument Symbolic_application_private.t
+
 and integer_term =
   | Integer_constant of Z.t
   | Integer_symbol of symbol
@@ -57,6 +91,8 @@ and integer_term =
     }
   | Integer_symbolic_application of
       recursive_spec_argument Symbolic_application_private.t
+  | Integer_bv_to_int_unsigned of bit_vector_term
+  | Integer_bv_to_int_signed of bit_vector_term
 
 and aggregate_term = {
   aggregate_type : aggregate_type;
@@ -117,6 +153,7 @@ and selector = {
 and recursive_spec_argument =
   | Recursive_integer_argument of integer_term
   | Recursive_boolean_argument of boolean_term
+  | Recursive_bv_argument of bit_vector_term
   | Recursive_aggregate_argument of aggregate_term
   | Recursive_parametric_argument of parametric_term
 
@@ -128,6 +165,9 @@ and callback_application = {
 
 and boolean_quantifier = private {
   boolean_quantifier_schema : Logic_quantifier_private.vector;
+  boolean_quantifier_expected_schema : Logic_quantifier_private.vector;
+  boolean_quantifier_schema_types : Parametric_type.t list;
+  boolean_quantifier_expected_sorts : sort list;
   boolean_quantifier_binders : symbol list;
   boolean_quantifier_body : boolean_term;
   boolean_quantifier_trigger : application_term option;
@@ -136,6 +176,7 @@ and boolean_quantifier = private {
 and application_term =
   | Integer_application of integer_term
   | Boolean_application of boolean_term
+  | Bv_application of bit_vector_term
   | Aggregate_application of aggregate_term
   | Parametric_application of parametric_term
 
@@ -151,6 +192,10 @@ and boolean_term =
   | Integer_compare of comparison * integer_term * integer_term
   | Boolean_equal of boolean_term * boolean_term
   | Boolean_not_equal of boolean_term * boolean_term
+  | Bv_equal of bit_vector_term * bit_vector_term
+  | Bv_not_equal of bit_vector_term * bit_vector_term
+  | Bv_compare of
+      Bv_operation_private.comparison * bit_vector_term * bit_vector_term
   | Boolean_selector of selector * aggregate_term
   | Aggregate_equal of aggregate_term * aggregate_term
   | Parametric_equal of parametric_term * parametric_term
@@ -190,6 +235,45 @@ and comparison =
 
 type spec_function_term = parametric_term
 
+val bv_symbol : symbol -> (bit_vector_term, string) result
+val bv_literal : Bv_value.t -> bit_vector_term
+val bv_int_to_bv_mod :
+  width:Bv_width.t ->
+  input:integer_term ->
+  source_authority:Numeric_bv_projection_evidence_private.t ->
+  bit_vector_term
+val bv_conditional :
+  boolean_term ->
+  bit_vector_term ->
+  bit_vector_term ->
+  (bit_vector_term, string) result
+val bv_not : bit_vector_term -> bit_vector_term
+val bv_binary :
+  Bv_operation_private.binary ->
+  bit_vector_term ->
+  bit_vector_term ->
+  (bit_vector_term, string) result
+val bv_selector :
+  selector -> aggregate_term -> (bit_vector_term, string) result
+val bv_recursive_spec_application :
+  width:Bv_width.t ->
+  callee:Sst.function_id ->
+  type_arguments:Parametric_type.t list ->
+  arguments:recursive_spec_argument list ->
+  span:span ->
+  bit_vector_term
+val bv_equal :
+  bit_vector_term -> bit_vector_term -> (boolean_term, string) result
+val bv_not_equal :
+  bit_vector_term -> bit_vector_term -> (boolean_term, string) result
+val bv_compare :
+  Bv_operation_private.comparison ->
+  bit_vector_term ->
+  bit_vector_term ->
+  (boolean_term, string) result
+val bv_to_int_unsigned : bit_vector_term -> integer_term
+val bv_to_int_signed : bit_vector_term -> integer_term
+
 val symbolic_application_arguments :
   application_term -> recursive_spec_argument list option
 
@@ -205,6 +289,11 @@ val make_boolean_quantifier :
   body:boolean_term ->
   trigger:application_term option ->
   (boolean_quantifier, string) result
+
+val validate_boolean_quantifier :
+  expected_kind:Logic_quantifier_private.kind ->
+  boolean_quantifier ->
+  (unit, string) result
 
 val boolean_term_symbol_ids : boolean_term -> int list
 val application_term_symbol_ids : application_term -> int list
@@ -306,12 +395,21 @@ type obligation = {
   path_condition : boolean_term list;
   goal : boolean_term;
   projection_symbols : symbol list;
+  logical_constant_instances : Logical_constant_instance_private.t list;
+  logical_constant_equations : logical_constant_equation list;
+}
+
+and logical_constant_equation = {
+  logical_constant_instance : Logical_constant_instance_private.t;
+  logical_constant_rhs : application_term;
+  logical_constant_span : span;
 }
 
 type result_value =
   | Unit_result
   | Integer_result of symbol
   | Boolean_result of symbol
+  | Bv_result of symbol
   | Tuple_result of result_value list
   | Aggregate_result of symbol
   | Parametric_result of symbol
@@ -457,8 +555,13 @@ val obligation_aggregate_recursive_specifications :
 val obligation_aggregate_types : obligation -> aggregate_type list
 val obligation_has_structural_rank : obligation -> bool
 val obligation_has_logical_aggregate_construction : obligation -> bool
+val function_execution_has_native_bv_projection : function_execution -> bool
+
+val obligation_native_bv_source_observations :
+  obligation -> Numeric_bv_projection_evidence_private.source_observation list
 val obligation_rank_domains : obligation -> rank_domain list
 val integer_term_to_string : integer_term -> string
+val bit_vector_term_to_string : bit_vector_term -> string
 val boolean_term_to_string : boolean_term -> string
 val aggregate_term_to_string : aggregate_term -> string
 val specification_application_name :
@@ -473,3 +576,16 @@ val imported_model_application_snapshot :
   span:span ->
   string
 val to_string : program -> string
+
+module For_testing : sig
+  val replace_boolean_quantifier_schema :
+    boolean_quantifier ->
+    Logic_quantifier_private.vector ->
+    boolean_quantifier
+
+  val replace_boolean_quantifier_binders :
+    boolean_quantifier -> symbol list -> boolean_quantifier
+
+  val replace_boolean_quantifier_trigger :
+    boolean_quantifier -> application_term option -> boolean_quantifier
+end

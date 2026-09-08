@@ -17,7 +17,13 @@ type state = {
   parametric_sorts : Parametric_logic_private.logic_sort_registry;
   use_named_aggregate_sorts : bool;
   logical_adts : Logical_adt_encoding_private.t option ref;
+  logical_adt_schemas : Logical_adt_schema_private.t list;
   bound_symbols : (int * Logic_ir.binder) list;
+  logical_constant_instances : Logical_constant_instance_private.t list;
+  logical_constant_equation_instances :
+    Logical_constant_instance_private.t list;
+  used_logical_constant_instances :
+    Logical_constant_instance_private.t list ref;
 }
 exception Translation_error of string
 let query translation = translation.query
@@ -57,11 +63,23 @@ let translate_user_quantifier services ~universal quantifier =
     else Logic_quantifier_private.Exists
   in
   let span = Logic_quantifier_private.vector_span schema in
-  if Logic_quantifier_private.vector_kind schema <> expected_kind then
-    Error
-      (services.malformed span
-         "VIR user quantifier kind disagrees with authenticated metadata")
-  else
+  match Vir.validate_boolean_quantifier ~expected_kind quantifier with
+  | Error message ->
+      [%log.debug "rejected stale VIR quantifier schema"
+        ~stage:(Delator.Field.string "vir-quantifier-translation-preflight")
+        ~binder_count:
+          (Delator.Field.int
+             (List.length quantifier.boolean_quantifier_binders))
+        ~reason:(Delator.Field.string message)
+        ~decision:(Delator.Field.string "rejected")];
+      Error (services.malformed span message)
+  | Ok () ->
+    [%log.trace "validated VIR quantifier schema before translation"
+      ~stage:(Delator.Field.string "vir-quantifier-translation-preflight")
+      ~binder_count:
+        (Delator.Field.int
+           (List.length quantifier.boolean_quantifier_binders))
+      ~decision:(Delator.Field.string "accepted")];
     let* binders =
       List.fold_left
         (fun result (symbol : Vir.symbol) ->
@@ -127,12 +145,28 @@ let translate_relation services ~name ~range ~arguments ~span =
       (function
         | Vir.Recursive_integer_argument _ -> Logic_ir.Int
         | Vir.Recursive_boolean_argument _ -> Logic_ir.Bool
+        | Vir.Recursive_bv_argument term ->
+            Logic_ir.Bv term.Vir.bit_vector_width
         | Vir.Recursive_aggregate_argument term ->
             services.aggregate_sort term.Vir.aggregate_type
         | Vir.Recursive_parametric_argument term ->
             services.parametric_sort term.Vir.parametric_sort)
       arguments
   in
+  [%log.trace "translating typed callback relation vector"
+    ~stage:(Delator.Field.string "callback-contract-vector-translation")
+    ~relation:(Delator.Field.string name)
+    ~argument_count:(Delator.Field.int (List.length arguments))
+    ~bv_argument_count:
+      (Delator.Field.int
+         (List.fold_left
+            (fun count -> function
+              | Vir.Recursive_bv_argument _ -> count + 1
+              | Recursive_integer_argument _ | Recursive_boolean_argument _
+              | Recursive_aggregate_argument _ | Recursive_parametric_argument _ ->
+                  count)
+            0 arguments))
+    ~decision:(Delator.Field.string "translating")];
   let* function_ = services.declare name domain range span in
   let* arguments = services.translate_arguments arguments in
   services.apply span function_ arguments
@@ -166,7 +200,7 @@ let translate_scalar_selector services ~expected ~normalize ~exact selector
   in
   if selector.Vir.selector_domain <> source.Vir.aggregate_type then
     Error (services.malformed "scalar selector has a mismatched owner")
-  else if selector.selector_range <> expected then
+  else if not (Vir.sort_equal selector.selector_range expected) then
     Error (services.malformed "scalar selector has a mismatched result type")
   else
     let* observation =
@@ -202,6 +236,15 @@ let translate_boolean_selector services =
     ~normalize:Logical_aggregate_term_normalization_private.boolean_selector
     ~exact:services.translate_boolean
 
+let translate_bit_vector_selector services ~width ~translate_bit_vector =
+  [%log.debug "translating normalized positional BV selector"
+    ~stage:(Delator.Field.string "vir-bv-selector-translation")
+    ~width:(Delator.Field.int (Bv_width.to_int width))];
+  translate_scalar_selector services ~expected:(Vir.Bit_vector width)
+    ~normalize:
+      (Logical_aggregate_term_normalization_private.bit_vector_selector width)
+    ~exact:translate_bit_vector
+
 let translate_parametric services (term : Vir.parametric_term) =
   let ( let* ) result continuation =
     match result with Ok value -> continuation value | Error _ as error -> error
@@ -234,6 +277,8 @@ type 'error integer_core_services = {
   symbol : Vir.symbol -> (Logic_ir.term, 'error) result;
   translate_integer : Vir.integer_term -> (Logic_ir.term, 'error) result;
   translate_boolean : Vir.boolean_term -> (Logic_ir.term, 'error) result;
+  translate_bit_vector :
+    Vir.bit_vector_term -> (Logic_ir.term, 'error) result;
   translate_arguments :
     Vir.recursive_spec_argument list -> (Logic_ir.term list, 'error) result;
   recursive_function :
@@ -316,14 +361,181 @@ let translate_integer_core services term =
       Ok (Some term)
   | Vir.Integer_symbolic_application _ ->
       Ok None
+  | Vir.Integer_bv_to_int_unsigned value ->
+      let* value = services.translate_bit_vector value in
+      let* projected =
+        Logic_ir.bv_to_int_unsigned ~span:services.span value
+        |> services.term_result
+      in
+      Ok (Some projected)
+  | Vir.Integer_bv_to_int_signed value ->
+      let* value = services.translate_bit_vector value in
+      let* projected =
+        Logic_ir.bv_to_int_signed ~span:services.span value
+        |> services.term_result
+      in
+      Ok (Some projected)
   | Vir.Aggregate_tag _ | Vir.Integer_selector _ | Vir.Integer_rank_project _ ->
       Ok None
+
+type 'error bit_vector_core_services = {
+  span : Diagnostic.span;
+  symbol :
+    Bv_width.t -> Vir.symbol -> (Logic_ir.term, 'error) result;
+  translate_integer : Vir.integer_term -> (Logic_ir.term, 'error) result;
+  translate_boolean : Vir.boolean_term -> (Logic_ir.term, 'error) result;
+  translate_bit_vector :
+    Vir.bit_vector_term -> (Logic_ir.term, 'error) result;
+  translate_selector :
+    Bv_width.t ->
+    Vir.selector ->
+    Vir.aggregate_term ->
+    (Logic_ir.term, 'error) result;
+  translate_arguments :
+    Vir.recursive_spec_argument list -> (Logic_ir.term list, 'error) result;
+  recursive_function :
+    Sst.function_id ->
+    Parametric_type.t list ->
+    Bv_width.t ->
+    (Logic_ir.function_symbol, 'error) result;
+  symbolic_application :
+    Bv_width.t ->
+    Vir.recursive_spec_argument Symbolic_application_private.t ->
+    (Logic_ir.term, 'error) result;
+  term_result :
+    (Logic_ir.term, Logic_ir.error) result -> (Logic_ir.term, 'error) result;
+}
+
+let translate_bit_vector_core services (term : Vir.bit_vector_term) =
+  let ( let* ) result continuation =
+    match result with Ok value -> continuation value | Error _ as error -> error
+  in
+  let width = term.bit_vector_width in
+  let reject_width ~node ~operand_width message =
+    let message =
+      Printf.sprintf "%s (node=%s wrapper-width=%d operand-width=%d)" message
+        node (Bv_width.to_int width) (Bv_width.to_int operand_width)
+    in
+    [%log.debug "rejected inconsistent typed VIR bit-vector node"
+      ~stage:(Delator.Field.string "vir-bv-translation")
+      ~node:(Delator.Field.string node)
+      ~wrapper_width:(Delator.Field.int (Bv_width.to_int width))
+      ~operand_width:(Delator.Field.int (Bv_width.to_int operand_width))
+      ~exact_width_identity:(Delator.Field.bool false)
+      ~decision:(Delator.Field.string "rejected")];
+    services.term_result
+      (Error { Logic_ir.span = services.span; message })
+  in
+  let[@log_value.trace] node_kind =
+    match term.bit_vector_desc with
+    | Bv_symbol _ -> "symbol"
+    | Bv_literal _ -> "literal"
+    | Bv_int_to_bv_mod _ -> "int-to-bv-mod"
+    | Bv_conditional _ -> "conditional"
+    | Bv_not _ -> "not"
+    | Bv_binary (operation, _, _) ->
+        Bv_operation_private.binary_name operation
+    | Bv_selector _ -> "selector"
+    | Bv_recursive_spec_application _ -> "recursive-application"
+    | Bv_symbolic_application _ -> "symbolic-application"
+  in
+  [%log.trace "translating typed VIR bit-vector term"
+    ~stage:(Delator.Field.string "vir-bv-translation")
+    ~width:(Delator.Field.int (Bv_width.to_int width))
+    ~node:(Delator.Field.string (node_kind [@log_value.trace]))];
+  match term.bit_vector_desc with
+  | Vir.Bv_symbol symbol -> services.symbol width symbol
+  | Bv_literal value ->
+      if Bv_width.equal width value.Bv_value.width then
+        Logic_ir.bv_literal ~span:services.span value |> services.term_result
+      else
+        reject_width ~node:"literal" ~operand_width:value.width
+          "typed VIR bit-vector literal crosses exact width identity"
+  | Bv_int_to_bv_mod { input; source_authority } ->
+      let* () =
+        match
+          Numeric_bv_projection_evidence_private.validate ~width
+            source_authority
+        with
+        | Ok () -> Ok ()
+        | Error message ->
+            [%log.debug "refused typed VIR Int-to-BV conversion"
+              ~stage:(Delator.Field.string "vir-bv-translation")
+              ~width:(Delator.Field.int (Bv_width.to_int width))
+              ~reason:(Delator.Field.string message)];
+            services.term_result
+              (Error { Logic_ir.span = services.span; message })
+            |> Result.map (fun _ -> ())
+      in
+      let* input = services.translate_integer input in
+      Logic_ir.int_to_bv_mod ~span:services.span ~width input
+      |> services.term_result
+  | Bv_conditional (condition, consequent, alternative) ->
+      if
+        not
+          (Bv_width.equal width consequent.bit_vector_width
+          && Bv_width.equal width alternative.bit_vector_width)
+      then
+        services.term_result
+          (Error
+             {
+               Logic_ir.span = services.span;
+               message = "typed VIR bit-vector conditional crosses widths";
+             })
+      else
+        let* condition = services.translate_boolean condition in
+        let* consequent = services.translate_bit_vector consequent in
+        let* alternative = services.translate_bit_vector alternative in
+        Logic_ir.ite ~span:services.span condition ~then_:consequent
+          ~else_:alternative
+        |> services.term_result
+  | Bv_not value ->
+      if not (Bv_width.equal width value.bit_vector_width) then
+        reject_width ~node:"not" ~operand_width:value.bit_vector_width
+          "typed VIR bit-vector complement crosses exact width identity"
+      else
+        let* value = services.translate_bit_vector value in
+        Logic_ir.bv_not ~span:services.span value |> services.term_result
+  | Bv_binary (operation, left, right) ->
+      if not (Bv_width.equal width left.bit_vector_width) then
+        reject_width
+          ~node:(Bv_operation_private.binary_name operation ^ ":left")
+          ~operand_width:left.bit_vector_width
+          "typed VIR bit-vector binary left operand crosses exact width identity"
+      else if not (Bv_width.equal width right.bit_vector_width) then
+        reject_width
+          ~node:(Bv_operation_private.binary_name operation ^ ":right")
+          ~operand_width:right.bit_vector_width
+          "typed VIR bit-vector binary right operand crosses exact width identity"
+      else
+        let* left = services.translate_bit_vector left in
+        let* right = services.translate_bit_vector right in
+        let constructor =
+          match operation with
+          | Bv_operation_private.Bv_add_mod -> Logic_ir.bv_add_mod
+          | Bv_sub_mod -> Logic_ir.bv_sub_mod
+          | Bv_and -> Logic_ir.bv_and
+          | Bv_or -> Logic_ir.bv_or
+          | Bv_xor -> Logic_ir.bv_xor
+        in
+        constructor ~span:services.span left right |> services.term_result
+  | Bv_selector (selector, source) ->
+      services.translate_selector width selector source
+  | Bv_recursive_spec_application
+      { callee; type_arguments; arguments; span } ->
+      let* function_ = services.recursive_function callee type_arguments width in
+      let* arguments = services.translate_arguments arguments in
+      Logic_ir.apply ~span function_ arguments |> services.term_result
+  | Bv_symbolic_application application ->
+      services.symbolic_application width application
 
 type 'error boolean_core_services = {
   span : Diagnostic.span;
   symbol : Vir.symbol -> (Logic_ir.term, 'error) result;
   translate_boolean : Vir.boolean_term -> (Logic_ir.term, 'error) result;
   translate_integer : Vir.integer_term -> (Logic_ir.term, 'error) result;
+  translate_bit_vector :
+    Vir.bit_vector_term -> (Logic_ir.term, 'error) result;
   term_result :
     (Logic_ir.term, Logic_ir.error) result -> (Logic_ir.term, 'error) result;
 }
@@ -381,6 +593,37 @@ let translate_boolean_core services term =
         | Vir.Boolean_equal _ -> Logic_ir.equal
         | Vir.Boolean_not_equal _ -> Logic_ir.distinct
         | _ -> assert false
+      in
+      let* term =
+        constructor ~span:services.span left right |> services.term_result
+      in
+      Ok (Some term)
+  | Vir.Bv_equal (left, right) | Vir.Bv_not_equal (left, right) ->
+      let* left = services.translate_bit_vector left in
+      let* right = services.translate_bit_vector right in
+      let constructor =
+        match term with
+        | Vir.Bv_equal _ -> Logic_ir.bv_eq
+        | Vir.Bv_not_equal _ -> Logic_ir.bv_distinct
+        | _ -> assert false
+      in
+      let* term =
+        constructor ~span:services.span left right |> services.term_result
+      in
+      Ok (Some term)
+  | Vir.Bv_compare (comparison, left, right) ->
+      let* left = services.translate_bit_vector left in
+      let* right = services.translate_bit_vector right in
+      let constructor =
+        match comparison with
+        | Bv_operation_private.Bv_unsigned_less_than -> Logic_ir.bv_ult
+        | Bv_unsigned_less_or_equal -> Logic_ir.bv_ule
+        | Bv_unsigned_greater_than -> Logic_ir.bv_ugt
+        | Bv_unsigned_greater_or_equal -> Logic_ir.bv_uge
+        | Bv_signed_less_than -> Logic_ir.bv_slt
+        | Bv_signed_less_or_equal -> Logic_ir.bv_sle
+        | Bv_signed_greater_than -> Logic_ir.bv_sgt
+        | Bv_signed_greater_or_equal -> Logic_ir.bv_sge
       in
       let* term =
         constructor ~span:services.span left right |> services.term_result
@@ -471,7 +714,7 @@ let translate_normalized services source =
     ~exact:services.translate_exact ~opaque:services.translate_opaque
     observation
 
-let translate_arguments ~integer ~boolean ~aggregate ~parametric arguments =
+let translate_arguments ~integer ~boolean ~bit_vector ~aggregate ~parametric arguments =
   let ( let* ) result continuation =
     match result with Ok value -> continuation value | Error _ as error -> error
   in
@@ -483,6 +726,7 @@ let translate_arguments ~integer ~boolean ~aggregate ~parametric arguments =
           match argument with
           | Vir.Recursive_integer_argument term -> integer term
           | Vir.Recursive_boolean_argument term -> boolean term
+          | Vir.Recursive_bv_argument term -> bit_vector term
           | Vir.Recursive_aggregate_argument term -> aggregate term
           | Vir.Recursive_parametric_argument term -> parametric term
         in
@@ -499,6 +743,7 @@ let selector_function_name (selector : Vir.selector) =
     match selector.selector_range with
     | Vir.Integer -> "int"
     | Vir.Boolean -> "bool"
+    | Vir.Bit_vector width -> "bv" ^ Bv_width.to_string width
     | Vir.Aggregate aggregate ->
         Printf.sprintf "agg%d_%s" aggregate.aggregate_type_index
           aggregate.aggregate_type_name
@@ -528,6 +773,35 @@ let normalized_projection symbols =
   in
   deduplicate None [] sorted
 let create_state requires (obligation : Vir.obligation) =
+  let logical_constant_instances = obligation.logical_constant_instances in
+  let logical_constant_equation_instances =
+    List.map
+      (fun equation -> equation.Vir.logical_constant_instance)
+      obligation.logical_constant_equations
+  in
+  let unique_instances =
+    List.sort_uniq Logical_constant_instance_private.compare
+      logical_constant_instances
+  in
+  if List.length unique_instances <> List.length logical_constant_instances then
+    fail "logical constant instance vector contains duplicate declarations";
+  let unique_equation_instances =
+    List.sort_uniq Logical_constant_instance_private.compare
+      logical_constant_equation_instances
+  in
+  if
+    List.length unique_equation_instances
+    <> List.length logical_constant_equation_instances
+  then fail "logical constant equation vector contains duplicate instances";
+  if
+    List.exists
+      (fun instance ->
+        not
+          (List.exists
+             (Logical_constant_instance_private.equal instance)
+             logical_constant_instances))
+      logical_constant_equation_instances
+  then fail "logical constant equation lacks a declared instance";
   {
     builder = Logic_ir.create ();
     span = obligation.span;
@@ -539,7 +813,15 @@ let create_state requires (obligation : Vir.obligation) =
     parametric_sorts = Parametric_logic_private.create_logic_sort_registry ();
     use_named_aggregate_sorts = List.mem Logic_ir.Named_sorts requires;
     logical_adts = ref None;
+    logical_adt_schemas =
+      (obligation.assumptions @ obligation.required_preceding_safety
+      |> List.concat_map (function
+           | Vir.Logical_adt_schema schemas -> schemas
+           | _ -> []));
     bound_symbols = [];
+    logical_constant_instances;
+    logical_constant_equation_instances;
+    used_logical_constant_instances = ref [];
   }
 let compare_aggregate_types (left : Vir.aggregate_type)
     (right : Vir.aggregate_type) =
@@ -556,7 +838,7 @@ let obligation_aggregate_types (obligation : Vir.obligation) =
     |> List.filter_map (fun (symbol : Vir.symbol) ->
         match symbol.sort with
         | Vir.Aggregate aggregate -> Some aggregate
-        | Integer | Boolean | Parametric _ -> None))
+        | Integer | Boolean | Bit_vector _ | Parametric _ -> None))
   |> List.sort_uniq compare_aggregate_types
 let declare_aggregate_sort state aggregate =
   match Hashtbl.find_opt state.aggregate_sorts aggregate with
@@ -621,6 +903,7 @@ let initialize_logical_adts state obligation =
 let vir_sort state = function
   | Vir.Integer -> Logic_ir.Int
   | Boolean -> Logic_ir.Bool
+  | Bit_vector width -> Logic_ir.Bv width
   | Aggregate aggregate -> aggregate_sort state aggregate
   | Parametric binder -> parametric_sort state binder
 let declare state name domain range =
@@ -641,10 +924,29 @@ let declare state name domain range =
 let logical_adt_function state lookup =
   Option.bind !(state.logical_adts) lookup
 let selector_function state selector domain range =
-  match logical_adt_function state
-          (fun adts -> Logical_adt_encoding_private.selector adts selector) with
-  | Some function_ -> function_
-  | None -> declare state (selector_function_name selector) [ domain ] range
+  match
+    Option.map
+      (fun adts -> Logical_adt_encoding_private.resolve_selector adts selector)
+      !(state.logical_adts)
+  with
+  | Some (Logical_adt_encoding_private.Declared_selector function_) ->
+      [%log.trace "resolved direct selector through exact logical datatype schema"
+        ~stage:(Delator.Field.string "vir-logical-adt-selector-routing")
+        ~selector_index:(Delator.Field.int selector.Vir.selector_index)
+        ~decision:(Delator.Field.string "declared")];
+      function_
+  | Some Logical_adt_encoding_private.Invalid_declared_selector ->
+      [%log.debug "rejected direct selector incompatible with declared datatype"
+        ~stage:(Delator.Field.string "vir-logical-adt-selector-routing")
+        ~selector_index:(Delator.Field.int selector.Vir.selector_index)
+        ~decision:(Delator.Field.string "rejected")];
+      fail "selector does not match the declared logical datatype schema"
+  | None | Some Logical_adt_encoding_private.Unavailable_selector_schema ->
+      [%log.trace "used schema-unavailable direct selector fallback"
+        ~stage:(Delator.Field.string "vir-logical-adt-selector-routing")
+        ~selector_index:(Delator.Field.int selector.Vir.selector_index)
+        ~decision:(Delator.Field.string "fallback")];
+      declare state (selector_function_name selector) [ domain ] range
 let constructor_function state aggregate constructor domain =
   match logical_adt_function state (fun adts ->
           Logical_adt_encoding_private.constructor adts aggregate constructor) with
@@ -661,25 +963,48 @@ let record_constructor_function state aggregate record_type domain =
                        aggregate record_type) domain
         (aggregate_sort state aggregate)
 let symbol_function state expected_sort (symbol : Vir.symbol) =
-  if symbol.sort <> expected_sort then
+  if not (Vir.sort_equal symbol.sort expected_sort) then
     fail "symbol %s#%d has sort %s but is used as %s" symbol.source_name
       symbol.symbol_id
       (match symbol.sort with
       | Vir.Integer -> "integer"
       | Boolean -> "Boolean"
+      | Bit_vector width -> "bit-vector " ^ Bv_width.to_string width
       | Aggregate aggregate -> "aggregate " ^ Aggregate_logic_symbol_private.type_label aggregate
       | Parametric binder ->
           "parameter " ^ Parametric_type.binder_to_string binder)
       (match expected_sort with
       | Vir.Integer -> "an integer"
       | Boolean -> "a Boolean"
+      | Bit_vector width -> "bit-vector " ^ Bv_width.to_string width
       | Aggregate aggregate -> "aggregate " ^ Aggregate_logic_symbol_private.type_label aggregate
       | Parametric binder ->
           "parameter " ^ Parametric_type.binder_to_string binder);
-  declare state
-    (Printf.sprintf "f%d_s%d" state.function_index symbol.symbol_id)
-    []
-    (vir_sort state expected_sort)
+  let name =
+    match symbol.role with
+    | Vir.Logical_constant instance ->
+        if
+          not
+            (List.exists
+               (Logical_constant_instance_private.equal instance)
+               state.logical_constant_instances)
+        then
+          fail
+            "logical constant term %s has no exact definitional equation"
+            (Logical_constant_instance_private.identity_digest instance);
+        if
+          not
+            (List.exists
+               (Logical_constant_instance_private.equal instance)
+               !(state.used_logical_constant_instances))
+        then
+          state.used_logical_constant_instances :=
+            instance :: !(state.used_logical_constant_instances);
+        Logical_constant_instance_private.backend_head instance
+    | Input | Local | Result ->
+        Printf.sprintf "f%d_s%d" state.function_index symbol.symbol_id
+  in
+  declare state name [] (vir_sort state expected_sort)
 let symbol_term state expected_sort symbol =
   match List.assoc_opt symbol.Vir.symbol_id state.bound_symbols with
   | Some binder ->
@@ -960,6 +1285,28 @@ let rec aggregate (state : state) (term : Vir.aggregate_term) =
   | Aggregate_record { record_type; fields } ->
       if not (same_owner term.aggregate_type record_type) then
         fail "aggregate record has a mismatched result type";
+      (match
+         Logical_adt_encoding_private.validate_record_fields
+           ~schemas:state.logical_adt_schemas
+           ~aggregate_type:term.aggregate_type ~record_type ~fields
+       with
+      | Ok Logical_adt_encoding_private.Validated_record_schema ->
+          [%log.trace "validated direct record vector against exact ADT schema"
+            ~stage:(Delator.Field.string "vir-record-schema-validation")
+            ~field_count:(Delator.Field.int (List.length fields))
+            ~decision:(Delator.Field.string "accepted")]
+      | Ok Logical_adt_encoding_private.Unavailable_record_schema ->
+          [%log.trace "retained schema-unavailable record translation"
+            ~stage:(Delator.Field.string "vir-record-schema-validation")
+            ~field_count:(Delator.Field.int (List.length fields))
+            ~decision:(Delator.Field.string "fallback")]
+      | Error message ->
+          [%log.debug "rejected record vector incompatible with exact ADT schema"
+            ~stage:(Delator.Field.string "vir-record-schema-validation")
+            ~field_count:(Delator.Field.int (List.length fields))
+            ~reason:(Delator.Field.string message)
+            ~decision:(Delator.Field.string "rejected")];
+          fail "%s" message);
       let fields =
         List.map (fun (_, value) -> recursive_argument state value) fields
       in
@@ -977,7 +1324,8 @@ let rec aggregate (state : state) (term : Vir.aggregate_term) =
         ~then_:(aggregate state consequent)
         ~else_:(aggregate state alternative)
       |> logic_or_fail
-and integer (state : state) = function
+and integer (state : state) term =
+  match term with
   | Vir.Integer_constant value -> Logic_ir.int ~span:state.span value
   | Integer_symbol symbol -> symbol_term state Vir.Integer symbol
   | Integer_add (left, right) ->
@@ -1051,6 +1399,52 @@ and integer (state : state) = function
          query"
   | Integer_symbolic_application application ->
       symbolic_application state Logic_ir.Int application
+  | Integer_bv_to_int_unsigned value ->
+      Logic_ir.bv_to_int_unsigned ~span:state.span (bit_vector state value)
+      |> logic_or_fail
+  | Integer_bv_to_int_signed value ->
+      Logic_ir.bv_to_int_signed ~span:state.span (bit_vector state value)
+      |> logic_or_fail
+and bit_vector state term =
+  translate_bit_vector_core
+    {
+      span = state.span;
+      symbol =
+        (fun width symbol ->
+          Ok (symbol_term state (Vir.Bit_vector width) symbol));
+      translate_integer = (fun term -> Ok (integer state term));
+      translate_boolean = (fun term -> Ok (boolean state term));
+      translate_bit_vector = (fun term -> Ok (bit_vector state term));
+      translate_selector =
+        (fun width selector source ->
+          [%log.debug "routing direct VIR BV selector through normalization owner"
+            ~stage:(Delator.Field.string "vir-bv-selector-translation")
+            ~selector_index:(Delator.Field.int selector.selector_index)
+            ~width:(Delator.Field.int (Bv_width.to_int width))];
+          Ok
+            (scalar_selector state (Logic_ir.Bv width)
+               (Vir.Bit_vector width)
+               (Logical_aggregate_term_normalization_private.bit_vector_selector
+                  width)
+               (bit_vector state) selector source));
+      translate_arguments =
+        (fun arguments ->
+          Ok (List.map (recursive_argument state) arguments));
+      recursive_function =
+        (fun _ _ _ ->
+          Error
+            "bit-vector recursive specification application requires a verified definition query");
+      symbolic_application =
+        (fun width application ->
+          Ok (symbolic_application state (Logic_ir.Bv width) application));
+      term_result =
+        (fun result ->
+          Result.map_error
+            (fun error -> Logic_ir.error_to_string error)
+            result);
+    }
+    term
+  |> function Ok term -> term | Error message -> fail "%s" message
 and scalar_selector : type exact.
     state ->
     Logic_ir.sort ->
@@ -1072,7 +1466,7 @@ and scalar_selector : type exact.
     fail "selector %s domain %s applied to aggregate %s" selector.selector_name
       (Aggregate_logic_symbol_private.type_label selector.selector_domain)
       (Aggregate_logic_symbol_private.type_label source.aggregate_type);
-  if selector.selector_range <> expected_range then
+  if not (Vir.sort_equal selector.selector_range expected_range) then
     fail "selector %s is used at the wrong scalar range" selector.selector_name;
   normalize_selector selector source
   |> normalize
@@ -1115,6 +1509,34 @@ and boolean (state : state) = function
         | Greater_than -> Logic_ir.greater_than ~span:state.span left right
         | Greater_or_equal ->
             Logic_ir.greater_or_equal ~span:state.span left right)
+      |> logic_or_fail
+  | Bv_equal (left, right) ->
+      Logic_ir.bv_eq ~span:state.span (bit_vector state left)
+        (bit_vector state right)
+      |> logic_or_fail
+  | Bv_not_equal (left, right) ->
+      Logic_ir.bv_distinct ~span:state.span (bit_vector state left)
+        (bit_vector state right)
+      |> logic_or_fail
+  | Bv_compare (comparison, left, right) ->
+      let left = bit_vector state left in
+      let right = bit_vector state right in
+      (match comparison with
+      | Bv_operation_private.Bv_unsigned_less_than ->
+          Logic_ir.bv_ult ~span:state.span left right
+      | Bv_unsigned_less_or_equal ->
+          Logic_ir.bv_ule ~span:state.span left right
+      | Bv_unsigned_greater_than ->
+          Logic_ir.bv_ugt ~span:state.span left right
+      | Bv_unsigned_greater_or_equal ->
+          Logic_ir.bv_uge ~span:state.span left right
+      | Bv_signed_less_than -> Logic_ir.bv_slt ~span:state.span left right
+      | Bv_signed_less_or_equal ->
+          Logic_ir.bv_sle ~span:state.span left right
+      | Bv_signed_greater_than ->
+          Logic_ir.bv_sgt ~span:state.span left right
+      | Bv_signed_greater_or_equal ->
+          Logic_ir.bv_sge ~span:state.span left right)
       |> logic_or_fail
   | Boolean_equal (left, right) ->
       Logic_ir.equal ~span:state.span (boolean state left) (boolean state right)
@@ -1192,8 +1614,23 @@ and user_quantifier state universal quantifier =
     if universal then Logic_quantifier_private.Forall
     else Logic_quantifier_private.Exists
   in
-  if Logic_quantifier_private.vector_kind schema <> expected_kind then
-    fail "VIR user quantifier kind disagrees with authenticated metadata";
+  (match Vir.validate_boolean_quantifier ~expected_kind quantifier with
+  | Ok () ->
+      [%log.trace "validated direct VIR quantifier schema before translation"
+        ~stage:(Delator.Field.string "vir-quantifier-translation-preflight")
+        ~binder_count:
+          (Delator.Field.int
+             (List.length quantifier.boolean_quantifier_binders))
+        ~decision:(Delator.Field.string "accepted")]
+  | Error message ->
+      [%log.debug "rejected stale direct VIR quantifier schema"
+        ~stage:(Delator.Field.string "vir-quantifier-translation-preflight")
+        ~binder_count:
+          (Delator.Field.int
+             (List.length quantifier.boolean_quantifier_binders))
+        ~reason:(Delator.Field.string message)
+        ~decision:(Delator.Field.string "rejected")];
+      fail "%s" message);
   let symbols = quantifier.boolean_quantifier_binders in
   let binders =
     List.map
@@ -1234,6 +1671,7 @@ and user_quantifier state universal quantifier =
 and recursive_argument state = function
   | Vir.Recursive_integer_argument term -> integer state term
   | Vir.Recursive_boolean_argument term -> boolean state term
+  | Vir.Recursive_bv_argument term -> bit_vector state term
   | Vir.Recursive_aggregate_argument term -> aggregate state term
   | Vir.Recursive_parametric_argument term ->
       parametric state term
@@ -1274,11 +1712,13 @@ and parametric state term =
 and application state = function
   | Vir.Integer_application term -> integer state term
   | Boolean_application term -> boolean state term
+  | Bv_application term -> bit_vector state term
   | Aggregate_application term -> aggregate state term
   | Parametric_application term -> parametric state term
 and recursive_argument_sort state = function
   | Vir.Recursive_integer_argument _ -> Logic_ir.Int
   | Vir.Recursive_boolean_argument _ -> Logic_ir.Bool
+  | Vir.Recursive_bv_argument term -> Logic_ir.Bv term.bit_vector_width
   | Vir.Recursive_aggregate_argument term -> aggregate_sort state term.aggregate_type
   | Vir.Recursive_parametric_argument term -> parametric_sort state term.parametric_sort
 and symbolic_application state range application =
@@ -1310,13 +1750,56 @@ and symbolic_application state range application =
     function_ (List.map (recursive_argument state) arguments)
   |> logic_or_fail
 and callback_relation state name arguments =
+  [%log.trace "translating direct typed callback relation vector"
+    ~stage:(Delator.Field.string "callback-contract-vector-translation")
+    ~relation:(Delator.Field.string name)
+    ~argument_count:(Delator.Field.int (List.length arguments))
+    ~bv_argument_count:
+      (Delator.Field.int
+         (List.fold_left
+            (fun count -> function
+              | Vir.Recursive_bv_argument _ -> count + 1
+              | Recursive_integer_argument _ | Recursive_boolean_argument _
+              | Recursive_aggregate_argument _ | Recursive_parametric_argument _ ->
+                  count)
+            0 arguments))
+    ~decision:(Delator.Field.string "translating")];
   let domain = List.map (recursive_argument_sort state) arguments in
   let function_ = declare state name domain Logic_ir.Bool in
   Logic_ir.apply ~span:state.span function_ (List.map (recursive_argument state) arguments)
   |> logic_or_fail
+let logical_constant_equation state equation =
+  let instance = equation.Vir.logical_constant_instance in
+  let rhs = application state equation.logical_constant_rhs in
+  let range = Logic_ir.term_sort rhs in
+  let function_ =
+    declare state (Logical_constant_instance_private.backend_head instance) []
+      range
+  in
+  let lhs =
+    Logic_ir.apply ~span:equation.logical_constant_span function_ []
+    |> logic_or_fail
+  in
+  let equality =
+    Logic_ir.equal ~span:equation.logical_constant_span lhs rhs
+    |> logic_or_fail
+  in
+  [%log.debug "translated logical constant equation"
+    ~stage:(Delator.Field.string "logical-constant-translation")
+    ~instance:
+      (Delator.Field.string
+         (Logical_constant_instance_private.identity_digest instance))
+    ~backend_head:
+      (Delator.Field.string
+         (Logical_constant_instance_private.backend_head instance))
+    ~result_sort:(Delator.Field.string (Logic_ir.sort_to_string range))
+    ~decision:(Delator.Field.string "asserted")];
+  equality
 let assemble_translation state requires (obligation : Vir.obligation) =
   let assertions =
-    List.map (boolean state) obligation.assumptions
+    List.map (logical_constant_equation state)
+      obligation.logical_constant_equations
+    @ List.map (boolean state) obligation.assumptions
     @ List.map (boolean state) obligation.required_preceding_safety
     @ List.map (boolean state) obligation.path_condition
     @ [
@@ -1329,6 +1812,17 @@ let assemble_translation state requires (obligation : Vir.obligation) =
     |> List.map (fun (symbol : Vir.symbol) ->
         (symbol, symbol_function state symbol.sort symbol))
   in
+  let unused_equations =
+    List.filter
+      (fun instance ->
+        not
+          (List.exists
+             (Logical_constant_instance_private.equal instance)
+             !(state.used_logical_constant_instances)))
+      state.logical_constant_equation_instances
+  in
+  if unused_equations <> [] then
+    fail "logical constant query contains an unreachable definitional equation";
   let query =
     Logic_ir.query state.builder
       ~axioms:(List.rev !(state.rank_axioms))

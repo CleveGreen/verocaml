@@ -52,7 +52,8 @@ let authenticate_shared_scalar_function ~program ~definition =
   issued_shared_scalar_programs := List.rev live;
   authenticated
 
-let authenticate_logical_builtin_artifact artifact ~source_file =
+let authenticate_logical_builtin_artifact ?authenticated_source_text artifact
+    ~source_file =
   let implementation = artifact.proof_capture_implementation in
   let issuer =
     artifact.proof_capture_artifact_issuer == proof_capture_artifact_issuer
@@ -64,8 +65,17 @@ let authenticate_logical_builtin_artifact artifact ~source_file =
     List.exists
       (String.equal "retained-v1")
       implementation.implementation_family_markers
+  and source_digest =
+    match authenticated_source_text with
+    | None -> true
+    | Some source -> (
+        match implementation.source_digest with
+        | Some expected -> String.equal (Digest.string source) expected
+        | None -> false)
   in
-  let authenticated = issuer && source && metadata && shape && retained && family in
+  let authenticated =
+    issuer && source && metadata && shape && retained && family && source_digest
+  in
   [%log.trace "authenticate retained logical artifact"
     ~unit_name:(Delator.Field.string implementation.unit_name)
     ~issuer:(Delator.Field.bool issuer)
@@ -74,8 +84,47 @@ let authenticate_logical_builtin_artifact artifact ~source_file =
     ~implementation_shape:(Delator.Field.bool shape)
     ~retained:(Delator.Field.bool retained)
     ~family:(Delator.Field.bool family)
+    ~source_text_available:
+      (Delator.Field.bool (Option.is_some authenticated_source_text))
+    ~source_digest:(Delator.Field.bool source_digest)
     ~authenticated:(Delator.Field.bool authenticated)];
   authenticated
+
+let logical_builtin_provider_identity ?authenticated_source_text artifact
+    ~source_file =
+  if
+    authenticate_logical_builtin_artifact ?authenticated_source_text artifact
+      ~source_file
+  then
+    let implementation = artifact.proof_capture_implementation in
+    match implementation.Cmt_input.interface_digest with
+    | Some interface_digest
+      when not (String.equal implementation.unit_name "")
+           && not (String.equal interface_digest "") ->
+        [%log.trace "issued stable logical provider identity"
+          ~stage:(Delator.Field.string "logical-provider-identity")
+          ~provider_unit:(Delator.Field.string implementation.unit_name)
+          ~provider_interface:(Delator.Field.string interface_digest)
+          ~decision:(Delator.Field.string "authenticated")];
+        Ok (implementation.unit_name, interface_digest)
+    | Some _ | None -> Error "logical provider interface identity is incomplete"
+  else Error "logical provider artifact is not authenticated"
+
+let logical_builtin_source_identity artifact ~source_file =
+  if authenticate_logical_builtin_artifact artifact ~source_file then
+    match artifact.proof_capture_implementation.Cmt_input.source_digest with
+    | Some source_digest ->
+        let identity = Digest.to_hex source_digest in
+        [%log.trace "issued retained logical source identity"
+          ~provider:
+            (Delator.Field.string
+               artifact.proof_capture_implementation.Cmt_input.unit_name)
+          ~stage:(Delator.Field.string "logical-source-identity")
+          ~source_file:(Delator.Field.string source_file)
+          ~decision:(Delator.Field.string "authenticated")];
+        Ok identity
+    | None -> Error "logical provider source identity is incomplete"
+  else Error "logical provider artifact is not authenticated"
 
 type rank_type_identity = {
   rank_type_id : Sst.type_id;

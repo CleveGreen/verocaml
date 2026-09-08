@@ -51,7 +51,7 @@ let structural () =
       ~returns_unique_parameter:None ~span:(span 4)
   in
   let program caller =
-    Sst.{ policy = Default_linear_z3; parametric_adts = []; types = []; functions = [ target; wrapper; caller ] }
+    Sst.{ policy = Default_linear_z3; parametric_adts = []; types = []; logical_constants = []; functions = [ target; wrapper; caller ] }
   in
   (match Sst_validation.validate (program (caller target_id)) with
   | Ok _ -> print_endline "accepted: symmetric same-unit trusted linkage"

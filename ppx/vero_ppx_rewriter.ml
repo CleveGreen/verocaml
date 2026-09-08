@@ -50,6 +50,8 @@ let external_specification_attribute = "verocaml.external_specification"
 let external_type_specification_attribute =
   "verocaml.external_type_specification"
 let logical_sort_attribute = "verocaml.logical_sort"
+let numeric_carrier_attribute = "verocaml.numeric_carrier"
+let numeric_role_attribute = "verocaml.numeric_role"
 let integer_literal_attribute = "verocaml.integer_literal"
 let external_body_attribute = "verocaml.external_body"
 let opaque_attribute = "verocaml.opaque"
@@ -68,6 +70,10 @@ let external_type_specification_marker =
   internal_prefix ^ "external_type_specification.v1"
 let logical_sort_marker = internal_prefix ^ "logical_sort.mathematical_int.v1"
 let integer_literal_marker = internal_prefix ^ "logical_sort.integer_literal.v1"
+let numeric_carrier_marker =
+  internal_prefix ^ "numeric.carrier_source_claim.v1"
+let numeric_role_marker =
+  internal_prefix ^ "numeric.role_source_claim.v1"
 
 type declaration_role = {
   attribute_name : string;
@@ -217,6 +223,180 @@ let retained_logical_sort_attribute ~loc =
 
 let retained_integer_literal_attribute ~loc =
   internal_attribute ~loc integer_literal_marker
+
+type numeric_source_claim_kind = Carrier_claim | Semantic_role_claim
+
+let validate_numeric_source_claim kind attribute =
+  let fail format =
+    Location.raise_errorf ~loc:attribute.attr_loc
+      ("[@@%s] " ^^ format) attribute.attr_name.txt
+  in
+  let rec path = function
+    | Longident.Lident name -> name <> ""
+    | Ldot (parent, name) -> name <> "" && path parent
+    | Lapply _ -> false
+  and string_list = function
+    | { pexp_desc =
+          Pexp_construct ({ txt = Longident.Lident "[]"; _ }, None);
+        _ } ->
+        Some []
+    | { pexp_desc =
+          Pexp_construct
+            ( { txt = Longident.Lident "::"; _ },
+              Some
+                { pexp_desc = Pexp_tuple [ (None, head); (None, tail) ];
+                  _ } );
+        _ } -> (
+        match head.pexp_desc with
+        | Pexp_constant (Pconst_string (value, _, _)) ->
+            if value = "" then None
+            else Option.map (fun tail -> value :: tail) (string_list tail)
+        | _ -> None)
+    | _ -> None
+  in
+  let string = function
+    | { pexp_desc = Pexp_constant (Pconst_string (value, _, _)); _ } ->
+        Some value
+    | _ -> None
+  and identifier = function
+    | { pexp_desc = Pexp_ident { txt; _ }; _ } when path txt -> true
+    | _ -> false
+  and boolean = function
+    | { pexp_desc =
+          Pexp_construct
+            ({ txt = Longident.Lident ("true" | "false"); _ }, None);
+        _ } ->
+        true
+    | _ -> false
+  in
+  let fields =
+    match attribute.attr_payload with
+    | PStr
+        [ { pstr_desc =
+              Pstr_eval
+                ({ pexp_desc = Pexp_record (fields, None); _ }, []);
+            _ } ] ->
+        fields
+    | _ -> fail "requires exactly one closed source-level record claim"
+  in
+  let fields =
+    List.map
+      (fun (label, expression) ->
+        match label.Location.txt with
+        | Longident.Lident name -> (name, expression)
+        | Ldot _ | Lapply _ -> fail "uses a qualified or applied record label")
+      fields
+  in
+  let names = List.map fst fields in
+  if List.length names <> List.length (List.sort_uniq String.compare names) then
+    fail "repeats a record field";
+  let required name validate =
+    match List.assoc_opt name fields with
+    | Some value when validate value -> ()
+    | Some _ -> fail "field %s has the wrong literal or declaration-path form" name
+    | None -> fail "requires field %s" name
+  in
+  let reject_unknown allowed =
+    match List.find_opt (fun name -> not (List.mem name allowed)) names with
+    | None -> ()
+    | Some name -> fail "contains unknown field %s" name
+  in
+  match kind with
+  | Carrier_claim ->
+      reject_unknown [ "profile"; "representation"; "compatibility"; "base" ];
+      Option.iter (fun value -> if not (identifier value) then
+        fail "field base must be a logical type declaration path, not a string")
+        (List.assoc_opt "base" fields);
+      required "profile" (fun value ->
+          Option.fold ~none:false ~some:(fun value -> value <> "")
+            (string value));
+      required "representation" (fun value ->
+          match string value with
+          | Some ("immediate" | "boxed") -> true
+          | Some _ | None -> false);
+      Option.iter
+        (fun value ->
+          match string_list value with
+          | None ->
+              fail "field compatibility must be a list of nonempty strings"
+          | Some values
+            when List.length values
+                 <> List.length (List.sort_uniq String.compare values) ->
+              fail "field compatibility repeats an identity"
+          | Some _ -> ())
+        (List.assoc_opt "compatibility" fields)
+  | Semantic_role_claim ->
+      reject_unknown
+        [ "carrier"; "role_schema"; "role"; "semantics"; "visibility";
+          "reveal"; "inline" ];
+      required "carrier" identifier;
+      required "role_schema" (fun value ->
+          Option.fold ~none:false ~some:(fun value -> value <> "")
+            (string value));
+      required "role" (fun value ->
+          Option.fold ~none:false ~some:(fun value -> value <> "")
+            (string value));
+      required "semantics" identifier;
+      required "visibility" (fun value ->
+          match string value with
+          | Some ("visible" | "opaque") -> true
+          | Some _ | None -> false);
+      required "reveal" boolean;
+      required "inline" boolean
+
+let single_numeric_source_claim kind name attributes =
+  match attributes with
+  | [] -> None
+  | [ attribute ] ->
+      validate_numeric_source_claim kind attribute;
+      Some attribute
+  | duplicate :: _ ->
+      Location.raise_errorf ~loc:duplicate.attr_loc
+        "duplicate [@@%s] attribute" name
+
+let reject_numeric_carrier_on_callable attributes =
+  match
+    List.find_opt
+      (fun attribute ->
+        String.equal attribute.attr_name.txt numeric_carrier_attribute)
+      attributes
+  with
+  | None -> ()
+  | Some attribute ->
+      Location.raise_errorf ~loc:attribute.attr_loc
+        "[@@%s] is valid only on a type declaration"
+        numeric_carrier_attribute
+
+let retained_numeric_claim_attribute ~marker attribute =
+  let loc = { attribute.attr_loc with Location.loc_ghost = true } in
+  let marker = internal_attribute ~loc marker in
+  { marker with attr_payload = attribute.attr_payload }
+
+let retained_numeric_carrier_attribute attribute =
+  validate_numeric_source_claim Carrier_claim attribute;
+  let retained =
+    retained_numeric_claim_attribute ~marker:numeric_carrier_marker attribute
+  in
+  [%log.debug "retained author numeric metadata claim"
+    ~stage:(Delator.Field.string "numeric-claim-marker")
+    ~claim_kind:(Delator.Field.string "carrier")
+    ~authority:(Delator.Field.string "none-claim-only")
+    ~decision:(Delator.Field.string "retained")];
+  retained
+[@@delator.instrument] [@@delator.level debug]
+
+let retained_numeric_role_attribute attribute =
+  validate_numeric_source_claim Semantic_role_claim attribute;
+  let retained =
+    retained_numeric_claim_attribute ~marker:numeric_role_marker attribute
+  in
+  [%log.debug "retained author numeric metadata claim"
+    ~stage:(Delator.Field.string "numeric-claim-marker")
+    ~claim_kind:(Delator.Field.string "semantic-role")
+    ~authority:(Delator.Field.string "none-claim-only")
+    ~decision:(Delator.Field.string "retained")];
+  retained
+[@@delator.instrument] [@@delator.level debug]
 
 let public_verification_scope attribute =
   String.equal attribute.attr_name.txt verification_scope_attribute
@@ -780,7 +960,8 @@ let reject_misplaced_spec_attribute attribute =
       attribute.attr_name.txt
   else if declaration_attribute attribute.attr_name.txt then
     Location.raise_errorf ~loc:attribute.attr_loc
-      "[@@%s] is only valid on one nonrecursive top-level function binding"
+      "[@@%s] is valid only on one top-level function or explicitly typed \
+       logical constant; local declarations are not supported"
       attribute.attr_name.txt
   else if
     String.equal attribute.attr_name.txt opaque_attribute
@@ -795,7 +976,31 @@ let binding_name role binding =
   | Ppat_var name -> name
   | _ ->
       Location.raise_errorf ~loc:binding.pvb_pat.ppat_loc
-        "[@@%s] requires a variable function binding" role.attribute_name
+        "[@@%s] requires a simple variable binding" role.attribute_name
+
+let expression_is_function expression =
+  match expression.pexp_desc with
+  | Pexp_function (_, _, Pfunction_body _) -> true
+  | Pexp_function _ | _ -> false
+
+let logical_constant_type role binding expression =
+  if
+    not
+      (String.equal role.attribute_name spec_attribute
+      && not (expression_is_function expression))
+  then None
+  else
+    match Vero_ppx_logical_constant_private.explicit_type binding with
+    | Some typ -> Some typ
+    | None ->
+        [%log.debug "rejected logical constant declaration syntax"
+          ~stage:(Delator.Field.string "logical-constant-ppx")
+          ~declaration_role:(Delator.Field.string role.role_name)
+          ~decision:(Delator.Field.string "rejected")
+          ~reason_class:(Delator.Field.string "missing-explicit-type")];
+        Location.raise_errorf ~loc:binding.pvb_loc
+          "a logical constant must use `let name : type = expression \
+           [@@verocaml.spec]`"
 
 let wrap_declaration_body ~(binding_location : Location.t)
     ~(attribute_location : Location.t) ~attribute_name ~role ~carrier name
@@ -1614,6 +1819,18 @@ let instance_mode_mapper ~keep_ghost ~issuer =
                             integer_literal_attribute)
                         binding.pvb_attributes
                     in
+                    reject_numeric_carrier_on_callable binding_attributes;
+                    let numeric_roles, binding_attributes =
+                      List.partition
+                        (fun attribute ->
+                          String.equal attribute.attr_name.txt
+                            numeric_role_attribute)
+                        binding_attributes
+                    in
+                    let numeric_role =
+                      single_numeric_source_claim Semantic_role_claim
+                        numeric_role_attribute numeric_roles
+                    in
                     List.iter validate_empty_attribute integer_literals;
                     let integer_literal =
                       match integer_literals with
@@ -1684,6 +1901,12 @@ let instance_mode_mapper ~keep_ghost ~issuer =
                              :: finite_signature_attribute ~loc:binding.pvb_loc
                                   declaration_finite_formals
                              ::
+                             ((if keep_ghost then
+                                 Option.to_list numeric_role
+                                 |> List.map
+                                      retained_numeric_role_attribute
+                               else [])
+                             @
                              (if integer_literal then (
                                 [%log.debug
                                   "issued retained integer-literal callable marker"
@@ -1702,7 +1925,7 @@ let instance_mode_mapper ~keep_ghost ~issuer =
                                 explicit_compiler_mode_attribute
                                   ~loc:binding.pvb_loc
                                 :: self.attributes self attributes
-                              else self.attributes self attributes)
+                              else self.attributes self attributes))
                            else self.attributes self attributes);
                       },
                       erased_result ))
@@ -1749,6 +1972,17 @@ let instance_mode_mapper ~keep_ghost ~issuer =
                     String.equal attribute.attr_name.txt
                       integer_literal_attribute)
                   value.pval_attributes
+              in
+              reject_numeric_carrier_on_callable source_attributes;
+              let numeric_roles, source_attributes =
+                List.partition
+                  (fun attribute ->
+                    String.equal attribute.attr_name.txt numeric_role_attribute)
+                  source_attributes
+              in
+              let numeric_role =
+                single_numeric_source_claim Semantic_role_claim
+                  numeric_role_attribute numeric_roles
               in
               List.iter validate_empty_attribute integer_literals;
               let integer_literal =
@@ -1821,7 +2055,10 @@ let instance_mode_mapper ~keep_ghost ~issuer =
                                  ~loc:value.pval_loc ~finite_formals attributes
                                :: without_finite_signature attributes
                              in
-                             if integer_literal then (
+                             (Option.to_list numeric_role
+                             |> List.map
+                                  retained_numeric_role_attribute)
+                             @ if integer_literal then (
                                [%log.debug
                                  "issued retained integer-literal callable marker"
                                  ~stage:
@@ -1884,8 +2121,27 @@ let instance_mode_mapper ~keep_ghost ~issuer =
           String.equal attribute.attr_name.txt logical_sort_attribute)
         declaration_attributes
     in
+    let numeric_carrier_claims, declaration_attributes =
+      List.partition
+        (fun attribute ->
+          String.equal attribute.attr_name.txt numeric_carrier_attribute)
+        declaration_attributes
+    in
+    let misplaced_numeric_roles, declaration_attributes =
+      List.partition
+        (fun attribute ->
+          String.equal attribute.attr_name.txt
+            numeric_role_attribute)
+        declaration_attributes
+    in
     List.iter validate_empty_attribute external_type_specifications;
     List.iter validate_empty_attribute logical_sorts;
+    (match misplaced_numeric_roles with
+    | [] -> ()
+    | attribute :: _ ->
+        Location.raise_errorf ~loc:attribute.attr_loc
+          "[@@%s] is valid only on a typed callable declaration"
+          numeric_role_attribute);
     let external_type_specification =
       match external_type_specifications with
       | [] -> false
@@ -1903,6 +2159,18 @@ let instance_mode_mapper ~keep_ghost ~issuer =
           Location.raise_errorf ~loc:duplicate.attr_loc
             "duplicate [@@%s] attribute" logical_sort_attribute
     in
+    let one_claim name = function
+      | [] -> None
+      | [ attribute ] -> Some attribute
+      | duplicate :: _ ->
+          Location.raise_errorf ~loc:duplicate.attr_loc
+            "duplicate [@@%s] attribute" name
+    in
+    let numeric_carrier_claim =
+      one_claim numeric_carrier_attribute numeric_carrier_claims
+    in
+    Option.iter (validate_numeric_source_claim Carrier_claim)
+      numeric_carrier_claim;
     if external_type_specification && logical_sort then
       Location.raise_errorf ~loc:declaration.ptype_loc
         "[@@%s] and [@@%s] cannot describe the same declaration"
@@ -2035,6 +2303,8 @@ let instance_mode_mapper ~keep_ghost ~issuer =
             (if keep_ghost then
                type_mode_signature_attribute declaration
                ::
+               ((Option.to_list numeric_carrier_claim
+                |> List.map retained_numeric_carrier_attribute) @
                (if external_type_specification then
                   retained_external_type_specification_attribute
                     ~loc:declaration.ptype_loc
@@ -2042,7 +2312,7 @@ let instance_mode_mapper ~keep_ghost ~issuer =
                 else if logical_sort then
                   retained_logical_sort_attribute ~loc:declaration.ptype_loc
                   :: self.attributes self declaration_attributes
-                else self.attributes self declaration_attributes)
+                else self.attributes self declaration_attributes))
              else self.attributes self declaration_attributes);
         })
       kind
@@ -2933,6 +3203,13 @@ let make ?entrypoint:_entrypoint (arguments [@delator.skip]) =
               | _ -> assert false
             in
             let name = binding_name role binding in
+            let logical_constant_type =
+              logical_constant_type role binding binding.pvb_expr
+            in
+            if rec_flag <> Nonrecursive && Option.is_some logical_constant_type
+            then
+              Location.raise_errorf ~loc:binding.pvb_loc
+                "logical constants cannot be recursive";
             let recursive_spec =
               rec_flag = Recursive
               && String.equal role.attribute_name spec_attribute
@@ -2966,8 +3243,9 @@ let make ?entrypoint:_entrypoint (arguments [@delator.skip]) =
                 binding.pvb_expr
             in
             let () =
-              Vero_ppx_logical_builtin_private.require_function_body
-                ~attribute:role.attribute_name expression
+              if Option.is_none logical_constant_type then
+                Vero_ppx_logical_builtin_private.require_function_body
+                  ~attribute:role.attribute_name expression
             in
             let remaining_attributes =
               List.filter
@@ -2988,7 +3266,8 @@ let make ?entrypoint:_entrypoint (arguments [@delator.skip]) =
               }
             in
             if not keep_ghost then
-              if role.preserve_ordinary_body then
+              if Option.is_some logical_constant_type then []
+              else if role.preserve_ordinary_body then
                 [
                   {
                     item with
@@ -2998,16 +3277,33 @@ let make ?entrypoint:_entrypoint (arguments [@delator.skip]) =
                 ]
               else []
             else
-              let expression =
-                wrap_declaration_body ~binding_location:binding.pvb_loc
-                  ~attribute_location:attribute.attr_loc
-                  ~attribute_name:role.attribute_name ~role:role.role_name
-                  ~carrier:
-                    (if recursive_spec then "recursive_spec_definition"
-                     else role.carrier_name)
-                  name ?visibility expression
+              let binding =
+                match logical_constant_type with
+                | None ->
+                    let expression =
+                      wrap_declaration_body ~binding_location:binding.pvb_loc
+                        ~attribute_location:attribute.attr_loc
+                        ~attribute_name:role.attribute_name ~role:role.role_name
+                        ~carrier:
+                          (if recursive_spec then "recursive_spec_definition"
+                           else role.carrier_name)
+                        name ?visibility expression
+                    in
+                    rewritten_binding expression
+                | Some typ ->
+                    [%log.trace "retained logical constant declaration"
+                      ~stage:(Delator.Field.string "logical-constant-ppx")
+                      ~declaration_name:(Delator.Field.string name.txt)
+                      ~decision:(Delator.Field.string "retained")];
+                    let binding = rewritten_binding expression in
+                    {
+                      binding with
+                      pvb_attributes =
+                        Vero_ppx_logical_constant_private.declaration_attribute
+                          binding ~name typ
+                        :: binding.pvb_attributes;
+                    }
               in
-              let binding = rewritten_binding expression in
               [ { item with pstr_desc = Pstr_value (rec_flag, [ binding ]) } ]
     | _ -> [ default.structure_item self item ]
 

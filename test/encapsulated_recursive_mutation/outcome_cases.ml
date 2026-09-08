@@ -121,9 +121,10 @@ let surface_rejections =
 let surface_rejection_matrix =
   let expectation =
     Expectation.empty |> Expectation.status Outcome.Frontend_rejected
+    |> Expectation.require_frontend_code "VERO_INVALID_RECURSIVE_RANK"
     |> Expectation.require_frontend_code "VERO_UNSUPPORTED_STRUCTURE_ITEM"
     |> Expectation.require_frontend_code "VERO_UNSUPPORTED_EXTERNAL_CALL"
-    |> Expectation.require_frontend_code "VERO_UNSUPPORTED_TYPE"
+    |> Expectation.require_frontend_code "VERO_UNSUPPORTED_TOP_LEVEL_BINDING"
     |> require_units Outcome.Unit_frontend_rejected surface_rejections
   in
   Suite.case ~name:"unsupported-surface-matrix" ~expectation

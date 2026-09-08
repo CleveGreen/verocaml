@@ -49,7 +49,7 @@ let supported_binding_pattern (pattern : Sst.pattern) =
   supported pattern
 
 let rec supported_conditional_type ~integer_conditionals = function
-  | Sst.Unit | Sst.Bool | Sst.Aggregate _ | Sst.Parameter _
+  | Sst.Unit | Sst.Bool | Sst.Bit_vector _ | Sst.Aggregate _ | Sst.Parameter _
   | Sst.Application _ -> true
   | Sst.Int | Sst.Mathematical_int -> integer_conditionals
   | Sst.Tuple components ->
@@ -60,9 +60,17 @@ let rec recursive_argument_is_branch_free classify (expression : Sst.expression)
   let recurse = recursive_argument_is_branch_free classify in
   match expression.expression_desc with
   | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
-  | Sst.Variable _ ->
+  | Sst.Bv_literal _
+  | Sst.Variable _ | Sst.Logical_constant_reference _ ->
       true
   | Sst.Lift_runtime_int operand -> recurse operand
+  | Sst.Bv_int_to_bv_mod { input; _ }
+  | Sst.Bv_to_int_unsigned input
+  | Sst.Bv_to_int_signed input
+  | Sst.Bv_not input ->
+      recurse input
+  | Sst.Bv_binary (_, left, right) | Sst.Bv_compare (_, left, right) ->
+      recurse left && recurse right
   | Sst.Optional_present payload | Sst.Optional_forward payload ->
       recurse payload
   | Sst.Optional_absent -> true
@@ -70,10 +78,10 @@ let rec recursive_argument_is_branch_free classify (expression : Sst.expression)
       List.for_all (fun (_, component) -> recurse component) components
   | Sst.Record_value { fields; _ } -> (
       match expression.typ with
-      | Sst.Application _ ->
+      | Sst.Application _ | Sst.Aggregate _ ->
           List.for_all (fun (_, field) -> recurse field) fields
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Aggregate _
-      | Sst.Tuple _
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+      | Sst.Bit_vector _ | Sst.Tuple _
       | Sst.Parameter _ ->
           false)
   | Sst.Constructor_value { arguments; _ } -> List.for_all recurse arguments
@@ -134,9 +142,17 @@ let authenticate_with ~integer_conditionals ~classify root =
     let recurse = eligible_expression branch_sensitive in
     match expression.expression_desc with
     | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
-    | Sst.Variable _ ->
+    | Sst.Bv_literal _
+    | Sst.Variable _ | Sst.Logical_constant_reference _ ->
         true
     | Sst.Lift_runtime_int operand -> recurse operand
+    | Sst.Bv_int_to_bv_mod { input; _ }
+    | Sst.Bv_to_int_unsigned input
+    | Sst.Bv_to_int_signed input
+    | Sst.Bv_not input ->
+        recurse input
+    | Sst.Bv_binary (_, left, right) | Sst.Bv_compare (_, left, right) ->
+        recurse left && recurse right
     | Sst.Optional_present payload | Sst.Optional_forward payload ->
         recurse payload
     | Sst.Optional_absent -> true
@@ -144,11 +160,11 @@ let authenticate_with ~integer_conditionals ~classify root =
         List.for_all (fun (_, component) -> recurse component) components
     | Sst.Record_value { fields; _ } -> (
         match expression.typ with
-        | Sst.Application _ ->
+        | Sst.Application _ | Sst.Aggregate _ ->
             List.for_all (fun (_, field) -> recurse field) fields
         | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
-        | Sst.Aggregate _ | Sst.Tuple _
-        | Sst.Parameter _ ->
+        | Sst.Bit_vector _
+        | Sst.Tuple _ | Sst.Parameter _ ->
             false)
     | Sst.Constructor_value { arguments; _ } -> List.for_all recurse arguments
     | Sst.Field_read { record; _ } -> recurse record

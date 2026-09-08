@@ -9,6 +9,28 @@ type call_target = Logical_spec_capability_private.call_target =
   | Unsupported
 type permit = Logical_spec_authentication_private.permit
 type strict_permit = Logical_spec_capability_private.permit
+type native_integer_projection = {
+  projection_width : Bv_width.t;
+  projection_input : Sst.expression;
+  projection_authority : Numeric_bv_projection_evidence_private.t;
+}
+
+let native_unsigned_projection_fragment ~span projection =
+  let width = projection.projection_width in
+  let conversion =
+    Sst.
+      { typ = Bit_vector width;
+        expression_desc =
+          Bv_int_to_bv_mod
+            { width;
+              input = projection.projection_input;
+              source_authority = projection.projection_authority };
+        span }
+  in
+  Sst.
+    { typ = Mathematical_int;
+      expression_desc = Bv_to_int_unsigned conversion;
+      span }
 let authenticate = Logical_spec_authentication_private.authenticate
 let classify_definition = Logical_spec_authentication_private.classify_definition
 let authenticate_invariant_contract = Logical_spec_admission_private.admit
@@ -37,6 +59,12 @@ type ('context, 'state, 'error) callbacks = {
     Vir.aggregate_term ->
     (Vir.aggregate_term * 'state, 'error) result;
   enter_definition : 'context -> Sst.function_definition -> 'context;
+  native_integer_projection :
+    'context ->
+    Sst.expression ->
+    (native_integer_projection option, 'error) result;
+  evaluate_constant :
+    'context -> Sst.expression -> 'state -> (value * 'state, 'error) result;
   evaluate_recursive : 'context -> Sst.expression -> 'state -> (value * 'state, 'error) result;
   error : Diagnostic.span -> string -> 'error;
 }
@@ -89,6 +117,10 @@ let rec conditional error span condition consequent alternative =
       |> Result.map_error (error span)
   | _, Boolean_value consequent, Boolean_value alternative ->
       Ok (Boolean_value (boolean_conditional condition consequent alternative))
+  | _, Bit_vector_value consequent, Bit_vector_value alternative ->
+      Vir.bv_conditional condition consequent alternative
+      |> Result.map (fun value -> Bit_vector_value value)
+      |> Result.map_error (error span)
   | _, Aggregate_value consequent, Aggregate_value alternative
     when consequent.aggregate_type = alternative.aggregate_type ->
       Ok
@@ -121,6 +153,10 @@ let resolve_optional ~error ~default ~presence ~payload =
     | Boolean_value consequent, Boolean_value alternative ->
         Ok
           (Boolean_value (boolean_conditional condition consequent alternative))
+    | Bit_vector_value consequent, Bit_vector_value alternative ->
+        Vir.bv_conditional condition consequent alternative
+        |> Result.map (fun value -> Bit_vector_value value)
+        |> Result.map_error error
     | Parametric_value consequent, Parametric_value alternative ->
         Parametric_logic_private.conditional condition consequent alternative
         |> Result.map (fun value -> Parametric_value value)
@@ -333,6 +369,9 @@ let expect_integer runtime span = function
 let expect_boolean runtime span = function
   | Boolean_value value -> Ok value
   | _ -> Error (runtime.callbacks.error span "expected Boolean logical value")
+let expect_bit_vector runtime span = function
+  | Bit_vector_value value -> Ok value
+  | _ -> Error (runtime.callbacks.error span "expected bit-vector logical value")
 let validate_aggregate runtime span descriptor typ actual =
   with_strict_permit runtime (Ok ()) (fun permit validated ->
       Logical_spec_capability_private.validate_aggregate_value permit ~validated
@@ -452,11 +491,32 @@ and expression_eval runtime context (expression : Sst.expression) state =
   let callbacks = runtime.callbacks in
   let error = callbacks.error in
   let recurse = expression_eval runtime context in
+  let* native = callbacks.native_integer_projection context expression in
+  match native with
+  | Some projection ->
+      [%log.trace "lowered authenticated source projection in logical evaluator"
+        ~stage:(Delator.Field.string "logical-spec-native-projection")
+        ~semantic_width:
+          (Delator.Field.int
+             (Bv_width.to_int projection.projection_width))
+        ~input_type:
+          (Delator.Field.string
+             (Sst.string_of_type projection.projection_input.typ))
+        ~authority_present:(Delator.Field.bool true)
+        ~decision:(Delator.Field.string "native-projection")];
+      recurse (native_unsigned_projection_fragment ~span:expression.span projection)
+        state
+  | None -> (
   match expression.expression_desc with
   | Sst.Int_constant value ->
       Ok (Integer_value (Vir.Integer_constant value), state)
   | Sst.Bool_constant value ->
       Ok (Boolean_value (Vir.Boolean_constant value), state)
+  | Sst.Bv_literal value -> (
+      match expression.typ with
+      | Sst.Bit_vector width when Bv_width.equal width value.Bv_value.width ->
+          Ok (Bit_vector_value (Vir.bv_literal value), state)
+      | _ -> Error (error expression.span "BV literal has a mismatched authenticated type"))
   | Sst.Unit_constant -> Ok (Unit_value, state)
   | Sst.Variable { binding; _ } -> (
       match List.assoc_opt binding.id (callbacks.environment state) with
@@ -628,7 +688,7 @@ and expression_eval runtime context (expression : Sst.expression) state =
               (Ok fallback) remaining
           in
           Ok (value, state))
-  | _ -> scalar_eval runtime context expression state
+  | _ -> scalar_eval runtime context expression state)
 and checked_arithmetic_eval runtime context (expression : Sst.expression) state
     operation arguments =
   let callbacks = runtime.callbacks in
@@ -715,6 +775,7 @@ and quantifier_eval runtime context (expression : Sst.expression) state
         | Parametric_type.Int | Parametric_type.Mathematical_int ->
             Ok Vir.Integer
         | Bool -> Ok Vir.Boolean
+        | Bit_vector width -> Ok (Vir.Bit_vector width)
         | Parameter binder -> Ok (Vir.Parametric binder)
         | Application _ as typ when Parametric_type.is_spec_function typ ->
             Ok (Vir.Parametric (Spec_function_logic_private.binder typ))
@@ -744,6 +805,66 @@ and scalar_eval runtime context (expression : Sst.expression) state =
   let recurse = expression_eval runtime context in
   match expression.expression_desc with
   | Sst.Lift_runtime_int operand -> recurse operand state
+  | Sst.Bv_literal value -> Ok (Bit_vector_value (Vir.bv_literal value), state)
+  | Sst.Bv_int_to_bv_mod { width; input; source_authority } ->
+      let* input, state = recurse input state in
+      let* input = expect_integer runtime expression.span input in
+      if not (Parametric_type.equal expression.typ (Sst.Bit_vector width)) then
+        Error (error expression.span "Int-to-BV result type crosses authenticated widths")
+      else
+        Ok
+          (Bit_vector_value
+             (Vir.bv_int_to_bv_mod ~width ~input ~source_authority), state)
+  | Sst.Bv_to_int_unsigned operand | Sst.Bv_to_int_signed operand ->
+      let* operand, state = recurse operand state in
+      let* operand = expect_bit_vector runtime expression.span operand in
+      if expression.typ <> Sst.Mathematical_int then
+        Error (error expression.span "BV-to-Int view has a non-mathematical result type")
+      else
+        Ok
+          ( Integer_value
+              (match expression.expression_desc with
+              | Sst.Bv_to_int_unsigned _ -> Vir.bv_to_int_unsigned operand
+              | Sst.Bv_to_int_signed _ -> Vir.bv_to_int_signed operand
+              | _ -> assert false),
+            state )
+  | Sst.Bv_not operand ->
+      let* operand, state = recurse operand state in
+      let* operand = expect_bit_vector runtime expression.span operand in
+      if
+        not
+          (Parametric_type.equal expression.typ
+             (Sst.Bit_vector operand.bit_vector_width))
+      then
+        Error (error expression.span "BV complement has a mismatched result width")
+      else Ok (Bit_vector_value (Vir.bv_not operand), state)
+  | Sst.Bv_binary (operation, left, right) ->
+      let* left, state = recurse left state in
+      let* left = expect_bit_vector runtime expression.span left in
+      let* right, state = recurse right state in
+      let* right = expect_bit_vector runtime expression.span right in
+      let* term =
+        Vir.bv_binary operation left right
+        |> Result.map_error (error expression.span)
+      in
+      if
+        not
+          (Parametric_type.equal expression.typ
+             (Sst.Bit_vector term.bit_vector_width))
+      then
+        Error (error expression.span "BV binary result has a mismatched width")
+      else Ok (Bit_vector_value term, state)
+  | Sst.Bv_compare (operation, left, right) ->
+      let* left, state = recurse left state in
+      let* left = expect_bit_vector runtime expression.span left in
+      let* right, state = recurse right state in
+      let* right = expect_bit_vector runtime expression.span right in
+      if expression.typ <> Sst.Bool then
+        Error (error expression.span "BV comparison has a non-Boolean result type")
+      else
+        Vir.bv_compare operation left right
+        |> Result.map (fun term -> (Boolean_value term, state))
+        |> Result.map_error (error expression.span)
   | Sst.Checked_arithmetic (operation, arguments) ->
       checked_arithmetic_eval runtime context expression state operation
         arguments
@@ -802,7 +923,8 @@ and scalar_eval runtime context (expression : Sst.expression) state =
       (match carrier with
       | Aggregate_value aggregate when aggregate.aggregate_type = expected ->
           Ok (carrier, state)
-      | Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _
+      | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
+      | Tuple_value _
       | Aggregate_value _ | Parametric_value _ | Function_value _ ->
           Error (error expression.span "optional forwarding type mismatch"))
   | Sst.Direct_call _
@@ -836,6 +958,8 @@ and scalar_eval runtime context (expression : Sst.expression) state =
         arguments
   | Sst.Symbolic_application application ->
       symbolic_application_eval runtime context expression state application
+  | Sst.Logical_constant_reference _ ->
+      callbacks.evaluate_constant context expression state
   | Sst.If (_, _, None)
   | Sst.Field_write _ | Sst.Shared_scalar_field_write _
   | Sst.Owned_tree_nested_write _ | Sst.Owned_tree_rebase _ | Sst.Let_mutable _
@@ -960,6 +1084,7 @@ and symbolic_application_eval runtime context expression state application =
       match application with
       | Vir.Integer_application term -> Integer_value term
       | Boolean_application term -> Boolean_value term
+      | Bv_application term -> Bit_vector_value term
       | Aggregate_application term -> Aggregate_value term
       | Parametric_application term -> Parametric_value term
     in
@@ -1294,7 +1419,8 @@ and specification_function_application_eval runtime context expression state
               application.application_result symbolic
           in
           Ok (value, state))
-  | Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _
+  | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
+  | Tuple_value _
   | Aggregate_value _ | Parametric_value _ ->
       Error
         (error expression.span

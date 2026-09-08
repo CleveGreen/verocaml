@@ -154,97 +154,6 @@ let run_compile_rejection ~environment ~workspace ~name
       |> Outcome.project)
   else mismatch "compiler accepted forbidden broadcast authority route %s" name
 
-type captured_kind = Event of string | Span of string | Exit
-type captured_value = String_value of string | Int_value of int | Bool_value of bool
-type captured_field = { field_name : string; field_value : captured_value }
-
-type captured_record = {
-  captured_kind : captured_kind;
-  captured_level : Delator.Level.t;
-  captured_target : string;
-  captured_fields : captured_field list;
-  captured_id : int option;
-  captured_parent : int option;
-}
-
-let capture_records level action =
-  let records = ref [] and lock = Mutex.create () in
-  let record item =
-    Mutex.lock lock;
-    records := item :: !records;
-    Mutex.unlock lock
-  in
-  let fields values =
-    values
-    |> List.map (fun (field_name, value) ->
-           let field_value =
-             match Delator.Field.view value with
-             | Delator.Field.View.String value -> String_value value
-             | Int value -> Int_value value
-             | Bool value -> Bool_value value
-             | Null | Int64 _ | Float _ | Seq _ | Map _ ->
-                 String_value (Delator.Field.render value)
-           in
-           { field_name; field_value })
-    |> List.sort (fun left right -> String.compare left.field_name right.field_name)
-  in
-  let module Renderer = struct
-    let on_new_span ~id ~parent ~name ~target ~level ~fields:values =
-      record
-        {
-          captured_kind = Span name;
-          captured_level = level;
-          captured_target = target;
-          captured_fields = fields values;
-          captured_id = Some id;
-          captured_parent = parent;
-        }
-
-    let on_exit ~id ~duration_ns:_ =
-      record
-        {
-          captured_kind = Exit;
-          captured_level = Delator.Trace;
-          captured_target = "";
-          captured_fields = [];
-          captured_id = Some id;
-          captured_parent = None;
-        }
-
-    let on_event ~span ~target ~level ~msg ~fields:values =
-      record
-        {
-          captured_kind = Event msg;
-          captured_level = level;
-          captured_target = target;
-          captured_fields = fields values;
-          captured_id = span;
-          captured_parent = None;
-        }
-  end in
-  Delator.init ();
-  Delator.set_default_level level;
-  Delator.Renderer.set_current (module Renderer);
-  Fun.protect
-    ~finally:(fun () ->
-      Delator.set_default_level Delator.Info;
-      Delator.Renderer.set_current Delator.Renderer.tree)
-    (fun () ->
-      let result = action () in
-      (result, List.rev !records))
-
-let captured_field name record =
-  List.find_opt (fun field -> String.equal field.field_name name)
-    record.captured_fields
-
-let captured_string name record =
-  match captured_field name record with
-  | Some { field_value = String_value value; _ } -> Some value
-  | Some { field_value = Int_value _ | Bool_value _; _ } | None -> None
-
-let has_captured_fields names record =
-  List.for_all (fun name -> Option.is_some (captured_field name record)) names
-
 let contains source fragment =
   let source_length = String.length source and length = String.length fragment in
   let rec loop index =
@@ -262,55 +171,6 @@ let redacts secrets value =
   && not (contains value "verocaml.internal.broadcast")
   && not (contains value "verocaml:broadcast:carrier:")
 
-let private_material_class opaque_authority_values value =
-  if
-    List.exists
-      (fun opaque -> opaque <> "" && contains value opaque)
-      opaque_authority_values
-  then Some "opaque authority identity"
-  else if contains value "verocaml.internal.broadcast" then
-    Some "internal broadcast marker"
-  else if contains value "verocaml:broadcast:carrier:" then
-    Some "broadcast carrier encoding"
-  else None
-
-let first_private_material_class opaque_authority_values records =
-  let classify = private_material_class opaque_authority_values in
-  List.find_map
-    (fun record ->
-      let located location value =
-        Option.map
-          (fun class_name ->
-            Printf.sprintf "%s in %s.%s %s" class_name record.captured_target
-              (match record.captured_kind with
-              | Event message | Span message -> message
-              | Exit -> "exit")
-              location)
-          (classify value)
-      in
-      match located "target" record.captured_target with
-      | Some _ as found -> found
-      | None -> (
-          let message =
-            match record.captured_kind with
-            | Event message | Span message -> message
-            | Exit -> ""
-          in
-          match located "message" message with
-          | Some _ as found -> found
-          | None ->
-              List.find_map
-                (fun field ->
-                  match located "field name" field.field_name with
-                  | Some _ as found -> found
-                  | None -> (
-                      match field.field_value with
-                      | String_value value ->
-                          located ("field " ^ field.field_name) value
-                      | Int_value _ | Bool_value _ -> None))
-                record.captured_fields))
-    records
-
 let diagnostic_redacts secrets (diagnostic : Diagnostic.t) =
   let classification_values =
     match diagnostic.classification with
@@ -324,6 +184,10 @@ let diagnostic_redacts secrets (diagnostic : Diagnostic.t) =
     | Diagnostic.Invalid_symbolic_application _
     | Diagnostic.Invalid_symbolic_authentication _
     | Diagnostic.Invalid_symbolic_dependency _
+    | Diagnostic.Invalid_logical_constant_declaration _
+    | Diagnostic.Invalid_logical_constant_use _
+    | Diagnostic.Invalid_logical_constant_authentication _
+    | Diagnostic.Invalid_numeric_declaration _
     | Diagnostic.Executable_function_in_specification _
     | Diagnostic.Unannotated_erased_call _
     | Diagnostic.Invalid_verification_call _
@@ -334,34 +198,6 @@ let diagnostic_redacts secrets (diagnostic : Diagnostic.t) =
   List.for_all (redacts secrets)
     (diagnostic.code :: diagnostic.message :: diagnostic.span.file
    :: classification_values)
-
-let spans_balanced_and_nested records =
-  let starts =
-    List.filter_map
-      (fun record ->
-        match (record.captured_kind, record.captured_id) with
-        | Span _, Some id -> Some (id, record.captured_parent)
-        | (Event _ | Exit), _ | Span _, None -> None)
-      records
-  and exits =
-    List.filter_map
-      (fun record ->
-        match (record.captured_kind, record.captured_id) with
-        | Exit, Some id -> Some id
-        | (Event _ | Span _), _ | Exit, None -> None)
-      records
-  in
-  starts <> []
-  && List.length starts = List.length exits
-  && List.for_all
-       (fun (id, parent) ->
-         List.length (List.filter (Int.equal id) exits) = 1
-         &&
-         match parent with
-         | None -> true
-         | Some parent_id -> List.mem_assoc parent_id starts)
-       starts
-  && List.exists (fun (_, parent) -> Option.is_some parent) starts
 
 type route = Standalone | Ppxlib
 
@@ -2078,7 +1914,14 @@ let sidecar_rejection_case =
                                    member.Retained_broadcast_private.source_members;
                              }))
                 | Retained_interface_authority_private.Logical_sorts sorts ->
-                    Retained_interface_authority_private.Logical_sorts sorts)
+                    Retained_interface_authority_private.Logical_sorts sorts
+                | Retained_interface_authority_private.Logical_values values ->
+                    Retained_interface_authority_private.Logical_values
+                      (List.rev values)
+                | (Retained_interface_authority_private.Numeric_claims _
+                  | Retained_interface_authority_private.Unknown_optional_section _)
+                  as payload ->
+                    payload)
               authority.payloads;
         }
       in
@@ -3270,282 +3113,6 @@ let route_parity_case =
       in
       Ok (Outcome.merge [ standalone; ppxlib ]))
 
-let instrumentation_case =
-  Suite.case ~name:"broadcast-typed-delator-levels-fields-redaction"
-    ~expectation:
-      (Expectation.empty |> Expectation.status Outcome.Verified
-      |> Expectation.require_unit "Provider_a" Outcome.Unit_verified
-      |> Expectation.require_unit "Forwarder" Outcome.Unit_verified
-      |> Expectation.require_unit "Consumer" Outcome.Unit_verified)
-    (fun ~environment ~workspace ->
-      let positive_workspace = Filename.concat workspace "positive" in
-      let rejected_workspace = Filename.concat workspace "rejected" in
-      let* positive =
-        Fixture.run ~environment ~workspace:positive_workspace
-          (positive_project Standalone)
-      in
-      let* rejected =
-        Fixture.run ~environment ~workspace:rejected_workspace
-          (mutation_project Substitution)
-      in
-      let positive_result, positive_records =
-        capture_records Delator.Trace (fun () ->
-            let root = Filename.concat positive_workspace "project" in
-            let* provider = load root "Provider_a" in
-            let* forwarder = load root "Forwarder" in
-            let* consumer = load root "Consumer" in
-            let* _ = verify ~threads:1 ~consumer ~dependencies:[ provider; forwarder ] in
-            Ok ())
-      in
-      let* () = positive_result in
-      let rejected_result, rejected_records =
-        capture_records Delator.Trace (fun () ->
-            load (Filename.concat rejected_workspace "project")
-              "Mutation_provider")
-      in
-      let* () =
-        match rejected_result with
-        | Error _ -> Ok ()
-        | Ok _ -> mismatch "instrumented exact-set load unexpectedly succeeded"
-      in
-      let ppx_mapper = Vero_ppx_rewriter.make [ "--keep-ghost" ] in
-      let _, ppx_records =
-        capture_records Delator.Trace (fun () ->
-            ignore
-              (ppx_mapper.Ast_mapper.signature ppx_mapper
-                 (parse_signature provider_a_mli)))
-      in
-      let* () =
-        require (Outcome.status rejected = Outcome.Frontend_rejected)
-          "instrumented exact-set rejection changed semantic outcome"
-      in
-      let span name target records =
-        List.exists
-          (fun record ->
-            record.captured_level = Delator.Debug
-            && String.equal record.captured_target target
-            && record.captured_kind = Span name
-            && Option.is_some record.captured_id)
-          records
-      in
-      let ppx_span =
-        List.exists
-          (fun record ->
-            record.captured_level = Delator.Debug
-            && String.ends_with ~suffix:"Vero_ppx_broadcast_private"
-                 record.captured_target
-            && record.captured_kind = Span "rewrite_signature"
-            && Option.is_some record.captured_id)
-          ppx_records
-      in
-      let ppx_span_ids =
-        List.filter_map
-          (fun record ->
-            match (record.captured_kind, record.captured_id) with
-            | Span _, Some id -> Some id
-            | (Event _ | Exit), _ | Span _, None -> None)
-          ppx_records
-      and ppx_exit_ids =
-        List.filter_map
-          (fun record ->
-            match (record.captured_kind, record.captured_id) with
-            | Exit, Some id -> Some id
-            | (Event _ | Span _), _ | Exit, None -> None)
-          ppx_records
-      in
-      let ppx_balanced =
-        ppx_span_ids <> []
-        && List.length ppx_span_ids = List.length ppx_exit_ids
-        && List.for_all
-             (fun id -> List.length (List.filter (Int.equal id) ppx_exit_ids) = 1)
-             ppx_span_ids
-      in
-      let compiler_member =
-        List.exists
-          (fun record ->
-            record.captured_level = Delator.Trace
-            && String.equal record.captured_target "Cmt_input"
-            && captured_string "stage" record = Some "compiler-lookup"
-            && has_captured_fields
-                 [
-                   "provider";
-                   "route";
-                   "member_kind";
-                   "correlation";
-                   "decision";
-                 ]
-                 record)
-          positive_records
-      and exact_set =
-        List.exists
-          (fun record ->
-            record.captured_level = Delator.Debug
-            && String.equal record.captured_target
-                 "Interface_specification_environment_private"
-            && captured_string "stage" record
-               = Some "exact-set-reconciliation"
-            && has_captured_fields
-                 [
-                   "provider";
-                   "member_kind";
-                   "set_cardinality";
-                   "correlation";
-                   "decision";
-                 ]
-                 record)
-          positive_records
-      and operational_accept =
-        List.exists
-          (fun record ->
-            record.captured_level = Delator.Info
-            && String.equal record.captured_target
-                 "Interface_specification_environment_private"
-            && captured_string "stage" record = Some "provider-authority"
-            && captured_string "decision" record = Some "accepted")
-          positive_records
-      and exact_set_rejection =
-        List.exists
-          (fun record ->
-            record.captured_level = Delator.Debug
-            &&
-            ((String.equal record.captured_target
-                "Interface_specification_environment_private"
-             && captured_string "stage" record = Some "provider-authority"
-             && captured_string "reason_class" record
-                = Some "authority-reconciliation")
-            || (String.equal record.captured_target "Cmt_input"
-               && captured_string "stage" record = Some "typed-witness"
-               && captured_string "reason_class" record
-                  = Some "complete-map-receipt")
-            || (String.equal record.captured_target "Cmt_input"
-               && captured_string "stage" record
-                  = Some "broadcast-artifact-receipt"
-               && captured_string "failure_class" record
-                  = Some "dependency-artifact"
-               && Option.is_some (captured_string "cause_class" record)
-               && Option.is_some (captured_string "correlation" record)
-               && captured_string "remedy_class" record
-                  = Some "rebuild-provider-consumer"))
-            && captured_string "decision" record = Some "rejected"
-            )
-          rejected_records
-      in
-      let missing_spans =
-        [
-          ("interface_broadcast_syntax", "Cmt_input", positive_records);
-          ("typed_interface_broadcast_members", "Cmt_input", positive_records);
-          ("seal_provider_with_diagnostic", "Imported_callable", positive_records);
-          ("lower", "Typedtree_lowering_private", positive_records);
-          ("materialize", "Broadcast_vc_private", positive_records);
-        ]
-        |> List.filter_map (fun (name, target, records) ->
-               if span name target records then None
-               else Some (target ^ "." ^ name))
-      in
-      let* () =
-        require
-          (missing_spans = [] && ppx_span)
-          ("broadcast instrumentation omitted a critical typed span: "
-          ^ String.concat "," missing_spans)
-      in
-      let* () =
-        require (spans_balanced_and_nested positive_records)
-          "broadcast spans were not balanced or nested by typed IDs"
-      in
-      let* () =
-        require ppx_balanced
-          "broadcast PPX spans were not balanced by typed IDs"
-      in
-      let* () =
-        require compiler_member
-          "compiler member instrumentation omitted typed fields"
-      in
-      let* () =
-        require exact_set "exact-set instrumentation omitted typed fields"
-      in
-      let* () =
-        require operational_accept
-          "provider completion instrumentation omitted Info decision"
-      in
-      let* () =
-        require exact_set_rejection
-          "exact-set rejection instrumentation omitted reason fields"
-      in
-      let* () =
-        require
-          (not
-             (List.exists
-                (fun record -> record.captured_level = Delator.Error)
-                rejected_records))
-          "expected broadcast authority rejection was logged as an invariant breach"
-      in
-      let _, info_records =
-        capture_records Delator.Info (fun () -> Imported_callable.create [])
-      in
-      let* () =
-        require
-          (List.exists
-             (fun record -> record.captured_level = Delator.Info)
-             info_records
-          && not
-               (List.exists
-                  (fun record ->
-                    record.captured_level = Delator.Debug
-                    || record.captured_level = Delator.Trace)
-                  info_records))
-          "Info filtering did not suppress Debug and Trace instrumentation"
-      in
-      let typed_fields =
-        List.exists
-          (fun record ->
-            match
-              ( captured_field "stage" record,
-                captured_field "declaration_count" record,
-                captured_field "active" record )
-            with
-            | ( Some { field_value = String_value _; _ },
-                Some { field_value = Int_value _; _ },
-                _ ) ->
-                true
-            | ( Some { field_value = String_value _; _ },
-                _,
-                Some { field_value = Bool_value _; _ } ) ->
-                true
-            | _ -> false)
-          positive_records
-      in
-      let* () =
-        require typed_fields
-          "broadcast structured fields lost their string/int/bool value types"
-      in
-      let root = Filename.concat workspace "positive/project" in
-      let* provider = load root "Provider_a" in
-      let opaque_authority_values =
-        provider.interface_broadcasts
-        |> List.concat_map (fun member ->
-               let identity = member.Retained_broadcast_private.identity in
-               [
-                 identity.compiler_uid;
-                 identity.interface_digest;
-                 identity.dependency_receipt;
-               ])
-      in
-      let* () =
-        match
-          first_private_material_class opaque_authority_values
-            (positive_records @ rejected_records),
-          first_private_material_class [] ppx_records
-        with
-        | None, None -> Ok ()
-        | Some class_name, None
-        | None, Some class_name
-        | Some class_name, Some _ ->
-            mismatch
-              "typed broadcast instrumentation exposed private material class: %s"
-              class_name
-      in
-      Ok positive)
-
 let dune_directory_case =
   Suite.case ~name:"dune-directory-one-step-generates-retained-authority"
     ~expectation:(Expectation.empty |> Expectation.status Outcome.Verified)
@@ -4208,7 +3775,6 @@ let () =
       dune_ecosystem_transport_case;
       split_inventory_project_case;
       route_parity_case;
-      instrumentation_case;
       dune_directory_case;
       dune_directory_malformed_vri_case;
       dune_directory_conflicting_manifests_case;

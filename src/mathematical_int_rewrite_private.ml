@@ -272,7 +272,7 @@ let constant_value_with config expression =
 let immediate_constant_value expression =
   match (expression.Sst.typ, expression.expression_desc) with
   | Sst.Mathematical_int, Sst.Int_constant value -> Some value
-  | ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
     | Sst.Aggregate _ | Sst.Parameter _ | Sst.Application _ ), _ ->
       None
 
@@ -384,7 +384,7 @@ let is_obviously_pure_total_with_fuel config remaining root =
       | None ->
           (match node.Sst.expression_desc with
           | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
-          | Sst.Variable _ ->
+          | Sst.Variable _ | Sst.Logical_constant_reference _ ->
               true
           | Sst.Tuple_value values ->
               List.for_all (fun (_, value) -> visit value) values
@@ -396,7 +396,7 @@ let is_obviously_pure_total_with_fuel config remaining root =
               node.typ = Sst.Mathematical_int
               && (match (operand.Sst.typ, operand.expression_desc) with
               | Sst.Int, (Sst.Int_constant _ | Sst.Variable _) -> true
-              | ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+              | ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
                 | Sst.Tuple _ | Sst.Aggregate _ | Sst.Parameter _
                 | Sst.Application _ ), _ ->
                   false)
@@ -446,7 +446,9 @@ let is_obviously_pure_total_with_fuel config remaining root =
           | Sst.Optional_absent -> true
           | Sst.Optional_present payload | Sst.Optional_forward payload ->
               visit payload
-          | ( Sst.Field_read _ | Sst.Field_write _
+          | ( Sst.Bv_literal _ | Sst.Bv_int_to_bv_mod _
+            | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+            | Sst.Bv_binary _ | Sst.Bv_compare _ | Sst.Field_read _ | Sst.Field_write _
             | Sst.Shared_scalar_field_write _ | Sst.Owned_tree_nested_write _
             | Sst.Owned_tree_rebase _ | Sst.Let_mutable _ | Sst.Mutable_read _
             | Sst.Mutable_write _ | Sst.Let _ | Sst.Sequence _ | Sst.Match _
@@ -469,13 +471,13 @@ let is_obviously_obligation_free config root =
       remaining := !remaining - 1;
       match expression.Sst.expression_desc with
       | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
-      | Sst.Variable _ ->
+      | Sst.Variable _ | Sst.Logical_constant_reference _ ->
           true
       | Sst.Lift_runtime_int operand ->
           expression.typ = Sst.Mathematical_int
           && (match (operand.Sst.typ, operand.expression_desc) with
              | Sst.Int, (Sst.Int_constant _ | Sst.Variable _) -> true
-             | ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+             | ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
                | Sst.Tuple _ | Sst.Aggregate _ | Sst.Parameter _
                | Sst.Application _ ), _ ->
                  false)
@@ -501,7 +503,9 @@ let is_obviously_obligation_free config root =
       | Sst.Optional_absent -> true
       | Sst.Optional_present payload | Sst.Optional_forward payload ->
           visit payload
-      | ( Sst.Field_read _ | Sst.Field_write _
+      | ( Sst.Bv_literal _ | Sst.Bv_int_to_bv_mod _
+            | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+            | Sst.Bv_binary _ | Sst.Bv_compare _ | Sst.Field_read _ | Sst.Field_write _
         | Sst.Shared_scalar_field_write _ | Sst.Owned_tree_nested_write _
         | Sst.Owned_tree_rebase _ | Sst.Let_mutable _ | Sst.Mutable_read _
         | Sst.Mutable_write _ | Sst.Let _ | Sst.Sequence _ | Sst.If _
@@ -627,12 +631,13 @@ let ring_atom_policy_with_fuel config remaining root =
             }
       | None ->
           (match expression.expression_desc with
-          | Sst.Variable _ -> Some { cost = Cheap_atom; must_preserve = false }
+          | Sst.Variable _ | Sst.Logical_constant_reference _ ->
+              Some { cost = Cheap_atom; must_preserve = false }
           | Sst.Lift_runtime_int operand ->
               (match (operand.Sst.typ, operand.expression_desc) with
               | Sst.Int, (Sst.Int_constant _ | Sst.Variable _) ->
                   Some { cost = Cheap_atom; must_preserve = false }
-              | ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+              | ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
                 | Sst.Tuple _ | Sst.Aggregate _ | Sst.Parameter _
                 | Sst.Application _ ), _ ->
                   None)
@@ -647,7 +652,9 @@ let ring_atom_policy_with_fuel config remaining root =
                  && is_obviously_pure_total_with_fuel config remaining
                       expression ->
               Some { cost = Heavy_atom; must_preserve = true }
-          | ( Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
+          | ( Sst.Bv_literal _ | Sst.Bv_int_to_bv_mod _
+      | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+      | Sst.Bv_binary _ | Sst.Bv_compare _ | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
             | Sst.Tuple_value _ | Sst.Record_value _ | Sst.Constructor_value _
             | Sst.Field_read _ | Sst.Field_write _
             | Sst.Shared_scalar_field_write _ | Sst.Owned_tree_nested_write _
@@ -718,7 +725,7 @@ let fold_constant_arithmetic_with (config [@delator.skip])
             ~rewrite_class:(Delator.Field.string "constant-fold")
             ~decision:(Delator.Field.string "rewritten")];
           Some (Sst.Int_constant value))
-  | ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
     | Sst.Aggregate _ | Sst.Parameter _ | Sst.Application _ ), _ ->
       None
 [@@delator.instrument] [@@delator.level debug] [@@delator.no_exn_log]
@@ -756,7 +763,7 @@ let fold_bottom_up_constant_arithmetic_with (config [@delator.skip])
             ~rewrite_class:(Delator.Field.string "constant-fold")
             ~decision:(Delator.Field.string "rewritten")];
           Some (Sst.Int_constant value))
-  | ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
     | Sst.Aggregate _ | Sst.Parameter _ | Sst.Application _ ), _ ->
       None
 [@@delator.instrument] [@@delator.level debug] [@@delator.no_exn_log]
@@ -793,7 +800,7 @@ let normalize_constant_multiplication (expression [@delator.skip]) =
         ~rewrite_class:(Delator.Field.string "constant-scale")
         ~decision:(Delator.Field.string "rewritten")];
       Some (Sst.Checked_arithmetic (Sst.Multiply_constant value, [ operand ]))
-  | ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
     | Sst.Aggregate _ | Sst.Parameter _ | Sst.Application _ ), _ ->
       None
 [@@delator.instrument] [@@delator.level debug] [@@delator.no_exn_log]
@@ -963,7 +970,9 @@ let simplify_arithmetic_identities_with config
           (fun coefficient ->
             replacement
               (coefficient_desc config coefficient absolute_operand))
-    | ( Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
+    | ( Sst.Bv_literal _ | Sst.Bv_int_to_bv_mod _
+      | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+      | Sst.Bv_binary _ | Sst.Bv_compare _ | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
       | Sst.Variable _ | Sst.Tuple_value _ | Sst.Record_value _
       | Sst.Constructor_value _ | Sst.Field_read _ | Sst.Field_write _
       | Sst.Shared_scalar_field_write _ | Sst.Owned_tree_nested_write _
@@ -973,6 +982,7 @@ let simplify_arithmetic_identities_with config
       | Sst.Compare _ | Sst.Boolean_not _ | Sst.Boolean_binary _
       | Sst.Forall _ | Sst.Exists _ | Sst.Direct_call _
       | Sst.Symbolic_application _ | Sst.Callback_call _
+      | Sst.Logical_constant_reference _
       | Sst.Callback_requires _ | Sst.Callback_ensures _
       | Sst.Optional_absent | Sst.Optional_present _ | Sst.Optional_forward _
       | Sst.Reveal _ | Sst.Reveal_with_fuel _ | Sst.Use_type_invariant _
@@ -1530,7 +1540,8 @@ module Ring = struct
             ~decision:(Delator.Field.string "preserved-original")];
           None)
     | ( (Ring_reduce_only | Ring_canonicalize_bounded),
-        ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ | Sst.Aggregate _
+        ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Bit_vector _ | Sst.Tuple _
+        | Sst.Aggregate _
         | Sst.Parameter _ | Sst.Application _ ),
         _ )
     | ( (Ring_reduce_only | Ring_canonicalize_bounded),
@@ -1541,9 +1552,13 @@ module Ring = struct
         | Sst.Shared_scalar_field_write _ | Sst.Owned_tree_nested_write _
         | Sst.Owned_tree_rebase _ | Sst.Let_mutable _ | Sst.Mutable_read _
         | Sst.Mutable_write _ | Sst.Let _ | Sst.Sequence _ | Sst.If _
-        | Sst.Match _ | Sst.Lift_runtime_int _ | Sst.Compare _
+        | Sst.Match _ | Sst.Lift_runtime_int _ | Sst.Bv_literal _
+        | Sst.Bv_int_to_bv_mod _ | Sst.Bv_to_int_unsigned _
+        | Sst.Bv_to_int_signed _ | Sst.Bv_not _ | Sst.Bv_binary _
+        | Sst.Bv_compare _ | Sst.Compare _
         | Sst.Boolean_not _ | Sst.Boolean_binary _ | Sst.Forall _
         | Sst.Exists _ | Sst.Direct_call _ | Sst.Symbolic_application _
+        | Sst.Logical_constant_reference _
         | Sst.Callback_call _ | Sst.Callback_requires _
         | Sst.Callback_ensures _ | Sst.Optional_absent
         | Sst.Optional_present _ | Sst.Optional_forward _ | Sst.Reveal _
@@ -1718,7 +1733,7 @@ module Ring = struct
           None)
     | ( (Ring_reduce_only | Ring_canonicalize_bounded),
         true,
-        ( Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+        ( Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
         | Sst.Aggregate _ | Sst.Parameter _ | Sst.Application _ ),
         _ )
     | ( (Ring_reduce_only | Ring_canonicalize_bounded),
@@ -1730,10 +1745,14 @@ module Ring = struct
         | Sst.Shared_scalar_field_write _ | Sst.Owned_tree_nested_write _
         | Sst.Owned_tree_rebase _ | Sst.Let_mutable _ | Sst.Mutable_read _
         | Sst.Mutable_write _ | Sst.Let _ | Sst.Sequence _ | Sst.If _
-        | Sst.Match _ | Sst.Lift_runtime_int _ | Sst.Checked_arithmetic _
+        | Sst.Match _ | Sst.Lift_runtime_int _ | Sst.Bv_literal _
+        | Sst.Bv_int_to_bv_mod _ | Sst.Bv_to_int_unsigned _
+        | Sst.Bv_to_int_signed _ | Sst.Bv_not _ | Sst.Bv_binary _
+        | Sst.Bv_compare _ | Sst.Checked_arithmetic _
         | Sst.Compare _ | Sst.Boolean_not _ | Sst.Boolean_binary _
         | Sst.Forall _ | Sst.Exists _ | Sst.Direct_call _
         | Sst.Symbolic_application _ | Sst.Callback_call _
+        | Sst.Logical_constant_reference _
         | Sst.Callback_requires _ | Sst.Callback_ensures _
         | Sst.Optional_absent | Sst.Optional_present _ | Sst.Optional_forward _
         | Sst.Reveal _ | Sst.Reveal_with_fuel _ | Sst.Use_type_invariant _
@@ -1756,7 +1775,7 @@ let fold_constant_comparison_with _config (expression [@delator.skip]) =
             (fun right ->
               Sst.Bool_constant (Ring.comparison_result comparison left right))
             (immediate_constant_value right))
-  | ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
     | Sst.Aggregate _ | Sst.Parameter _ | Sst.Application _ ), _ ->
       None
 

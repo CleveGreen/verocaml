@@ -24,7 +24,7 @@ type kind = Record of field list | Variant of constructor list
 
 type t
 
-type scalar_kind = Scalar_bool | Scalar_int
+type scalar_kind = Scalar_bool | Scalar_int | Scalar_bv of Bv_width.t
 
 type option_instance = {
   option_descriptor : t;

@@ -60,6 +60,10 @@ let rec classify_calls_with classify_form stage (expression : Sst.expression) =
         Sst.Checked_arithmetic (operation, List.map recurse operands)
     | Sst.Compare (comparison, left, right) ->
         Sst.Compare (comparison, recurse left, recurse right)
+    | Sst.Bv_binary (operation, left, right) ->
+        Sst.Bv_binary (operation, recurse left, recurse right)
+    | Sst.Bv_compare (operation, left, right) ->
+        Sst.Bv_compare (operation, recurse left, recurse right)
     | Sst.Boolean_not operand -> Sst.Boolean_not (recurse operand)
     | Sst.Boolean_binary (operation, left, right) ->
         Sst.Boolean_binary (operation, recurse left, recurse right)
@@ -75,6 +79,9 @@ let rec classify_calls_with classify_form stage (expression : Sst.expression) =
         | Sst.Forall _ -> Sst.Forall quantifier
         | Sst.Exists _ -> Sst.Exists quantifier
         | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
+        | Sst.Bv_literal _ | Sst.Bv_int_to_bv_mod _
+        | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+        | Sst.Bv_binary _ | Sst.Bv_compare _
         | Sst.Variable _ | Sst.Tuple_value _ | Sst.Record_value _
         | Sst.Constructor_value _ | Sst.Field_read _ | Sst.Field_write _
         | Sst.Shared_scalar_field_write _ | Sst.Owned_tree_nested_write _
@@ -82,7 +89,7 @@ let rec classify_calls_with classify_form stage (expression : Sst.expression) =
         | Sst.Mutable_write _ | Sst.Let _ | Sst.Sequence _ | Sst.If _
         | Sst.Match _ | Sst.Checked_arithmetic _ | Sst.Compare _
         | Sst.Boolean_not _ | Sst.Boolean_binary _ | Sst.Direct_call _
-        | Sst.Symbolic_application _
+        | Sst.Symbolic_application _ | Sst.Logical_constant_reference _
         | Sst.Callback_call _ | Sst.Callback_requires _
         | Sst.Callback_ensures _ | Sst.Optional_absent
         | Sst.Optional_present _ | Sst.Optional_forward _ | Sst.Reveal _
@@ -106,6 +113,7 @@ let rec classify_calls_with classify_form stage (expression : Sst.expression) =
     | Sst.Symbolic_application application ->
         Sst.Symbolic_application
           (Symbolic_application_private.map_arguments recurse application)
+    | Sst.Logical_constant_reference _ as reference -> reference
     | Sst.Callback_call application ->
         Sst.Callback_call
           { application with
@@ -140,7 +148,13 @@ let rec classify_calls_with classify_form stage (expression : Sst.expression) =
     | Sst.Optional_present payload -> Sst.Optional_present (recurse payload)
     | Sst.Optional_forward payload -> Sst.Optional_forward (recurse payload)
     | Sst.Lift_runtime_int operand -> Sst.Lift_runtime_int (recurse operand)
+    | Sst.Bv_int_to_bv_mod conversion ->
+        Sst.Bv_int_to_bv_mod { conversion with input = recurse conversion.input }
+    | Sst.Bv_to_int_unsigned operand -> Sst.Bv_to_int_unsigned (recurse operand)
+    | Sst.Bv_to_int_signed operand -> Sst.Bv_to_int_signed (recurse operand)
+    | Sst.Bv_not operand -> Sst.Bv_not (recurse operand)
     | (Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
+      | Sst.Bv_literal _
       | Sst.Variable _ | Sst.Mutable_read _) as desc ->
         desc
   in
@@ -153,6 +167,16 @@ let classify_calls stage =
       | Sst.Runtime -> Sst.Exec_call
       | Sst.Logical | Sst.Proof_stage -> Sst.Unclassified_call)
     stage
+
+let classify_expression ~callee_mode stage expression =
+  classify_calls_with
+    (fun call_form callee ->
+      match (call_form, callee_mode callee) with
+      | Sst.Unclassified_call, Some Sst.Spec -> Sst.Specification_call
+      | Sst.Unclassified_call, Some Sst.Proof -> Sst.Proof_call
+      | Sst.Unclassified_call, Some Sst.Exec -> Sst.Exec_call
+      | call_form, _ -> call_form)
+    stage expression
 
 let make ~provenance ~function_id ~recursive ~parameters ~contracts ~body
     ~result_type ~returns_unique_parameter ~span =

@@ -1,10 +1,14 @@
 open Interface_specification_environment_private
 open Interface_specification_candidate_private
 
+let ( let* ) = Result.bind
+
 type error = Interface_specification_environment_private.error
 
 type result = {
   driver : Verification_driver_private.report;
+  numeric_registry : Numeric_ghost_registry_private.t option;
+  numeric_target_sets : Numeric_required_target_set_private.t list;
   provenance :
     (string * string * (string * string) list * (string * string) list) list;
 }
@@ -296,7 +300,7 @@ let snapshot_models surface validated callables =
   let models = List.filter_map model_descriptor descriptors in
   if List.length models = List.length public_descriptors then Some models else None
 
-let snapshot_callables_and_models ~unit_name surface validated descriptors =
+let snapshot_callables_and_models ~unit_name ~imported_specification_call surface validated descriptors =
   let exported =
     List.filter
       (fun descriptor ->
@@ -305,7 +309,7 @@ let snapshot_callables_and_models ~unit_name surface validated descriptors =
   in
   match
     List.find_opt
-      (fun descriptor -> not (public_callable_descriptor surface descriptor))
+      (fun descriptor -> not (public_callable_descriptor ~imported_specification_call surface descriptor))
       exported
   with
   | Some descriptor ->
@@ -331,6 +335,214 @@ let snapshot_external_specifications validated descriptors =
          | Sst.Trusted_external_body _ | Sst.Symbolic_declaration _ ->
              false)
   |> List.map (snapshot_callable validated)
+
+let snapshot_logical_constants ~unit_name ~candidate surface validated =
+  let program = Sst_validation.program validated in
+  let full_path relative = unit_name ^ "." ^ relative in
+  let provider_interface =
+    Option.value ~default:"" candidate.Cmt_input.interface_digest
+  in
+  let defined_candidates relative
+      (receipt : Retained_interface_authority_private.logical_value) =
+    program.Sst.logical_constants
+    |> List.filter (fun definition ->
+           let origin = definition.Sst.constant_id.constant_origin in
+           (String.equal origin.canonical_path relative
+           || String.equal origin.canonical_path (full_path relative))
+           && String.equal origin.provider_unit unit_name
+           && String.equal origin.provider_interface provider_interface
+           && Cmt_input.interface_value_uid_correlates candidate
+                ~path:(full_path relative)
+                ~interface_uid:receipt.Retained_interface_authority_private.logical_value_uid
+                ~implementation_uid:origin.value_uid)
+  in
+  let symbolic_candidates relative
+      (receipt : Retained_interface_authority_private.logical_value) =
+    program.Sst.functions
+    |> List.filter_map (fun definition ->
+           match definition.Sst.body with
+           | Sst.Symbolic_declaration declaration
+             when definition.parameters = []
+                  && (String.equal
+                        (Symbolic_application_private.canonical_path declaration)
+                        relative
+                     || String.equal
+                          (Symbolic_application_private.canonical_path declaration)
+                          (full_path relative))
+                  && Cmt_input.interface_value_uid_correlates candidate
+                       ~path:(full_path relative)
+                       ~interface_uid:receipt.logical_value_uid
+                       ~implementation_uid:
+                         (Symbolic_application_private.value_uid declaration) ->
+               Some (definition, declaration)
+           | Sst.Symbolic_declaration _ | Sst.Checked_exec _
+           | Sst.Spec_definition _ | Sst.Recursive_spec_definition _
+           | Sst.Proof_body _ | Sst.External_specification _
+           | Sst.Trusted_external_spec_target _ | Sst.Trusted_external_body _ ->
+               None)
+  in
+  let rec collect constants = function
+    | [] -> Ok (List.rev constants)
+    | (relative,
+       (receipt : Retained_interface_authority_private.logical_value))
+      :: rest -> (
+        match receipt.Retained_interface_authority_private.logical_value_class with
+        | Defined_value -> (
+            match defined_candidates relative receipt with
+            | [ definition ] ->
+                let* expected_abi =
+                  Logical_constant_private.interface_abi
+                    ~path:(full_path relative)
+                    ~uid:receipt.logical_value_uid definition
+                  |> Result.map_error (fun message ->
+                         { unit_name = Some unit_name; message })
+                in
+                let* () =
+                  if
+                    String.equal expected_abi receipt.logical_value_typed_abi
+                    && not
+                         (String.equal
+                            definition.constant_id.constant_origin.semantic_class
+                            "symbolic-origin-v1")
+                  then Ok ()
+                  else
+                    error ~unit_name
+                      (Printf.sprintf
+                         "public logical constant %s ABI or semantic class differs from its completed descriptor"
+                         relative)
+                in
+                let logical_constant =
+                  match receipt.logical_value_visibility with
+                  | Defined_opaque ->
+                      { definition with
+                        Sst.constant_provenance = Opaque_defined_identity;
+                        constant_equation = None }
+                  | Defined_revealed -> definition
+                  | Symbolic_opaque -> assert false
+                in
+                let* ( logical_constant_dependency_closure,
+                       logical_constant_trust_dependencies ) =
+                  match receipt.logical_value_visibility with
+                  | Defined_opaque ->
+                      Ok
+                        ( Digest.to_hex
+                            (Digest.string
+                               ("opaque-logical-value-v1:"
+                               ^ definition.constant_descriptor_digest)),
+                          [] )
+                  | Defined_revealed ->
+                      let closure_program =
+                        {
+                          program with
+                          Sst.functions =
+                            Sst_validation.callable_descriptors validated
+                            |> List.map Sst_validation.callable_definition;
+                        }
+                      in
+                      Logical_constant_private.dependency_closure
+                        ~program:closure_program definition
+                      |> Result.map_error (fun message ->
+                             { unit_name = Some unit_name; message })
+                  | Symbolic_opaque -> assert false
+                in
+                collect
+                  (Public_defined_logical_value
+                     { logical_constant;
+                       logical_constant_path = full_path relative;
+                       logical_constant_uid = receipt.logical_value_uid;
+                       logical_constant_dependency_closure;
+                       logical_constant_trust_dependencies }
+                  :: constants)
+                  rest
+            | [] ->
+                error ~unit_name
+                  (Printf.sprintf
+                     "public logical constant %s has no exact completed descriptor"
+                     relative)
+            | _ :: _ :: _ ->
+                error ~unit_name
+                  (Printf.sprintf
+                     "public logical constant %s has multiple completed descriptors"
+                     relative))
+        | Symbolic_value -> (
+            match symbolic_candidates relative receipt with
+            | [ (definition, declaration) ] ->
+                    let* expected_abi =
+                      Symbolic_application_private.declaration_abi_material
+                        ~canonical_path:(full_path relative)
+                        ~value_uid:receipt.logical_value_uid
+                        ~type_binders:
+                          (Symbolic_application_private.type_binders declaration)
+                        ~parameter_labels:[] ~parameter_types:[]
+                        ~result_type:
+                          (Symbolic_application_private.declaration_result_type
+                             declaration)
+                      |> Result.map_error (fun message ->
+                             { unit_name = Some unit_name; message })
+                    in
+                    let* () =
+                      if
+                        String.equal expected_abi
+                          receipt.logical_value_typed_abi
+                      then Ok ()
+                      else
+                        error ~unit_name
+                          (Printf.sprintf
+                             "public symbolic value %s marker or ABI differs from its completed descriptor"
+                             relative)
+                    in
+                    [%log.debug "retained VERO-115 symbolic value identity path"
+                      ~provider:(Delator.Field.string unit_name)
+                      ~stage:(Delator.Field.string "public-interface-seal")
+                      ~route:(Delator.Field.string (full_path relative))
+                      ~decision:(Delator.Field.string "symbolic-registry")];
+                    let descriptors =
+                      Sst_validation.callable_descriptors validated
+                    in
+                    let descriptor =
+                      List.find
+                        (fun descriptor ->
+                          Sst_validation.callable_id descriptor
+                          = definition.Sst.function_id)
+                        descriptors
+                    in
+                    collect
+                      (Public_symbolic_logical_value
+                         { symbolic_callable =
+                             snapshot_callable validated descriptor;
+                           logical_constant_path = full_path relative;
+                           logical_constant_uid = receipt.logical_value_uid }
+                      :: constants)
+                      rest
+            | [] ->
+                error ~unit_name
+                  (Printf.sprintf
+                     "public symbolic value %s has no exact completed descriptor"
+                     relative)
+            | _ :: _ :: _ ->
+                error ~unit_name
+                  (Printf.sprintf
+                     "public symbolic value %s has multiple completed descriptors"
+                     relative)))
+  in
+  let result = collect [] surface.public_logical_values in
+  (match result with
+  | Ok (constants [@log_value.info]) ->
+      [%log.info "completed logical-value semantic partition"
+        ~provider:(Delator.Field.string unit_name)
+        ~stage:(Delator.Field.string "public-interface-seal")
+        ~constant_count:
+          (Delator.Field.int
+             (List.length (constants [@log_value.info])))
+        ~decision:(Delator.Field.string "accepted")]
+  | Error _ ->
+      [%log.warn "rejected logical-value semantic partition"
+        ~provider:(Delator.Field.string unit_name)
+        ~stage:(Delator.Field.string "public-interface-seal")
+        ~decision:(Delator.Field.string "rejected")
+        ~reason_class:(Delator.Field.string "descriptor-cardinality-or-class")]);
+  result
+[@@delator.instrument] [@@delator.level debug]
 
 let snapshot_invariants ~unit_name surface validated =
   match Type_invariant.authenticate validated with
@@ -368,7 +580,7 @@ let snapshot_invariants ~unit_name surface validated =
                })
         |> Result.ok
 
-let verified_snapshot ~unit_name ~candidate validated =
+let verified_snapshot_with_calls ~imported_specification_call ~unit_name ~candidate validated =
   match embedded_public_surface ~unit_name candidate with
   | Error _ as error -> error
   | Ok surface ->
@@ -392,6 +604,9 @@ let verified_snapshot ~unit_name ~candidate validated =
       in
       let callable_descriptors = Sst_validation.callable_descriptors validated in
       Result.bind
+        (snapshot_logical_constants ~unit_name ~candidate surface validated)
+        (fun logical_constants ->
+      Result.bind
         (validate_surface_completeness ~unit_name surface public_linked_types
            callable_descriptors)
         (fun () ->
@@ -399,7 +614,7 @@ let verified_snapshot ~unit_name ~candidate validated =
             (snapshot_types ~unit_name surface validated public_linked_types)
             (fun types ->
               Result.bind
-                (snapshot_callables_and_models ~unit_name surface validated
+                (snapshot_callables_and_models ~unit_name ~imported_specification_call surface validated
                    callable_descriptors)
                 (fun (callables, models) ->
                   let external_specifications =
@@ -409,11 +624,31 @@ let verified_snapshot ~unit_name ~candidate validated =
                   Result.map
                     (fun invariants ->
                       ( types,
+                        logical_constants,
                         callables,
                         external_specifications,
                         models,
                         invariants ))
-                    (snapshot_invariants ~unit_name surface validated))))
+                    (snapshot_invariants ~unit_name surface validated)))))
+
+let verified_snapshot ?imported ~unit_name ~candidate validated =
+  match imported with
+  | None -> verified_snapshot_with_calls ~imported_specification_call:(fun _ -> false) ~unit_name ~candidate validated
+  | Some imported ->
+      (match Imported_callable.seal_calls imported ~implementation:candidate ~program:(Sst_validation.program validated) with
+      | Error message -> error ~unit_name message
+      | Ok registration -> Fun.protect ~finally:(fun () -> Imported_callable.invalidate_registration registration) (fun () ->
+          let imported_specification_call expression =
+            let accepted=match expression.Sst.expression_desc, Imported_callable.find_call registration expression with
+              | Direct_call {call_form=Specification_call;recursive=false;_}, Some call ->
+                  (Imported_callable.call_summary call).definition.mode=Sst.Spec
+              | _ -> false in
+            [%log.trace "validated imported specification reference in public contract"
+              ~provider:(Delator.Field.string unit_name)
+              ~accepted:(Delator.Field.bool accepted)
+              ~reexported_callable:(Delator.Field.bool false)];
+            accepted in
+          verified_snapshot_with_calls ~imported_specification_call ~unit_name ~candidate validated))
 
 type safe_verification_failure = {
   failure_class : string;
@@ -443,6 +678,11 @@ let classify_verification_failure ~authenticated_candidate = function
              (validation_detail [@log_value.debug]))
         ~decision:(Delator.Field.string "frontend-diagnostic")];
       Frontend_failure (Sst_validation.to_diagnostic validation_error)
+  | Provider_surface_error message ->
+      Dependency_failure
+        (safe_failure ~failure_class:"provider-interface-completion"
+           ~remedy_class:"rebuild-provider-interface"
+           message)
   | Invariant_error _ ->
       Dependency_failure
         (safe_failure ~failure_class:"invariant-authentication"
@@ -536,7 +776,15 @@ let route_verification_failure ~unit_name ~authenticated_candidate failure =
 
 let provider_verification_entries = ref 0
 
-let verify_candidate_internal ?imported ?external_specifications ~solver_policy
+let validate_provider_logical_value_surface ~unit_name candidate validated =
+  match embedded_public_surface ~unit_name candidate with
+  | Error (failure : error) -> Error failure.message
+  | Ok surface ->
+      snapshot_logical_constants ~unit_name ~candidate surface validated
+      |> Result.map (fun _ -> ())
+      |> Result.map_error (fun (failure : error) -> failure.message)
+
+let verify_candidate_internal ?imported ?external_specifications ?(numeric_prerequisites=[]) ~solver_policy
     candidate =
   incr provider_verification_entries;
   let unit_name = candidate.Cmt_input.unit_name in
@@ -545,6 +793,8 @@ let verify_candidate_internal ?imported ?external_specifications ~solver_policy
     Verification_driver_private.run_with_policy ~solver_policy
       ~allow_imported_opens:true
       ~allow_public_parametric_signatures:candidate.explicit_interface
+      ~validate_provider_surface:
+        (validate_provider_logical_value_surface ~unit_name candidate)
       ?imported ?external_specifications candidate
   with
   | Error failure ->
@@ -552,6 +802,17 @@ let verify_candidate_internal ?imported ?external_specifications ~solver_policy
   | Ok report ->
       let validated = Verification_driver_private.validated report in
       let program = Sst_validation.program validated in
+      let* numeric_semantics =
+        if candidate.interface_numeric_claims.numeric_roles = [] then Ok []
+        else
+          match Verification_driver_private.verified_completion report with
+          | None -> reject "Numeric semantics require successful verification of their provider."
+          | Some completion -> (
+              match Numeric_semantics_binding_private.complete_local ~completion
+                ~implementation:candidate ~validated with
+              | Ok bindings -> Ok bindings
+              | Error message -> reject message)
+      in
       let unsupported_external_specification_trust =
         List.exists
           (fun definition ->
@@ -568,6 +829,15 @@ let verify_candidate_internal ?imported ?external_specifications ~solver_policy
                 false)
           program.functions
       in
+      let* numeric_provider = match Verification_driver_private.verified_completion report with
+        | None -> reject "retained provider lacks private-driver completion"
+        | Some completion ->
+            (match (match imported with
+              | Some imported -> Numeric_provider_private.complete_with_imports ~completion ~implementation:candidate ~validated
+                  ~imported ~prerequisites:numeric_prerequisites ~declarations:numeric_semantics
+              | None -> Numeric_provider_private.complete ~completion ~implementation:candidate ~validated
+                  ~dependencies:[] ~declarations:numeric_semantics) with
+              | Ok provider -> Ok provider | Error message -> reject message) in
       let trusted_broadcasts =
         candidate.Cmt_input.interface_broadcasts
         |> List.filter_map (fun member ->
@@ -589,7 +859,12 @@ let verify_candidate_internal ?imported ?external_specifications ~solver_policy
             | Sst.Trusted_external_body _ ->
                 not
                   (List.mem definition.function_id.function_name
-                     trusted_broadcasts)
+                     trusted_broadcasts
+                  || Numeric_semantics_binding_private.selects_explicit_axiom
+                       numeric_semantics definition
+                  || List.exists (fun (refinement : Numeric_runtime_refinement_private.t) ->
+                       refinement.executable == definition
+                       && refinement.authority = Explicit_external_body) numeric_provider.refinements)
             | Sst.Checked_exec _ | Sst.Spec_definition _ | Sst.Proof_body _
             | Sst.Recursive_spec_definition _ | Sst.External_specification _
             | Sst.Trusted_external_spec_target _ | Sst.Symbolic_declaration _ ->
@@ -603,13 +878,15 @@ let verify_candidate_internal ?imported ?external_specifications ~solver_policy
         match Verification_driver_private.verified_completion report with
         | None -> reject "retained provider lacks private-driver completion"
         | Some completion -> (
-            match verified_snapshot ~unit_name ~candidate validated with
+            match verified_snapshot ?imported ~unit_name ~candidate validated with
             | Error _ as error -> error
-            | Ok (types, callables, external_specifications, models, invariants) ->
+            | Ok (types, logical_constants, callables, external_specifications, models, invariants) ->
                 [%log.debug "verified dependency provider"
                   ~unit_name
                   ~types:(Delator.Field.int (List.length types))
                   ~callables:(Delator.Field.int (List.length callables))
+                  ~logical_constants:
+                    (Delator.Field.int (List.length logical_constants))
                   ~external_specifications:
                     (Delator.Field.int (List.length external_specifications))
                   ~models:(Delator.Field.int (List.length models))
@@ -617,22 +894,24 @@ let verify_candidate_internal ?imported ?external_specifications ~solver_policy
                 Ok
                   ( validated,
                     types,
+                    logical_constants,
                     callables,
                     external_specifications,
                     models,
                     invariants,
-                    completion ))
+                    completion,
+                    numeric_provider ))
 [@@delator.instrument] [@@delator.level debug]
 
-let verify_candidate ?imported ?external_specifications
+let verify_candidate ?imported ?external_specifications ?numeric_prerequisites
     ~solver_policy:(solver_policy [@delator.skip])
     (candidate [@delator.skip]) =
   let result =
-    verify_candidate_internal ?imported ?external_specifications ~solver_policy
+    verify_candidate_internal ?imported ?external_specifications ?numeric_prerequisites ~solver_policy
       candidate
   in
   (match result with
-  | Ok (_validated, _, _, _, _, _, _) ->
+  | Ok (_validated, _, _, _, _, _, _, _, _) ->
       let[@log_value.info] program = Sst_validation.program _validated in
       let[@log_value.info] _trusted_count =
         List.fold_left
@@ -854,17 +1133,20 @@ let authenticate_loaded_with_policy ~external_targets ~solver_policy
                   | Ok external_specifications ->
                   match
                     verify_candidate ~imported ~external_specifications
+                      ~numeric_prerequisites:(List.concat_map (fun (staged : staged_dependency) -> staged.numeric_provider.laws) verified)
                       ~solver_policy candidate
                   with
                       | Error _ as error -> error
                       | Ok
                           ( validated,
                             types,
+                            logical_constants,
                             callables,
                             external_specifications,
                             models,
                             invariants,
-                            private_driver_completion ) ->
+                            private_driver_completion,
+                            numeric_provider ) ->
                           let interface_digest =
                             match candidate.interface_digest with
                             | Some digest -> digest
@@ -877,10 +1159,12 @@ let authenticate_loaded_with_policy ~external_targets ~solver_policy
                           in
                           let staged =
                             {
+                              numeric_provider;
                               candidate;
                               interface_digest;
                               mode_signature_digest;
                               types;
+                              logical_constants;
                               callables;
                               external_specifications;
                               models;
@@ -898,10 +1182,13 @@ let authenticate_loaded_with_policy ~external_targets ~solver_policy
 type loaded_verification = {
   loaded_environment : environment;
   loaded_driver : Verification_driver_private.report;
+  loaded_numeric_registry : Numeric_ghost_registry_private.t option;
+  loaded_numeric_target_sets : Numeric_required_target_set_private.t list;
 }
 
 let run_loaded_consumer ~threads ~solver_policy ~authenticated_candidate
-    ?external_specifications environment (consumer : Cmt_input.implementation) =
+    ?numeric_target ?external_specifications environment
+    (consumer : Cmt_input.implementation) =
   let exports_external_type_specification (handle : handle) =
     public_types_export_external_type_specification handle.types
   in
@@ -1013,32 +1300,114 @@ let run_loaded_consumer ~threads ~solver_policy ~authenticated_candidate
       match adopt_external_specifications with
       | Error message -> error ~unit_name:consumer.unit_name message
       | Ok () ->
+      let numeric_requested = consumer.interface_numeric_claims.numeric_roles <> []
+        || List.exists (fun (handle : handle) -> handle.numeric_provider.laws <> []) environment.handles in
+      let dependency_laws = List.concat_map (fun (handle : handle) -> handle.numeric_provider.laws) environment.handles in
+      let dependency_descriptors = List.concat_map (fun (handle : handle) -> handle.numeric_provider.descriptors) environment.handles in
+      let* pre_solver_numeric_registry =
+        if not numeric_requested then Ok None else
+        let admission = Numeric_ghost_registry_private.import_laws ~consumer
+          ~dependencies:(Imported_callable.artifacts imported) ~descriptors:dependency_descriptors dependency_laws in
+        [%log.debug "checked numeric dependency authority before consumer verification"
+          ~consumer:(Delator.Field.string consumer.unit_name)
+          ~law_count:(Delator.Field.int (List.length dependency_laws))
+          ~admitted:(Delator.Field.bool (Result.is_ok admission))];
+        match admission with
+        | Ok registry -> Ok (Some registry)
+        | Error failure -> error ~unit_name:consumer.unit_name (Numeric_ghost_registry_private.error_message failure) in
+      let* numeric_native =
+        match numeric_target with
+        | None -> Ok None
+        | Some target ->
+            let* imported =
+              match pre_solver_numeric_registry with
+              | None -> Ok None
+              | Some registry -> (
+                  match
+                    Numeric_ghost_registry_private.native_bv_source_request
+                      registry ~target
+                  with
+                  | Ok request -> Ok request
+                  | Error message -> error ~unit_name:consumer.unit_name message)
+            in
+            let base_providers =
+              environment.handles
+              |> List.map (fun (handle : handle) ->
+                     handle.private_implementation)
+            in
+            (match
+               Numeric_bv_source_admission_private.with_local_provider
+                 ~imported ~implementation:consumer ~base_providers ~target
+             with
+            | Ok request -> Ok request
+            | Error message -> error ~unit_name:consumer.unit_name message)
+      in
       let verification =
         if threads = 1 then
           Verification_driver_private.run_with_policy ~solver_policy ~imported
+            ?numeric_native
+            ~capture_numeric_obligations:numeric_requested
             ?external_specifications
             ~allow_public_parametric_signatures:
               (consumer.explicit_interface && environment.handles <> [])
             ~allow_imported_opens:(environment.handles <> []) consumer
         else
           Verification_driver_private.run_with_policy_and_threads ~threads
-            ~solver_policy ~imported ?external_specifications
+            ~solver_policy ~imported ?numeric_native ?external_specifications
+            ~capture_numeric_obligations:numeric_requested
             ~allow_public_parametric_signatures:
               (consumer.explicit_interface && environment.handles <> [])
             ~allow_imported_opens:(environment.handles <> []) consumer
       in
       match verification with
       | Ok report ->
+          let* numeric_registry, numeric_target_sets =
+            if not numeric_requested then Ok (None, []) else
+            let reject message = error ~unit_name:consumer.unit_name message in
+            let validated = Verification_driver_private.validated report in
+            let* local_laws, local_descriptors = match Verification_driver_private.verified_completion report with
+              | None -> Ok ([], [])
+              | Some completion ->
+                  let* declarations = match Numeric_semantics_binding_private.complete_local
+                    ~completion ~implementation:consumer ~validated with
+                    | Ok declarations -> Ok declarations | Error message -> reject message in
+                  let* provider = match Numeric_provider_private.complete_with_imports ~completion
+                    ~implementation:consumer ~validated ~imported
+                    ~prerequisites:(List.concat_map (fun (handle : handle) -> handle.numeric_provider.laws) environment.handles)
+                    ~declarations with
+                    | Ok provider -> Ok provider | Error message -> reject message in
+                  Ok (provider.laws, provider.descriptors) in
+            let descriptors = local_descriptors @ dependency_descriptors in
+            let* registry = match Numeric_ghost_registry_private.import_laws ~consumer
+              ~dependencies:(Imported_callable.artifacts imported) ~descriptors (local_laws @ dependency_laws) with
+              | Ok registry -> Ok registry
+              | Error failure -> reject (Numeric_ghost_registry_private.error_message failure) in
+            let capability = Build_target_profile_private.capability () in
+            let* selector = match Numeric_required_target_set_private.select ~capability ~modes:[Concrete] with
+              | Ok selector -> Ok selector | Error message -> reject message in
+            let* sets = List.fold_left (fun result original ->
+              let* sets = result in
+              match Numeric_required_target_set_private.create ~capability ~selector ~registry ~report ~original ~coverage:None with
+              | Ok set -> Ok (set :: sets) | Error message -> reject message)
+              (Ok []) (Verification_driver_private.original_obligations report) in
+            [%log.debug "collected numeric libraries and original target obligations"
+              ~provider_count:(Delator.Field.int (List.length environment.handles))
+              ~law_count:(Delator.Field.int (List.length (Numeric_ghost_registry_private.laws registry)))
+              ~original_count:(Delator.Field.int (List.length sets))
+              ~created_numeric_queries:(Delator.Field.bool false)];
+            Ok (Some registry, List.rev sets) in
           Ok
             {
               loaded_environment = environment;
               loaded_driver = report;
+              loaded_numeric_registry = numeric_registry;
+              loaded_numeric_target_sets = numeric_target_sets;
             }
       | Error failure ->
           route_verification_failure ~unit_name:consumer.unit_name
             ~authenticated_candidate failure)
 
-let verify_loaded_with_policy ~threads ~solver_policy ~external_specifications
+let verify_loaded_with_policy ~threads ~solver_policy ~numeric_target ~external_specifications
     ~external_targets ~dependencies ~consumer =
   match dependencies with
   | [] -> (
@@ -1052,7 +1421,7 @@ let verify_loaded_with_policy ~threads ~solver_policy ~external_specifications
         | Error _ as error -> error
         | Ok _ ->
             run_loaded_consumer ~threads ~solver_policy
-              ~authenticated_candidate:true ?external_specifications
+              ~authenticated_candidate:true ?numeric_target ?external_specifications
               { issuer = process_issuer; handles = [] }
               consumer
       else
@@ -1061,7 +1430,7 @@ let verify_loaded_with_policy ~threads ~solver_policy ~external_specifications
             (strict_candidate ~require_public_interface:false consumer)
         in
         run_loaded_consumer ~threads ~solver_policy ~authenticated_candidate
-          ?external_specifications { issuer = process_issuer; handles = [] }
+          ?numeric_target ?external_specifications { issuer = process_issuer; handles = [] }
           consumer)
   | _ -> (
       match
@@ -1071,7 +1440,7 @@ let verify_loaded_with_policy ~threads ~solver_policy ~external_specifications
       | Error _ as error -> error
       | Ok (environment, consumer) ->
           run_loaded_consumer ~threads ~solver_policy
-            ~authenticated_candidate:true ?external_specifications environment
+            ~authenticated_candidate:true ?numeric_target ?external_specifications environment
             consumer)
 [@@delator.instrument] [@@delator.level debug]
 
@@ -1085,7 +1454,7 @@ let verify ~threads ~solver_policy ~external_specifications ~external_targets
     ~consumer ~dependencies =
   match
     verify_loaded_with_policy ~threads ~solver_policy ~external_specifications
-      ~external_targets ~dependencies ~consumer
+      ~numeric_target:None ~external_targets ~dependencies ~consumer
   with
   | Error _ as error -> error
   | Ok loaded ->
@@ -1095,10 +1464,34 @@ let verify ~threads ~solver_policy ~external_specifications ~external_targets
                ( value.unit_name, value.interface_digest,
                  value.direct_dependencies, value.transitive_dependencies ))
       in
-      Ok { driver = loaded.loaded_driver; provenance }
+      Ok { driver = loaded.loaded_driver; provenance;
+        numeric_registry = loaded.loaded_numeric_registry;
+        numeric_target_sets = loaded.loaded_numeric_target_sets }
+[@@delator.instrument] [@@delator.level info]
+
+let verify_for_numeric_target ~threads ~solver_policy ~external_specifications
+    ~external_targets ~target ~consumer ~dependencies =
+  match
+    verify_loaded_with_policy ~threads ~solver_policy ~external_specifications
+      ~numeric_target:(Some target) ~external_targets ~dependencies ~consumer
+  with
+  | Error _ as error -> error
+  | Ok loaded ->
+      let provenance =
+        provenance loaded.loaded_environment
+        |> List.map (fun (value : provenance) ->
+               ( value.unit_name, value.interface_digest,
+                 value.direct_dependencies, value.transitive_dependencies ))
+      in
+      Ok
+        { driver = loaded.loaded_driver; provenance;
+          numeric_registry = loaded.loaded_numeric_registry;
+          numeric_target_sets = loaded.loaded_numeric_target_sets }
 [@@delator.instrument] [@@delator.level info]
 
 let driver result = result.driver
+let numeric_registry result = result.numeric_registry
+let numeric_target_sets result = result.numeric_target_sets
 let provenance result = result.provenance
 let error_unit_name (error : error) = error.unit_name
 let error_message (error : error) = error.message

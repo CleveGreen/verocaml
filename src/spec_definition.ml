@@ -36,6 +36,7 @@ let classify_logical_type definitions typ =
     | Sst.Bool -> logical Sst.Bool
     | Sst.Int -> logical Sst.Int
     | Sst.Mathematical_int -> logical Sst.Mathematical_int
+    | Sst.Bit_vector width -> logical (Sst.Bit_vector width)
     | Sst.Parameter _ as parameter -> logical parameter
     | Sst.Application _ -> None
     | Sst.Tuple components ->
@@ -123,7 +124,7 @@ let classify_frozen_recursive_logical_type definitions typ =
         when same_type_id type_id tail ->
           Some { source_type = typ; nominal_type = Some type_id }
       | Some _ | None -> None)
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
   | Sst.Parameter _ | Sst.Application _ -> None
 
 let source_type logical = logical.source_type

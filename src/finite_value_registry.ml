@@ -64,7 +64,7 @@ module Finite_domain = struct
 
   let deeply_immutable_type definitions typ =
     let rec classify visited = function
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> true
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ -> true
       | Sst.Parameter _ | Sst.Application _ -> false
       | Sst.Tuple components ->
           List.for_all (fun (_, component) -> classify visited component) components
@@ -706,7 +706,7 @@ let exact_aggregate_type rank typ aggregate =
   | Sst.Application (_, arguments) ->
       arguments = aggregate.aggregate_type.aggregate_type_arguments
       && component_aggregate rank aggregate
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
   | Sst.Parameter _ -> false
 
 let root_symbol value =
@@ -754,7 +754,8 @@ let next_identity registry ~callable ~value ~mode ~typ =
               child_type =
                 (match selector.selector_range with
                 | Vir.Aggregate aggregate -> aggregate
-                | Vir.Integer | Vir.Boolean | Vir.Parametric _ -> assert false);
+                | Vir.Integer | Vir.Boolean | Vir.Bit_vector _
+                | Vir.Parametric _ -> assert false);
               child_mode = mode;
               rank_digest = "";
               provenance = Immutable_record_field;
@@ -971,7 +972,7 @@ let component_type rank type_id =
 
 let rec ranked_types registry rank visited typ =
   match typ with
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
   | Sst.Parameter _ -> []
   | Sst.Application _ ->
       if rank.component_snapshot <> [] && rank.profile_actual_snapshot <> []
@@ -1006,6 +1007,8 @@ let rec typ_key = function
   | Sst.Bool -> "bool"
   | Sst.Int -> "int"
   | Sst.Mathematical_int -> "Int"
+  | Sst.Bit_vector width ->
+      "bv:" ^ Bv_width.structural_identity_material width
   | Sst.Tuple components ->
       "tuple:" ^ String.concat "," (List.map (fun (_, typ) -> typ_key typ) components)
   | Sst.Aggregate id -> Printf.sprintf "aggregate:%s#%d" id.type_name id.type_index
@@ -1140,12 +1143,13 @@ let rec type_at_path typ = function
           match List.nth_opt components index with
           | Some (_, component) -> type_at_path component rest
           | None -> None)
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Aggregate _
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Aggregate _
       | Sst.Parameter _ | Sst.Application _ -> None)
 
 let vir_type = function
   | Sst.Int | Sst.Mathematical_int -> Some Vir.Integer
   | Sst.Bool -> Some Vir.Boolean
+  | Sst.Bit_vector width -> Some (Vir.Bit_vector width)
   | Sst.Aggregate id ->
       Some (Vir.Aggregate { Vir.aggregate_type_index = id.type_index;
                             aggregate_type_name = id.type_name ; aggregate_type_arguments = []})
@@ -1167,7 +1171,8 @@ let authenticated_selector registry rank selector =
         | Vir.Aggregate aggregate ->
             arguments = aggregate.aggregate_type_arguments
             && component_aggregate_type rank aggregate
-        | Vir.Integer | Vir.Boolean | Vir.Parametric _ -> false)
+        | Vir.Integer | Vir.Boolean | Vir.Bit_vector _ | Vir.Parametric _ ->
+            false)
     | Some typ -> vir_type typ = Some selector.selector_range
     | None -> false
   in
@@ -1650,14 +1655,14 @@ let assume_formal registry ~slot ~callable ~value ~mode ~typ ~rank =
             match typ with
             | Sst.Aggregate _ | Sst.Application _ ->
                 rank.component_snapshot <> []
-            | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+            | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
             | Sst.Tuple _
             | Sst.Parameter _ ->
                 false)
          ||
          match typ with
          | Sst.Application _ -> exact_aggregate_type rank typ value
-         | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+         | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
          | Sst.Aggregate _
          | Sst.Parameter _ ->
              false)
@@ -1714,11 +1719,11 @@ let compatible_formal_type ~formal ~actual =
         (fun formal actual ->
           match formal with
           | Parametric_type.Parameter _ -> true
-          | Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _
+          | Unit | Bool | Int | Mathematical_int | Bit_vector _ | Tuple _ | Aggregate _
           | Application _ ->
               Parametric_type.equal formal actual)
         formal_arguments actual_arguments
-  | ( (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | ( (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
       | Sst.Aggregate _ | Sst.Parameter _),
       _ )
   | Sst.Application _, _ ->

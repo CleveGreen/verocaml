@@ -39,6 +39,25 @@ type t = {
 
 let issuer = ref ()
 
+let identity_material certificate =
+  let node = Numeric_receipt_private.encode in
+  let option = function None -> node ~schema:"none" [] | Some s -> node ~schema:"some" [s] in
+  let origin = certificate.origin in
+  node ~schema:"verocaml.callback-semantic-identity.v1"
+    [(match origin.kind with Formal -> "formal" | Top_level -> "top-level" | Local -> "local");
+     origin.compilation_identity.compilation_digest; origin.callable_identity;
+     Numeric_receipt_private.list (List.map (fun (label, typ) ->
+       node ~schema:"endpoint"
+         [option (Callback_shape_private.label_to_option label); Parametric_type.structural_identity_material typ])
+       (Callback_shape_private.endpoints origin.shape));
+     Parametric_type.structural_identity_material (Callback_shape_private.result origin.shape);
+     origin.compiler_mode; origin.contract_identity;
+     Numeric_receipt_private.list (List.map (fun capture -> node ~schema:"capture"
+       [string_of_int capture.binding_id; capture.binding_uid;
+        Parametric_type.structural_identity_material capture.typ; capture.compiler_mode;
+        capture.instance_mode; capture.frozen_value_identity]) origin.captures);
+     option certificate.caller_identity; option certificate.call_edge_identity]
+
 let digest fields =
   Digest.string (String.concat "\000" fields) |> Digest.to_hex
 

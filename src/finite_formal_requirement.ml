@@ -376,6 +376,17 @@ let validate_interface registration identity =
       |> Option.map (vector_for_definition registration.requests)
     else None
   in
+  let default_only signature =
+    if not (String.starts_with ~prefix:"v1|" signature) then false
+    else
+      let body =
+        String.sub signature 3 (String.length signature - 3)
+      in
+      String.equal body ""
+      ||
+      (String.split_on_char ';' body
+      |> List.for_all (String.ends_with ~suffix:"=default"))
+  in
   List.fold_left
     (fun result (key, expected) ->
       match result with
@@ -383,7 +394,29 @@ let validate_interface registration identity =
       | Ok () -> (
           match (expected, actual key) with
           | Some expected, Some actual when String.equal expected actual -> Ok ()
-          | Some _, Some _ ->
+          | Some expected, Some actual
+            when String.starts_with ~prefix:"value:" key
+                 && default_only expected && default_only actual ->
+              [%log.trace
+                "accepted compiler-normalized callable alias without finite formals"
+                ~stage:(Delator.Field.string "finite-formal-seal")
+                ~route:(Delator.Field.string key)
+                ~decision:(Delator.Field.string "accepted")];
+              Ok ()
+          | Some (expected [@log_value.debug]),
+            Some (actual [@log_value.debug]) ->
+              [%log.debug "rejected retained interface finite signature mismatch"
+                ~stage:(Delator.Field.string "finite-formal-seal")
+                ~route:(Delator.Field.string key)
+                ~expected_signature:
+                  (Delator.Field.string
+                     (expected [@log_value.debug]))
+                ~actual_signature:
+                  (Delator.Field.string
+                     (actual [@log_value.debug]))
+                ~decision:(Delator.Field.string "rejected")
+                ~reason_class:
+                  (Delator.Field.string "normalized-signature-mismatch")];
               Error
                 ("retained implementation finite formals do not match the exact \
                   retained interface finite signature for "

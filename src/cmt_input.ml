@@ -16,6 +16,64 @@ type interface_symbolic_declaration = {
   symbolic_typed_abi : string;
 }
 
+type numeric_artifact_representation =
+  | Artifact_immediate
+  | Artifact_boxed
+
+let numeric_artifact_representation_name = function
+  | Artifact_immediate -> "immediate"
+  | Artifact_boxed -> "boxed"
+
+type interface_numeric_carrier = {
+  numeric_carrier_base : Numeric_interface_claim_private.base_reference option;
+  numeric_carrier_source : Numeric_source_claim_private.carrier;
+  numeric_carrier_path : string;
+  numeric_carrier_uid : string;
+  numeric_carrier_owner_unit : string;
+  numeric_carrier_owner_cmi_full_key : string;
+  numeric_carrier_owner_cmi_checked_digest : string;
+  numeric_carrier_import_routes : string list;
+  numeric_carrier_constructor_abi : string;
+  numeric_carrier_binder_abi : string;
+  numeric_carrier_compiler_jkind_abi : string;
+  numeric_carrier_compiler_representation : numeric_artifact_representation;
+}
+
+type interface_numeric_role = {
+  numeric_role_callable_shape : Numeric_callable_domain_private.shape option;
+  numeric_role_callable_domain : Numeric_callable_domain_private.t;
+  numeric_role_source : Numeric_source_claim_private.role;
+  numeric_role_callable_path : string;
+  numeric_role_callable_uid : string;
+  numeric_role_callable_abi : string;
+  numeric_role_callable_mode_abi : string;
+  numeric_role_callable_owner_unit : string;
+  numeric_role_callable_owner_cmi_full_key : string;
+  numeric_role_callable_owner_cmi_checked_digest : string;
+  numeric_role_callable_import_routes : string list;
+  numeric_role_semantics_path : string;
+  numeric_role_semantics_uid : string;
+  numeric_role_semantics_abi : string;
+  numeric_role_semantics_mode_abi : string;
+  numeric_role_semantics_owner_unit : string;
+  numeric_role_semantics_owner_cmi_full_key : string;
+  numeric_role_semantics_owner_cmi_checked_digest : string;
+  numeric_role_semantics_import_routes : string list;
+  numeric_role_carrier_uid : string;
+  numeric_role_carrier_owner_unit : string;
+  numeric_role_carrier_owner_cmi_full_key : string;
+  numeric_role_carrier_owner_cmi_checked_digest : string;
+  numeric_role_carrier_import_routes : string list;
+}
+
+type interface_numeric_claims = {
+  numeric_carriers : interface_numeric_carrier list;
+  numeric_roles : interface_numeric_role list;
+  numeric_provenance_nodes : int;
+  numeric_provenance_edges : int;
+  numeric_provenance_bytes : int;
+}
+
 let logical_sort_marker =
   "verocaml.internal.logical_sort.mathematical_int.v1"
 
@@ -34,6 +92,7 @@ type implementation = {
   metadata : Cmt_format.cmt_infos;
   embedded_interface_metadata : Cmi_format.cmi_infos_lazy option;
   raw_artifact_digest : string;
+  raw_artifact_receipt : string;
   filename : string;
   source_file : string;
   unit_name : string;
@@ -70,7 +129,9 @@ type implementation = {
   interface_broadcast_declarations : string list;
   interface_broadcast_groups : interface_broadcast_group list;
   interface_symbolic_declarations : interface_symbolic_declaration list;
+  interface_logical_values : Retained_interface_authority_private.logical_value list;
   interface_logical_sorts : Logical_sort_private.t list;
+  interface_numeric_claims : interface_numeric_claims;
   interface_broadcasts : Retained_broadcast_private.interface_member list;
   declaration_dependency_count : int;
   has_implementation_shape : bool;
@@ -423,11 +484,108 @@ let artifact_content_receipt filename =
   let length = (Unix.stat filename).Unix.st_size in
   Printf.sprintf "%d:%s" length (artifact_digest filename)
 
+let digest_of_content_receipt receipt =
+  match String.index_opt receipt ':' with
+  | Some separator when separator + 1 < String.length receipt ->
+      String.sub receipt (separator + 1)
+        (String.length receipt - separator - 1)
+  | None | Some _ -> raise (Failure "invalid compiler artifact content receipt")
+
 let read_all filename =
   let channel = open_in_bin filename in
   Fun.protect
     ~finally:(fun () -> close_in_noerr channel)
     (fun () -> really_input_string channel (in_channel_length channel))
+
+let stable_file_snapshot filename decode =
+  let before_stat = Unix.stat filename in
+  let before = read_all filename in
+  let snapshot = Filename.temp_file "verocaml-artifact-snapshot-" ".bin" in
+  let value, snapshot_after, after, after_stat =
+    Fun.protect
+      ~finally:(fun () ->
+        if Sys.file_exists snapshot then Sys.remove snapshot)
+      (fun () ->
+        let channel = open_out_bin snapshot in
+        Fun.protect
+          ~finally:(fun () -> close_out_noerr channel)
+          (fun () -> output_string channel before);
+        let value = decode snapshot in
+        let snapshot_after = read_all snapshot in
+        let after = read_all filename in
+        let after_stat = Unix.stat filename in
+        (value, snapshot_after, after, after_stat))
+  in
+  if
+    before <> snapshot_after
+    || before <> after
+    || before_stat.Unix.st_size <> String.length before
+    || after_stat.Unix.st_size <> String.length after
+  then (
+      [%log.warn "rejected unstable compiler artifact snapshot"
+      ~stage:(Delator.Field.string "compiler-artifact-stable-snapshot")
+      ~route:(Delator.Field.string "stat-bytes-snapshot-decode-bytes-stat")
+      ~decision:(Delator.Field.string "rejected")
+      ~reason_class:(Delator.Field.string "artifact-changed-during-decode")];
+    raise (Failure "compiler artifact changed while it was being decoded"))
+  else (
+    let receipt =
+      Printf.sprintf "%d:%s" (String.length before)
+        (Digest.to_hex (Digest.string before))
+    in
+    [%log.trace "accepted stable compiler artifact snapshot"
+      ~stage:(Delator.Field.string "compiler-artifact-stable-snapshot")
+      ~route:(Delator.Field.string "stat-bytes-snapshot-decode-bytes-stat")
+      ~artifact_bytes:(Delator.Field.int (String.length before))
+      ~decision:(Delator.Field.string "accepted")];
+    (value, receipt))
+
+let read_stable_cmi filename =
+  stable_file_snapshot filename (fun snapshot ->
+      let information = Cmi_format.read_cmi_lazy snapshot in
+      ignore (Subst.Lazy.force_signature information.Cmi_format.cmi_sign);
+      information)
+
+let read_stable_typed_interface filename =
+  let (embedded, info), receipt =
+    stable_file_snapshot filename Cmt_format.read
+  in
+  match (embedded, info) with
+  | _, Some info -> (
+      match info.Cmt_format.cmt_annots with
+      | Cmt_format.Interface signature -> (info, signature, receipt)
+      | Implementation _ | Partial_implementation _ | Partial_interface _
+      | Packed _ ->
+          raise (Failure "compiler interface artifact is not a finalized CMTI"))
+  | _, None -> raise (Failure "compiler interface artifact has no CMT metadata")
+
+module For_testing = struct
+  let stable_snapshot_uses_receipted_bytes () =
+    let filename = Filename.temp_file "verocaml-snapshot-seam-" ".bin" in
+    let write value =
+      let channel = open_out_bin filename in
+      Fun.protect
+        ~finally:(fun () -> close_out_noerr channel)
+        (fun () -> output_string channel value)
+    in
+    Fun.protect
+      ~finally:(fun () ->
+        if Sys.file_exists filename then Sys.remove filename)
+      (fun () ->
+        let receipted = "alpha" and substituted = "bravo" in
+        write receipted;
+        let decoded, receipt =
+          stable_file_snapshot filename (fun snapshot ->
+              write substituted;
+              let decoded = read_all snapshot in
+              write receipted;
+              decoded)
+        in
+        String.equal decoded receipted
+        && String.equal receipt
+             (Printf.sprintf "%d:%s" (String.length receipted)
+                (Digest.to_hex (Digest.string receipted))))
+end
 
 let stable_unique equal values =
   List.fold_left
@@ -461,6 +619,12 @@ let import_receipt imports =
 exception Symbolic_artifact_failure of {
   provider : string;
   reason : string;
+}
+
+exception Numeric_claim_failure of {
+  provider : string;
+  reason : string;
+  location : Location.t option;
 }
 
 exception Broadcast_artifact_failure of {
@@ -1132,6 +1296,124 @@ let interface_self_crc interface =
   | [ imported ] -> Option.map Digest.to_hex (Import_info.crc imported)
   | [] | _ :: _ :: _ -> None
 
+type authenticated_typed_interface = {
+  typed_metadata : Cmt_format.cmt_infos;
+  typed_signature : Typedtree.signature;
+  typed_content_receipt : string;
+}
+
+let interface_import_identity interface =
+  imports_of_array interface.Cmi_format.cmi_crcs |> Array.to_list
+  |> List.map (fun (imported : import) -> (imported.unit_name, imported.crc))
+  |> List.sort compare
+
+let typed_import_identity information =
+  imports information |> Array.to_list
+  |> List.map (fun (imported : import) -> (imported.unit_name, imported.crc))
+  |> List.sort compare
+
+let authenticate_typed_interface ~unit_name ~interface filename =
+  let result =
+    if not (Sys.file_exists filename) then
+      Error "typed interface artifact is missing"
+    else
+      try
+        let information, signature, typed_content_receipt =
+          read_stable_typed_interface filename
+        in
+        let unit_matches =
+          String.equal
+            (Compilation_unit.name_as_string information.Cmt_format.cmt_modname)
+            unit_name
+        and digest_matches =
+          Option.map Digest.to_hex information.Cmt_format.cmt_interface_digest
+          = interface_self_crc interface
+        and imports_match =
+          typed_import_identity information = interface_import_identity interface
+        in
+        if unit_matches && digest_matches && imports_match then
+          Ok { typed_metadata = information; typed_signature = signature;
+               typed_content_receipt }
+        else Error "typed interface does not match the exact compiler interface"
+      with
+      | Failure reason | Sys_error reason -> Error reason
+      | Cmi_format.Error _ | Cmt_format.Error _ | End_of_file ->
+          Error "typed interface artifact is malformed"
+  in
+  (match result with
+  | Ok _ ->
+      [%log.trace "authenticated typed interface artifact correlation"
+        ~provider:(Delator.Field.string unit_name)
+        ~stage:(Delator.Field.string "typed-interface-artifact-correlation")
+        ~route:(Delator.Field.string "stable-cmi-cmti")
+        ~decision:(Delator.Field.string "accepted")]
+  | Error (reason [@log_value.warn]) ->
+      [%log.warn "rejected typed interface artifact correlation"
+        ~provider:(Delator.Field.string unit_name)
+        ~stage:(Delator.Field.string "typed-interface-artifact-correlation")
+        ~route:(Delator.Field.string "stable-cmi-cmti")
+        ~reason_class:(Delator.Field.string (reason [@log_value.warn]))
+        ~decision:(Delator.Field.string "rejected")]);
+  result
+[@@delator.instrument] [@@delator.level trace]
+
+let discover_authenticated_typed_interface ?required_receipt ~unit_name
+    ~interface ~adjacent ~load_paths () =
+  let basenames =
+    [ unit_name ^ ".cmti"; String.uncapitalize_ascii unit_name ^ ".cmti" ]
+    |> stable_unique String.equal
+  in
+  let candidates =
+    adjacent
+    @ List.concat_map
+        (fun directory ->
+          List.map (fun basename -> Filename.concat directory basename) basenames)
+        load_paths
+    |> stable_unique String.equal |> List.filter Sys.file_exists
+  in
+  let matches =
+    candidates
+    |> List.filter_map (fun filename ->
+           match authenticate_typed_interface ~unit_name ~interface filename with
+           | Ok artifact
+             when Option.fold ~none:true
+                    ~some:(String.equal artifact.typed_content_receipt)
+                    required_receipt ->
+               Some (filename, artifact)
+           | Ok _ | Error _ -> None)
+  in
+  let result =
+    match matches with
+    | [] -> Error "authenticated typed interface artifact is missing or stale"
+    | (filename, artifact) :: rest ->
+        if
+          List.for_all
+            (fun (_, candidate) ->
+              String.equal candidate.typed_content_receipt
+                artifact.typed_content_receipt)
+            rest
+        then Ok (filename, artifact)
+        else Error "authenticated typed interface candidates conflict"
+  in
+  (match result with
+  | Ok _ ->
+      [%log.trace "coalesced authenticated typed interface discovery"
+        ~provider:(Delator.Field.string unit_name)
+        ~stage:(Delator.Field.string "typed-interface-discovery")
+        ~candidate_count:(Delator.Field.int (List.length candidates))
+        ~matching_count:(Delator.Field.int (List.length matches))
+        ~decision:(Delator.Field.string "accepted")]
+  | Error (reason [@log_value.warn]) ->
+      [%log.warn "rejected authenticated typed interface discovery"
+        ~provider:(Delator.Field.string unit_name)
+        ~stage:(Delator.Field.string "typed-interface-discovery")
+        ~candidate_count:(Delator.Field.int (List.length candidates))
+        ~matching_count:(Delator.Field.int (List.length matches))
+        ~reason_class:(Delator.Field.string (reason [@log_value.warn]))
+        ~decision:(Delator.Field.string "rejected")]);
+  result
+[@@delator.instrument] [@@delator.level trace]
+
 type authenticated_interface_artifact = {
   artifact_filename : string;
   artifact_interface : Cmi_format.cmi_infos_lazy;
@@ -1141,9 +1423,11 @@ type authenticated_interface_artifact = {
 
 let compiler_normalization_lock = Mutex.create ()
 
-let find_imported_interface_artifact ~load_paths:(load_paths [@delator.skip])
+let find_imported_interface_artifact
+    ?(admit_candidate = fun _filename -> Ok ())
+    ~load_paths:(load_paths [@delator.skip])
     ~unit_name:(unit_name [@delator.field Fun.id])
-    ~expected_crc:(expected_crc [@delator.skip]) =
+    ~expected_crc:(expected_crc [@delator.skip]) () =
   let basenames =
     [ unit_name ^ ".cmi"; String.uncapitalize_ascii unit_name ^ ".cmi" ]
     |> stable_unique String.equal
@@ -1160,7 +1444,10 @@ let find_imported_interface_artifact ~load_paths:(load_paths [@delator.skip])
     List.filter_map
       (fun filename ->
         try
-          let interface = Cmi_format.read_cmi_lazy filename in
+          (match admit_candidate filename with
+          | Ok () -> ()
+          | Error reason -> raise (Failure reason));
+          let interface, content_receipt = read_stable_cmi filename in
           let unit_matches =
             Compilation_unit.Name.equal interface.cmi_name
               (Compilation_unit.Name.of_string unit_name)
@@ -1183,11 +1470,12 @@ let find_imported_interface_artifact ~load_paths:(load_paths [@delator.skip])
               {
                 artifact_filename = filename;
                 artifact_interface = interface;
-                artifact_content_digest = artifact_content_receipt filename;
+                artifact_content_digest = content_receipt;
                 artifact_self_crc = expected_crc;
               }
           else None
         with
+        | Failure reason -> raise (Failure reason)
         | Sys_error _ ->
             [%log.warn "retained broadcast dependency artifact read issue"
               ~provider:(Delator.Field.string unit_name)
@@ -1260,7 +1548,7 @@ let find_imported_interface_artifact ~load_paths:(load_paths [@delator.skip])
 let find_imported_interface ~load_paths ~unit_name ~expected_crc =
   Option.map
     (fun artifact -> artifact.artifact_interface)
-    (find_imported_interface_artifact ~load_paths ~unit_name ~expected_crc)
+    (find_imported_interface_artifact ~load_paths ~unit_name ~expected_crc ())
 
 let with_authenticated_interfaces artifacts action =
   Mutex.lock compiler_normalization_lock;
@@ -1287,15 +1575,22 @@ let with_authenticated_interfaces artifacts action =
   in
   Fun.protect
     ~finally:(fun () ->
-      Env.reset_cache ~preserve_persistent_env:false;
+      Envaux.reset_cache ~preserve_persistent_env:false;
       loader := previous;
-      Mutex.unlock compiler_normalization_lock)
+      Mutex.unlock compiler_normalization_lock;
+      [%log.trace "restored compiler loader and cleared summary environments"
+        ~stage:(Delator.Field.string "compiler-artifact-environment")
+        ~decision:(Delator.Field.string "restored")])
     (fun () ->
-      Env.reset_cache ~preserve_persistent_env:false;
+      Envaux.reset_cache ~preserve_persistent_env:false;
       loader := exact_loader;
+      [%log.trace "installed exact compiler loader with fresh summary environments"
+        ~stage:(Delator.Field.string "compiler-artifact-environment")
+        ~artifact_count:(Delator.Field.int (List.length artifacts))
+        ~decision:(Delator.Field.string "installed")];
       action ())
 
-let authenticated_import_interfaces ~load_paths interface =
+let authenticated_import_interfaces ?admit_candidate ~load_paths interface =
   Array.to_list interface.Cmi_format.cmi_crcs
   |> List.filter_map (fun imported ->
          let name = Import_info.name imported in
@@ -1303,9 +1598,9 @@ let authenticated_import_interfaces ~load_paths interface =
            None
          else
            Option.bind (Import_info.crc imported) (fun crc ->
-               find_imported_interface_artifact ~load_paths
+               find_imported_interface_artifact ?admit_candidate ~load_paths
                  ~unit_name:(Compilation_unit.Name.to_string name)
-                 ~expected_crc:(Digest.to_hex crc)))
+                 ~expected_crc:(Digest.to_hex crc) ()))
 
 let interface_broadcast_syntax ~load_paths:(load_paths [@delator.skip])
     (interface [@delator.skip]) =
@@ -1704,7 +1999,8 @@ let interface_broadcast_syntax ~load_paths:(load_paths [@delator.skip])
 [@@delator.level debug]
 [@@delator.no_exn_log]
 
-let typed_interface_broadcast_members ~filename:(filename [@delator.skip])
+let typed_interface_broadcast_members
+    ~typed_interface:(signature [@delator.skip])
     ~unit_name:(unit_name [@delator.field Fun.id])
     ~interface_digest:(interface_digest [@delator.skip])
     ~load_paths:(load_paths [@delator.skip])
@@ -2578,70 +2874,38 @@ let typed_interface_broadcast_members ~filename:(filename [@delator.skip])
             | Tsig_class _ | Tsig_class_type _ | Tsig_attribute _ -> [])
           signature.Typedtree.sig_items
       in
-      if not (Sys.file_exists filename) then (
-        [%log.debug "rejected retained broadcast without typed interface artifact"
-          ~provider:(Delator.Field.string unit_name)
-          ~stage:(Delator.Field.string "interface-scope")
-          ~route:(Delator.Field.string "cmti-typed-signature")
-          ~decision:(Delator.Field.string "rejected")
-          ~reason_class:(Delator.Field.string "missing-typed-interface")];
-        raise (Failure "retained broadcast group requires its compiler typed interface"))
-      else
-        match Cmt_format.read filename with
-        | _, Some info
-          when String.equal
-                 (Compilation_unit.name_as_string info.Cmt_format.cmt_modname)
-                 unit_name
-               && Option.map Digest.to_hex info.cmt_interface_digest
-                  = Some interface_digest -> (
-            match info.cmt_annots with
-            | Cmt_format.Interface signature ->
-                typed_interface_root := Some signature;
-                let namespace = typed_value_paths [] signature in
-                let expected_values =
-                  interface_syntax
-                  |> List.map (fun syntax ->
-                         ( syntax.broadcast_path,
-                           syntax.broadcast_uid,
-                           syntax.broadcast_kind ))
-                  |> List.sort compare
-                and typed_values =
-                  typed_broadcast_values [] signature |> List.sort compare
-                in
-                if typed_values <> expected_values then
-                  reject "complete-direct-identity"
-                    "retained broadcast CMI and CMTI declaration identities differ";
-                interface_syntax
-                |> List.iter (fun syntax ->
-                       if
-                         List.length
-                           (List.filter
-                              (String.equal syntax.broadcast_path)
-                              namespace)
-                         <> 1
-                       then
-                         reject "namespace-collision"
-                           "retained broadcast value collides with an included value");
-                let members = collect [] None signature in
-                [%log.debug "reconstructed retained broadcast interface scope"
-                  ~provider:(Delator.Field.string unit_name)
-                  ~stage:(Delator.Field.string "interface-scope")
-                  ~route:(Delator.Field.string "cmti-typed-signature")
-                  ~set_cardinality:(Delator.Field.int (List.length members))
-                  ~decision:(Delator.Field.string "accepted")];
-                members
-            | Implementation _ | Partial_implementation _ | Partial_interface _
-            | Packed _ ->
-                reject "annotation-kind"
-                  "retained broadcast typed interface has the wrong annotation kind")
-        | _, Some _ | _, None ->
-            [%log.debug "rejected stale retained broadcast typed interface"
-              ~provider:(Delator.Field.string unit_name)
-              ~stage:(Delator.Field.string "interface-scope")
-              ~route:(Delator.Field.string "cmti-typed-signature")
-              ~decision:(Delator.Field.string "rejected")
-              ~reason_class:(Delator.Field.string "typed-interface-receipt")];
-            raise (Failure "retained broadcast typed interface receipt mismatch")
+      typed_interface_root := Some signature;
+      let namespace = typed_value_paths [] signature in
+      let expected_values =
+        interface_syntax
+        |> List.map (fun syntax ->
+               ( syntax.broadcast_path,
+                 syntax.broadcast_uid,
+                 syntax.broadcast_kind ))
+        |> List.sort compare
+      and typed_values =
+        typed_broadcast_values [] signature |> List.sort compare
+      in
+      if typed_values <> expected_values then
+        reject "complete-direct-identity"
+          "retained broadcast CMI and CMTI declaration identities differ";
+      interface_syntax
+      |> List.iter (fun syntax ->
+             if
+               List.length
+                 (List.filter (String.equal syntax.broadcast_path) namespace)
+               <> 1
+             then
+               reject "namespace-collision"
+                 "retained broadcast value collides with an included value");
+      let members = collect [] None signature in
+      [%log.debug "reconstructed retained broadcast interface scope"
+        ~provider:(Delator.Field.string unit_name)
+        ~stage:(Delator.Field.string "interface-scope")
+        ~route:(Delator.Field.string "authenticated-cmti-typed-signature")
+        ~set_cardinality:(Delator.Field.int (List.length members))
+        ~decision:(Delator.Field.string "accepted")];
+      members
 [@@delator.instrument]
 [@@delator.level debug]
 [@@delator.no_exn_log]
@@ -2798,6 +3062,155 @@ let local_implementation_type_uid uid =
       identity
   | Compilation_unit _ | Internal | Predef _ | Unboxed_version _ ->
       compiler_uid uid
+
+let implementation_export_uid ~unit_name ~environment ~namespace shape path =
+  let shape_component shape kind name =
+    match (Shape.strip_head_aliases shape).Shape.desc with
+    | Shape.Struct components ->
+        Shape.Item.Map.find_opt (Shape.Item.make name kind) components
+    | Shape.Var _ | Abs _ | App _ | Alias _ | Leaf | Proj _ | Comp_unit _
+    | Error _ | Constr _ | Tuple _ | Unboxed_tuple _ | Predef _ | Arrow
+    | Poly_variant _ | Mu _ | Rec_var _ | Variant _ | Variant_unboxed _
+    | Record _ | Mutrec _ | Proj_decl _ ->
+        None
+  in
+  let reduced_uid shape =
+    let rec resolved = function
+      | Shape_reduce.Resolved uid -> Some (compiler_uid uid)
+      | Resolved_alias (_, nested) -> resolved nested
+      | Unresolved _ | Approximated _ | Internal_error_missing_uid -> None
+    in
+    resolved
+      (Shape_reduce.local_reduce_for_uid environment shape)
+  in
+  let components = String.split_on_char '.' path in
+  let components =
+    match components with
+    | root :: rest when String.equal root unit_name -> rest
+    | _ -> components
+  in
+  let rec descend shape = function
+    | [] -> None
+    | [ name ] ->
+        Option.bind
+          (shape_component shape namespace name)
+          reduced_uid
+    | name :: rest ->
+        Option.bind
+          (shape_component shape Shape.Sig_component_kind.Module name)
+          (fun nested -> descend nested rest)
+  in
+  descend shape components
+
+let implementation_value_uid implementation path =
+  Option.bind implementation.metadata.Cmt_format.cmt_impl_shape
+    (fun shape ->
+      implementation_export_uid ~unit_name:implementation.unit_name
+        ~environment:implementation.structure.str_final_env
+        ~namespace:Shape.Sig_component_kind.Value shape path)
+
+let interface_value_uid_correlates implementation ~path ~interface_uid
+    ~implementation_uid =
+  let rec module_signature items seen = function
+    | Types.Mty_signature signature -> Some signature
+    | Mty_strengthen (nested, _, _) -> module_signature items seen nested
+    | Mty_ident (Path.Pident ident) ->
+        if List.exists (Ident.same ident) seen then None
+        else
+          List.find_map
+            (function
+              | Types.Sig_modtype (candidate, declaration, _)
+                when Ident.same candidate ident ->
+                  Option.bind declaration.Types.mtd_type
+                    (module_signature items (ident :: seen))
+              | _ -> None)
+            items
+    | Mty_ident _ | Mty_functor _ | Mty_alias _ -> None
+  in
+  let candidates =
+    match implementation.embedded_interface_metadata with
+    | None -> []
+    | Some interface ->
+        let root = Subst.Lazy.force_signature interface.Cmi_format.cmi_sign in
+        let unit_name = implementation.unit_name in
+        let rec collect prefix inherited_module_types items =
+          let module_types =
+            List.fold_left
+              (fun collected -> function
+                | Types.Sig_modtype (ident, declaration, Types.Exported) ->
+                    Option.fold ~none:collected
+                      ~some:(fun nested -> (ident, nested) :: collected)
+                      declaration.Types.mtd_type
+                | _ -> collected)
+              inherited_module_types items
+          in
+          let qualify name =
+            String.concat "." (unit_name :: List.rev (name :: prefix))
+          in
+          List.concat_map
+            (function
+              | Types.Sig_value (ident, description, Types.Exported) ->
+                  let path = qualify (Ident.name ident) in
+                  [ ( path,
+                      compiler_uid description.Types.val_uid,
+                      implementation_value_uid implementation path ) ]
+              | Types.Sig_module
+                  (ident, _, declaration, _, Types.Exported) -> (
+                  match
+                    module_signature items [] declaration.Types.md_type
+                  with
+                  | Some nested ->
+                      collect (Ident.name ident :: prefix) module_types nested
+                  | None -> [])
+              | Types.Sig_value (_, _, Types.Hidden)
+              | Types.Sig_module (_, _, _, _, Types.Hidden)
+              | Types.Sig_type _ | Types.Sig_typext _ | Types.Sig_modtype _
+              | Types.Sig_class _ | Types.Sig_class_type _ ->
+                  [])
+            items
+        in
+        collect [] [] root
+  in
+  let exact =
+    List.filter
+      (fun (candidate_path, candidate_interface_uid,
+            candidate_implementation_uid) ->
+        String.equal path candidate_path
+        && String.equal interface_uid candidate_interface_uid
+        && Option.equal String.equal (Some implementation_uid)
+             candidate_implementation_uid)
+      candidates
+  in
+  let accepted = List.length exact = 1 in
+  let[@log_value.trace] candidate_identities =
+    candidates
+    |> List.filteri (fun index _ -> index < 16)
+    |> List.map
+         (fun (candidate_path, candidate_interface_uid,
+               candidate_implementation_uid) ->
+           Delator.Field.map
+             [ ("path", Delator.Field.string candidate_path);
+               ("interface_uid", Delator.Field.string candidate_interface_uid);
+               ( "implementation_uid",
+                 Delator.Field.string
+                   (Option.value ~default:"<unresolved>"
+                      candidate_implementation_uid) ) ])
+  in
+  [%log.trace "correlated logical value interface and implementation UIDs"
+    ~provider:(Delator.Field.string implementation.unit_name)
+    ~stage:(Delator.Field.string "logical-value-uid-correlation")
+    ~route:(Delator.Field.string path)
+    ~expected_interface_uid:(Delator.Field.string interface_uid)
+    ~expected_implementation_uid:(Delator.Field.string implementation_uid)
+    ~candidate_identities:
+      (Delator.Field.seq
+         ~dropped:(Int.max 0 (List.length candidates - 16))
+         (candidate_identities [@log_value.trace]))
+    ~candidate_count:(Delator.Field.int (List.length candidates))
+    ~exact_count:(Delator.Field.int (List.length exact))
+    ~decision:
+      (Delator.Field.string (if accepted then "correlated" else "rejected"))];
+  accepted
 
 let rec signature_module_type items seen = function
   | Types.Mty_signature signature -> Some signature
@@ -3082,7 +3495,7 @@ let persistent_type_uid ~load_paths:(load_paths [@delator.skip])
               try
                 match
                   find_imported_interface_artifact ~load_paths ~unit_name
-                    ~expected_crc:(Digest.to_hex expected_crc)
+                    ~expected_crc:(Digest.to_hex expected_crc) ()
                 with
                 | None ->
                     [%log.warn "rejected symbolic type identity without an exact imported CMI"
@@ -3172,8 +3585,9 @@ let symbolic_argument_label = function
   | Position name -> "@" ^ name
 
 let symbolic_interface_abi ~canonical_path ~value_uid ~constructor_uid
-    ~logical_sorts typ =
+    ~logical_sorts ~normalize typ =
   let rec quantified variables typ =
+    let typ = normalize typ in
     match Types.get_desc typ with
     | Types.Tpoly (body, bound) -> quantified (variables @ bound) body
     | Tlink replacement | Tsubst (replacement, _) ->
@@ -3182,6 +3596,7 @@ let symbolic_interface_abi ~canonical_path ~value_uid ~constructor_uid
   in
   let explicit_variables, body = quantified [] typ in
   let rec collect_variables seen typ =
+    let typ = normalize typ in
     let add variable seen =
       let id = Types.get_id variable in
       if List.exists (fun candidate -> Types.get_id candidate = id) seen then
@@ -3218,6 +3633,7 @@ let symbolic_interface_abi ~canonical_path ~value_uid ~constructor_uid
     match result with Ok value -> continuation value | Error _ as error -> error
   in
   let rec lower active typ =
+    let typ = normalize typ in
     let id = Types.get_id typ in
     match Types.get_desc typ with
     | Types.Tvar _ | Tunivar _ -> (
@@ -3348,6 +3764,7 @@ let symbolic_interface_abi ~canonical_path ~value_uid ~constructor_uid
         Error "symbolic interface ABI contains an unsupported type"
   in
   let rec parameters reversed typ =
+    let typ = normalize typ in
     match Types.get_desc typ with
     | Types.Tarrow ((label, _, _), argument, result, _) ->
         parameters ((symbolic_argument_label label, argument) :: reversed) result
@@ -3406,6 +3823,18 @@ let interface_symbolic_declarations ~load_paths interface =
       items
   in
   let local_type_uids = local_type_uids None root in
+  let typing_environment =
+    let initial =
+      Predef.build_initial_env
+        (Env.add_type ~check:false)
+        (Env.add_extension ~check:false ~rebind:false)
+        Env.empty
+    in
+    Env.add_signature root initial
+  in
+  let normalize typ =
+    try Ctype.expand_head typing_environment typ with Env.Error _ -> typ
+  in
   let logical_sorts =
     lazy
       (let descriptors_for interface =
@@ -3537,6 +3966,7 @@ let interface_symbolic_declarations ~load_paths interface =
                       symbolic_interface_abi ~canonical_path:symbolic_path
                         ~value_uid:symbolic_uid ~constructor_uid
                         ~logical_sorts:(Lazy.force logical_sorts)
+                        ~normalize
                         description.Types.val_type
                     with
                     | Ok material -> material
@@ -3570,6 +4000,2198 @@ let interface_symbolic_declarations ~load_paths interface =
   if List.length paths <> List.length (List.sort_uniq String.compare paths) then
     fail "duplicate symbolic interface path"
   else declarations
+
+let interface_logical_values ~load_paths ~symbolic_declarations interface =
+  let root = Subst.Lazy.force_signature interface.Cmi_format.cmi_sign in
+  let unit_name =
+    Compilation_unit.Name.to_string interface.Cmi_format.cmi_name
+  in
+  let fail reason =
+    raise (Symbolic_artifact_failure { provider = unit_name; reason })
+  in
+  let attributes name attributes =
+    let matching =
+      List.filter
+      (fun attribute -> String.equal attribute.Parsetree.attr_name.txt name)
+      attributes
+    in
+    if
+      List.exists
+        (fun attribute -> attribute.Parsetree.attr_payload <> Parsetree.PStr [])
+        matching
+    then fail ("logical value marker " ^ name ^ " has a nonempty payload");
+    matching
+  in
+  let rec local_type_uids prefix items =
+    List.concat_map
+      (function
+        | Types.Sig_type (ident, declaration, _, _) ->
+            let path =
+              match prefix with
+              | None -> Path.Pident ident
+              | Some parent -> Path.Pdot (parent, Ident.name ident)
+            in
+            [ (path, local_implementation_type_uid declaration.Types.type_uid) ]
+        | Types.Sig_module (ident, _, declaration, _, Types.Exported) -> (
+            match signature_module_type items [] declaration.Types.md_type with
+            | None -> []
+            | Some nested ->
+                let path =
+                  match prefix with
+                  | None -> Path.Pident ident
+                  | Some parent -> Path.Pdot (parent, Ident.name ident)
+                in
+                local_type_uids (Some path) nested)
+        | Types.Sig_value _ | Types.Sig_module (_, _, _, _, Types.Hidden)
+        | Types.Sig_typext _ | Types.Sig_modtype _ | Types.Sig_class _
+        | Types.Sig_class_type _ -> [])
+      items
+  in
+  let local_type_uids = local_type_uids None root in
+  let constructor_uid path =
+    match List.find_map
+            (fun (candidate, uid) -> if Path.same candidate path then Some uid else None)
+            local_type_uids with
+    | Some _ as uid -> uid
+    | None -> (
+        match predef_type_uid path with
+        | Some _ as uid -> uid
+        | None -> (
+            match persistent_type_uid ~load_paths ~interface path with
+            | Ok uid -> uid
+            | Error _ -> None))
+  in
+  let initial =
+    Predef.build_initial_env
+      (Env.add_type ~check:false)
+      (Env.add_extension ~check:false ~rebind:false)
+      Env.empty
+  in
+  let typing_environment = Env.add_signature root initial in
+  let normalize typ =
+    try Ctype.expand_head typing_environment typ with Env.Error _ -> typ
+  in
+  let rec logical_sort_closure seen interface =
+    let identity =
+      Compilation_unit.Name.to_string interface.Cmi_format.cmi_name
+      ^ Option.value ~default:""
+          (interface_self_crc interface)
+    in
+    if List.mem identity seen then (seen, [])
+    else
+      let seen = identity :: seen in
+      let issuer =
+        match interface_family_issuers interface with
+        | [ issuer ] -> issuer
+        | [] | _ :: _ :: _ -> ""
+      in
+      authenticated_import_interfaces ~load_paths interface
+      |> List.fold_left
+           (fun (seen, sorts) artifact ->
+             let seen, imported =
+               logical_sort_closure seen artifact.artifact_interface
+             in
+             (seen, sorts @ imported))
+           (seen, interface_logical_sorts ~issuer interface)
+  in
+  let _, logical_sorts = logical_sort_closure [] interface in
+  let logical_sorts =
+    List.sort_uniq Logical_sort_private.compare logical_sorts
+  in
+  let rec value_parameter_count count typ =
+    let typ = normalize typ in
+    match Types.get_desc typ with
+    | Types.Tarrow (_, _, result, _) -> value_parameter_count (count + 1) result
+    | Tpoly (body, _) | Tlink body | Tsubst (body, _) ->
+        value_parameter_count count body
+    | Tvar _ | Tunivar _ | Ttuple _ | Tunboxed_tuple _ | Tconstr _
+    | Tobject _ | Tfield _ | Tnil | Tvariant _ | Tpackage _
+    | Tquote _ | Tsplice _ | Tof_kind _ ->
+        count
+  in
+  let typed_abi path uid typ =
+    symbolic_interface_abi ~canonical_path:path ~value_uid:uid
+      ~constructor_uid ~logical_sorts ~normalize typ
+  in
+  let rec module_signature module_types seen = function
+    | Types.Mty_signature signature -> Some signature
+    | Mty_strengthen (nested, _, _) -> module_signature module_types seen nested
+    | Mty_ident (Path.Pident ident) ->
+        if List.exists (Ident.same ident) seen then None
+        else
+          List.find_map
+            (fun (candidate, nested) ->
+              if Ident.same candidate ident then
+                module_signature module_types (ident :: seen) nested
+              else None)
+            module_types
+    | Mty_ident _ | Mty_functor _ | Mty_alias _ -> None
+  in
+  let rec collect prefix inherited_module_types items =
+    let module_types =
+      List.fold_left
+        (fun collected -> function
+          | Types.Sig_modtype (ident, declaration, Types.Exported) ->
+              Option.fold ~none:collected
+                ~some:(fun nested -> (ident, nested) :: collected)
+                declaration.Types.mtd_type
+          | _ -> collected)
+        inherited_module_types items
+    in
+    let qualify name =
+      let relative = String.concat "." (List.rev (name :: prefix)) in
+      unit_name ^ "." ^ relative
+    in
+    List.concat_map
+      (function
+        | Types.Sig_value (ident, description, Types.Exported) ->
+            let path = qualify (Ident.name ident) in
+            let uid = compiler_uid description.Types.val_uid in
+            let symbolic =
+              List.filter
+                (fun declaration ->
+                  String.equal declaration.symbolic_path path
+                  && String.equal declaration.symbolic_uid uid)
+                symbolic_declarations
+            in
+            let specs = attributes "verocaml.spec" description.val_attributes
+            and opaques = attributes "verocaml.opaque" description.val_attributes
+            and revealed = attributes "verocaml.revealed" description.val_attributes in
+            if List.length specs > 1 || List.length opaques > 1
+               || List.length revealed > 1
+               || (opaques <> [] && revealed <> [])
+            then fail "logical value has duplicate or conflicting visibility markers";
+            if symbolic = [] && specs = [] && (opaques <> [] || revealed <> []) then
+              fail "logical value visibility marker is not attached to a specification";
+            let parameter_count = value_parameter_count 0 description.val_type in
+            (match (symbolic, specs, parameter_count) with
+            | [ receipt ], [], 0 ->
+                if opaques <> [] || revealed <> [] then
+                  fail "symbolic logical value carries defined visibility";
+                let logical_value_class =
+                  Retained_interface_authority_private.Symbolic_value
+                and logical_value_visibility =
+                  Retained_interface_authority_private.Symbolic_opaque
+                in
+                let logical_value_descriptor_receipt =
+                  Retained_interface_authority_private.logical_value_receipt
+                    ~path ~uid ~marker:receipt.symbolic_marker
+                    ~typed_abi:receipt.symbolic_typed_abi logical_value_class
+                    logical_value_visibility
+                in
+                [ { Retained_interface_authority_private.logical_value_path = path;
+                    logical_value_uid = uid;
+                    logical_value_marker = receipt.symbolic_marker;
+                    logical_value_typed_abi = receipt.symbolic_typed_abi;
+                    logical_value_class;
+                    logical_value_visibility;
+                    logical_value_descriptor_receipt } ]
+            | [], [ spec ], 0 ->
+                let logical_value_class =
+                  Retained_interface_authority_private.Defined_value
+                and logical_value_visibility =
+                  if revealed = [] then
+                    Retained_interface_authority_private.Defined_opaque
+                  else Defined_revealed
+                in
+                let logical_value_typed_abi =
+                  match typed_abi path uid description.val_type with
+                  | Ok abi -> abi
+                  | Error _ -> fail "defined logical value ABI is unsupported"
+                in
+                let marker =
+                  Digest.string
+                    (String.concat "\000"
+                       [ "defined-logical-value-marker-v1"; path; uid;
+                         logical_value_typed_abi;
+                         string_of_int spec.attr_loc.loc_start.pos_cnum ])
+                  |> Digest.to_hex
+                in
+                let logical_value_descriptor_receipt =
+                  Retained_interface_authority_private.logical_value_receipt
+                    ~path ~uid ~marker ~typed_abi:logical_value_typed_abi
+                    logical_value_class logical_value_visibility
+                in
+                [ { Retained_interface_authority_private.logical_value_path = path;
+                    logical_value_uid = uid; logical_value_marker = marker;
+                    logical_value_typed_abi; logical_value_class;
+                    logical_value_visibility;
+                    logical_value_descriptor_receipt } ]
+            | [], [], _ | [ _ ], [], _ | [], [ _ ], _ -> []
+            | [], _ :: _ :: _, _ | _ :: _ :: _, _, _ | [ _ ], _ :: _, _ ->
+                fail "logical value semantic collection is ambiguous")
+        | Types.Sig_module (ident, _, declaration, _, Types.Exported) -> (
+            match module_signature module_types [] declaration.Types.md_type with
+            | Some nested -> collect (Ident.name ident :: prefix) module_types nested
+            | None -> [])
+        | Types.Sig_value (_, _, Types.Hidden)
+        | Types.Sig_module (_, _, _, _, Types.Hidden)
+        | Types.Sig_type _ | Types.Sig_typext _ | Types.Sig_modtype _
+        | Types.Sig_class _ | Types.Sig_class_type _ -> [])
+      items
+  in
+  let values = collect [] [] root in
+  [%log.debug "classified retained logical-value interface"
+    ~provider:(Delator.Field.string unit_name)
+    ~stage:(Delator.Field.string "logical-value-interface")
+    ~route:(Delator.Field.string "compiler-signature")
+    ~value_count:(Delator.Field.int (List.length values))
+    ~decision:(Delator.Field.string "classified")];
+  values
+[@@delator.instrument] [@@delator.level debug]
+
+type numeric_type_entry = {
+  numeric_type_path : string;
+  numeric_type_uid : string;
+  numeric_type_declaration : Types.type_declaration;
+  numeric_type_owner : Cmi_format.cmi_infos_lazy;
+  numeric_type_owner_artifact : authenticated_interface_artifact;
+  numeric_type_owner_unit : string;
+  numeric_type_owner_cmi_full_key : string;
+  numeric_type_owner_cmi_checked_digest : string;
+  numeric_type_import_routes : string list;
+}
+
+type numeric_value_entry = {
+  numeric_value_path : string;
+  numeric_value_uid : string;
+  numeric_value_description : Types.value_description;
+  numeric_value_owner : Cmi_format.cmi_infos_lazy;
+  numeric_value_owner_artifact : authenticated_interface_artifact;
+  numeric_value_owner_unit : string;
+  numeric_value_owner_cmi_full_key : string;
+  numeric_value_owner_cmi_checked_digest : string;
+  numeric_value_import_routes : string list;
+}
+
+type numeric_typed_role_resolution = {
+  numeric_typed_callable_path : string;
+  numeric_typed_callable_uid : string;
+  numeric_typed_source : Numeric_source_claim_private.role;
+  numeric_typed_source_claim : string;
+  numeric_typed_carrier_path : string;
+  numeric_typed_carrier_uid : string;
+  numeric_typed_semantics_path : string;
+  numeric_typed_semantics_uid : string;
+}
+
+type numeric_implementation_value_slot = {
+  numeric_implementation_value_path : string;
+  numeric_implementation_value_uid : string;
+  numeric_implementation_value_environment : Env.t;
+  numeric_implementation_value_attributes : Parsetree.attributes;
+  numeric_implementation_value_location : Location.t;
+}
+
+type numeric_implementation_type_slot = {
+  numeric_implementation_type_path : string;
+  numeric_implementation_type_uid : string;
+  numeric_implementation_type_environment : Env.t;
+  numeric_implementation_type_attributes : Parsetree.attributes;
+  numeric_implementation_type_location : Location.t;
+}
+
+let maximum_numeric_provenance_nodes = 10_000
+let maximum_numeric_provenance_edges = 100_000
+let maximum_numeric_provenance_bytes = 8 * 1024 * 1024
+let maximum_numeric_load_paths = 4_096
+let maximum_numeric_load_path_bytes = 1024 * 1024
+let maximum_numeric_artifact_probes = 100_000
+let maximum_numeric_artifact_probe_bytes = 64 * 1024 * 1024
+
+let validate_numeric_load_path_sequences ~provider path_sequences =
+  let reject count reason = Error (provider ^ ": " ^ reason, count) in
+  let rec scan_paths count total paths =
+    match paths () with
+    | Seq.Nil -> Ok (count, total)
+    | Seq.Cons (path, rest) ->
+        if count >= maximum_numeric_load_paths then
+          reject count "numeric load-path inventory exceeds its record bound"
+        else if String.length path > maximum_numeric_load_path_bytes - total then
+          reject count "numeric load-path inventory exceeds its byte bound"
+        else scan_paths (count + 1) (total + String.length path) rest
+  in
+  let rec scan_sequences count total = function
+    | [] -> Ok (count, total)
+    | paths :: rest -> (
+        match scan_paths count total paths with
+        | Ok (count, total) -> scan_sequences count total rest
+        | Error _ as error -> error)
+  in
+  let result =
+    scan_sequences 0 0 path_sequences
+  in
+  (match result with
+  | Ok ((path_count [@log_value.trace]), _) ->
+      [%log.trace "accepted bounded numeric load-path inventory"
+        ~provider:(Delator.Field.string provider)
+        ~stage:(Delator.Field.string "numeric-load-path-preflight")
+        ~path_count:(Delator.Field.int (path_count [@log_value.trace]))
+        ~decision:(Delator.Field.string "accepted")]
+  | Error ((reason [@log_value.warn]), (path_count [@log_value.warn])) ->
+      [%log.warn "rejected excessive numeric load-path inventory"
+        ~provider:(Delator.Field.string provider)
+        ~stage:(Delator.Field.string "numeric-load-path-preflight")
+        ~path_count:(Delator.Field.int (path_count [@log_value.warn]))
+        ~reason_class:(Delator.Field.string (reason [@log_value.warn]))
+        ~decision:(Delator.Field.string "rejected")]);
+  match result with Ok _ -> Ok () | Error (reason, _) -> Error reason
+[@@delator.instrument] [@@delator.level trace]
+
+let validate_numeric_load_path_inventory ~provider paths =
+  validate_numeric_load_path_sequences ~provider [ List.to_seq paths ]
+
+let interface_has_numeric_markers interface =
+  let rec has items =
+    List.exists
+      (function
+        | Types.Sig_type (_, declaration, _, _) ->
+            List.exists
+              (fun attribute ->
+                String.equal attribute.Parsetree.attr_name.txt
+                  Numeric_source_claim_private.carrier_marker)
+              declaration.Types.type_attributes
+        | Types.Sig_value (_, description, _) ->
+            List.exists
+              (fun attribute ->
+                String.equal attribute.Parsetree.attr_name.txt
+                  Numeric_source_claim_private.role_marker)
+              description.Types.val_attributes
+        | Types.Sig_module (_, _, declaration, _, Types.Exported) -> (
+            match signature_module_type items [] declaration.Types.md_type with
+            | Some nested -> has nested
+            | None -> false)
+        | Types.Sig_module (_, _, _, _, Types.Hidden) | Types.Sig_typext _
+        | Types.Sig_modtype _ | Types.Sig_class _ | Types.Sig_class_type _ ->
+            false)
+      items
+  in
+  has (Subst.Lazy.force_signature interface.Cmi_format.cmi_sign)
+
+let interface_numeric_claims ~load_paths ~root_cmi_receipt ?typed_interface
+    ?implementation_shape ?structure interface =
+  let unit_name =
+    Compilation_unit.Name.to_string interface.Cmi_format.cmi_name
+  in
+  let fail ?location reason =
+    [%log.warn "rejected numeric source claim reconstruction"
+      ~provider:(Delator.Field.string unit_name)
+      ~stage:(Delator.Field.string "numeric-source-cmi-reconstruction")
+      ~route:(Delator.Field.string "exact-compiler-signature")
+      ~decision:(Delator.Field.string "rejected")
+      ~reason_class:(Delator.Field.string reason)];
+    raise (Numeric_claim_failure { provider = unit_name; reason; location })
+  in
+  if not (interface_has_numeric_markers interface) then (
+    [%log.trace "skipped numeric dependency provenance for nonnumeric provider"
+      ~provider:(Delator.Field.string unit_name)
+      ~stage:(Delator.Field.string "numeric-source-cmi-reconstruction")
+      ~route:(Delator.Field.string "marker-prescan")
+      ~decision:(Delator.Field.string "absent")];
+    { numeric_carriers = []; numeric_roles = []; numeric_provenance_nodes = 0;
+      numeric_provenance_edges = 0; numeric_provenance_bytes = 0 })
+  else
+  let load_path_count = List.length load_paths in
+  let load_path_bytes =
+    List.fold_left
+      (fun total path ->
+        if
+          String.length path > maximum_numeric_load_path_bytes - total
+        then fail "numeric load-path inventory exceeds its byte bound"
+        else total + String.length path)
+      0 load_paths
+  in
+  if
+    load_path_count > maximum_numeric_load_paths
+    || load_path_bytes > maximum_numeric_load_path_bytes
+  then fail "numeric load-path inventory exceeds its bounded size";
+  let cmi_full_key artifact =
+    let imports =
+      imports_of_array artifact.artifact_interface.Cmi_format.cmi_crcs
+      |> Array.to_list
+    in
+    let import_units = List.map (fun (imported : import) -> imported.unit_name) imports in
+    if
+      List.length import_units
+      <> List.length (List.sort_uniq String.compare import_units)
+    then fail "numeric owner CMI contains duplicate import units";
+    Numeric_interface_claim_private.owner_cmi_full_key
+      ~unit_name:(Compilation_unit.Name.to_string artifact.artifact_interface.Cmi_format.cmi_name)
+      ~self_crc:artifact.artifact_self_crc ~content_receipt:artifact.artifact_content_digest
+      ~imports:(List.map (fun (imported : import) -> imported.unit_name, imported.crc) imports)
+  in
+  let root_artifact =
+    let self_crc =
+      match interface_self_crc interface with
+      | Some self_crc -> self_crc
+      | None -> fail "numeric source owner CMI lacks an exact self CRC"
+    in
+    { artifact_filename = ""; artifact_interface = interface;
+      artifact_content_digest = root_cmi_receipt;
+      artifact_self_crc = self_crc }
+  in
+  let graph_nodes = Hashtbl.create 32
+  and graph_edges = Hashtbl.create 32
+  and canonical_routes = Hashtbl.create 32
+  and node_count = ref 0
+  and edge_count = ref 0
+  and graph_bytes = ref 0
+  and import_record_count = ref 0
+  and import_record_bytes = ref 0
+  and artifact_probe_count = ref 0
+  and artifact_probe_bytes = ref 0 in
+  let reserve ~kind bytes =
+    let count_exceeded =
+      match kind with
+      | `Node -> !node_count >= maximum_numeric_provenance_nodes
+      | `Edge -> !edge_count >= maximum_numeric_provenance_edges
+      | `Route -> false
+    in
+    if count_exceeded || bytes > maximum_numeric_provenance_bytes - !graph_bytes
+    then (
+      [%log.warn "rejected excessive numeric dependency provenance"
+        ~provider:(Delator.Field.string unit_name)
+        ~stage:(Delator.Field.string "numeric-source-cmi-reconstruction")
+        ~route:(Delator.Field.string "canonical-import-graph")
+        ~node_count:(Delator.Field.int !node_count)
+        ~edge_count:(Delator.Field.int !edge_count)
+        ~provenance_bytes:(Delator.Field.int !graph_bytes)
+        ~decision:(Delator.Field.string "rejected")
+        ~reason_class:
+          (Delator.Field.string
+             (if count_exceeded then "record-count-bound" else "byte-bound"))];
+      fail "numeric source claim import graph exceeds its bounded provenance budget"
+    );
+    graph_bytes := !graph_bytes + bytes;
+    match kind with
+    | `Node -> incr node_count
+    | `Edge -> incr edge_count
+    | `Route -> ()
+  in
+  let reserve_import_inventory artifact =
+    let raw = artifact.artifact_interface.Cmi_format.cmi_crcs in
+    let raw_count = Array.length raw in
+    if
+      raw_count > maximum_numeric_provenance_edges - !import_record_count
+    then fail "numeric raw import vector exceeds its record bound";
+    Array.iter
+      (fun imported ->
+        let bytes =
+          String.length
+            (Compilation_unit.Name.to_string (Import_info.name imported))
+          + Option.fold ~none:0 ~some:(fun _ -> 32) (Import_info.crc imported)
+          + 16
+        in
+        if
+          bytes > maximum_numeric_provenance_bytes - !import_record_bytes
+        then fail "numeric raw import vector exceeds its byte bound";
+        import_record_bytes := !import_record_bytes + bytes)
+      raw;
+    import_record_count := !import_record_count + raw_count;
+    let probes_per_import = max 1 (2 * load_path_count) in
+    if
+      raw_count
+      > (maximum_numeric_artifact_probes - !artifact_probe_count)
+        / probes_per_import
+    then fail "numeric import path probes exceed their record bound";
+    artifact_probe_count :=
+      !artifact_probe_count + (raw_count * probes_per_import)
+  in
+  let admit_candidate filename =
+    let bytes = (Unix.stat filename).Unix.st_size in
+    if
+      bytes < 0
+      || bytes > maximum_numeric_artifact_probe_bytes - !artifact_probe_bytes
+    then Error "numeric imported artifact reads exceed their byte bound"
+    else (
+      artifact_probe_bytes := !artifact_probe_bytes + bytes;
+      Ok ())
+  in
+  let rec collect_graph parent_route parent_route_bytes artifact =
+    let parent_key = cmi_full_key artifact in
+    if not (Hashtbl.mem graph_nodes parent_key) then (
+      reserve ~kind:`Node (String.length parent_key);
+      let route_bytes = parent_route_bytes + String.length parent_key + 32 in
+      reserve ~kind:`Route route_bytes;
+      let route = parent_route @ [ parent_key ] in
+      Hashtbl.add graph_nodes parent_key artifact;
+      Hashtbl.add canonical_routes parent_key route;
+      reserve_import_inventory artifact;
+      let children =
+        authenticated_import_interfaces ~admit_candidate ~load_paths
+          artifact.artifact_interface
+        |> List.map (fun child -> (cmi_full_key child, child))
+        |> List.sort (fun (left, _) (right, _) -> String.compare left right)
+      in
+      let child_keys =
+        children |> List.map fst |> List.sort_uniq String.compare
+      in
+      List.iter
+        (fun child_key ->
+          reserve ~kind:`Edge
+            (String.length parent_key + String.length child_key))
+        child_keys;
+      Hashtbl.add graph_edges parent_key child_keys;
+      List.iter
+        (fun (_, child) -> collect_graph route route_bytes child)
+        children)
+  in
+  collect_graph [] 0 root_artifact;
+  let interfaces =
+    Hashtbl.to_seq graph_nodes |> List.of_seq
+    |> List.map (fun (full_key, artifact) ->
+           let route =
+             match Hashtbl.find_opt canonical_routes full_key with
+             | Some route -> Numeric_receipt_private.list route
+             | None -> fail "numeric import graph contains an unreachable owner"
+           in
+           (artifact, [ route ]))
+    |> List.sort (fun (left, _) (right, _) ->
+           String.compare (cmi_full_key left) (cmi_full_key right))
+  in
+  [%log.debug "constructed bounded canonical numeric dependency provenance"
+    ~provider:(Delator.Field.string unit_name)
+    ~stage:(Delator.Field.string "numeric-source-cmi-reconstruction")
+    ~route:(Delator.Field.string "canonical-import-graph")
+    ~node_count:(Delator.Field.int !node_count)
+    ~edge_count:(Delator.Field.int !edge_count)
+    ~provenance_bytes:(Delator.Field.int !graph_bytes)
+    ~import_record_count:(Delator.Field.int !import_record_count)
+    ~artifact_probe_count:(Delator.Field.int !artifact_probe_count)
+    ~artifact_probe_bytes:(Delator.Field.int !artifact_probe_bytes)
+    ~decision:(Delator.Field.string "accepted")];
+  let module_signature items declaration =
+    signature_module_type items [] declaration.Types.md_type
+  in
+  let collect_entries (owner_artifact, import_routes) =
+    let owner = owner_artifact.artifact_interface in
+    let owner_cmi_full_key = cmi_full_key owner_artifact in
+    let owner_cmi_checked_digest =
+      Numeric_receipt_private.digest
+        ~domain:"verocaml.numeric-owner-cmi-full-key.v1"
+        owner_cmi_full_key
+    in
+    let owner_name =
+      Compilation_unit.Name.to_string owner.Cmi_format.cmi_name
+    in
+    let root = Subst.Lazy.force_signature owner.Cmi_format.cmi_sign in
+    let qualify prefix name =
+      String.concat "." (owner_name :: prefix @ [ name ])
+    in
+    let rec collect prefix items =
+      List.fold_left
+        (fun (types, values) -> function
+          | Types.Sig_type (ident, declaration, _, Types.Exported) ->
+              ( { numeric_type_path = qualify prefix (Ident.name ident);
+                  numeric_type_uid = compiler_uid declaration.Types.type_uid;
+                  numeric_type_declaration = declaration;
+                  numeric_type_owner = owner;
+                  numeric_type_owner_artifact = owner_artifact;
+                  numeric_type_owner_unit = owner_name;
+                  numeric_type_owner_cmi_full_key = owner_cmi_full_key;
+                  numeric_type_owner_cmi_checked_digest =
+                    owner_cmi_checked_digest;
+                  numeric_type_import_routes = import_routes }
+                :: types,
+                values )
+          | Types.Sig_value (ident, description, Types.Exported) ->
+              ( types,
+                { numeric_value_path = qualify prefix (Ident.name ident);
+                  numeric_value_uid = compiler_uid description.Types.val_uid;
+                  numeric_value_description = description;
+                  numeric_value_owner = owner;
+                  numeric_value_owner_artifact = owner_artifact;
+                  numeric_value_owner_unit = owner_name;
+                  numeric_value_owner_cmi_full_key = owner_cmi_full_key;
+                  numeric_value_owner_cmi_checked_digest =
+                    owner_cmi_checked_digest;
+                  numeric_value_import_routes = import_routes }
+                :: values )
+          | Types.Sig_module (ident, _, declaration, _, Types.Exported) -> (
+              match module_signature items declaration with
+              | None -> (types, values)
+              | Some nested ->
+                  let nested_types, nested_values =
+                    collect (prefix @ [ Ident.name ident ]) nested
+                  in
+                  (nested_types @ types, nested_values @ values))
+          | Types.Sig_type (_, _, _, Types.Hidden)
+          | Types.Sig_value (_, _, Types.Hidden)
+          | Types.Sig_module (_, _, _, _, Types.Hidden)
+          | Types.Sig_typext _ | Types.Sig_modtype _ | Types.Sig_class _
+          | Types.Sig_class_type _ ->
+              (types, values))
+        ([], []) items
+    in
+    collect [] root
+  in
+  let type_entries, value_entries =
+    List.fold_left
+      (fun (types, values) routed_owner ->
+        let owner_types, owner_values = collect_entries routed_owner in
+        (owner_types @ types, owner_values @ values))
+      ([], []) interfaces
+  in
+  let exact_markers marker attributes =
+    List.filter
+      (fun attribute ->
+        String.equal attribute.Parsetree.attr_name.txt marker)
+      attributes
+  in
+  let parse_one marker parse attributes =
+    match exact_markers marker attributes with
+    | [] -> None
+    | [ attribute ] -> (
+        match parse attribute with
+        | Ok claim -> Some (claim, attribute.Parsetree.attr_loc)
+        | Error reason -> fail ~location:attribute.attr_loc reason)
+    | duplicate :: _ :: _ ->
+        fail ~location:duplicate.Parsetree.attr_loc
+          "duplicate numeric source claim marker"
+  in
+  let uid_owner = function
+    | Types.Uid.Item { comp_unit; _ } -> Some comp_unit
+    | Compilation_unit compilation_unit -> Some compilation_unit
+    | Internal | Predef _ | Unboxed_version _ -> None
+  in
+  let original_type_entries uid =
+    let candidates =
+      List.filter (fun entry -> String.equal entry.numeric_type_uid uid)
+        type_entries
+    in
+    match candidates with
+    | [] | [ _ ] -> candidates
+    | _ ->
+        List.filter
+          (fun entry ->
+            uid_owner entry.numeric_type_declaration.Types.type_uid
+            = Some entry.numeric_type_owner_unit)
+          candidates
+  and original_value_entries uid =
+    let candidates =
+      List.filter (fun entry -> String.equal entry.numeric_value_uid uid)
+        value_entries
+    in
+    match candidates with
+    | [] | [ _ ] -> candidates
+    | _ ->
+        List.filter
+          (fun entry ->
+            uid_owner entry.numeric_value_description.Types.val_uid
+            = Some entry.numeric_value_owner_unit)
+          candidates
+  in
+  let source_longident ~location path =
+    match Longident.unflatten (String.split_on_char '.' path) with
+    | Some path -> path
+    | None -> fail ~location "numeric source reference has no compiler path"
+  in
+  let resolution_artifacts = List.map fst interfaces
+  in
+  let resolve_paths_in_environment environment location ~carrier_reference
+      ~semantics_reference =
+    with_authenticated_interfaces resolution_artifacts (fun () ->
+        try
+          let environment =
+            Envaux.env_of_only_summary ~allow_missing_modules:false environment
+          in
+          let exact_module_member
+              ~member_class:(member_class [@log_value.trace]) reference entries
+              projection =
+            match reference with
+            | Longident.Ldot (module_reference, member_name) ->
+                let module_path, _ =
+                  Env.find_module_by_name_lazy module_reference environment
+                in
+                let module_path =
+                  Env.normalize_module_path (Some location) environment
+                    module_path
+                in
+                let canonical_path = Path.name module_path ^ "." ^ member_name in
+                let matches =
+                  List.filter
+                    (fun entry -> String.equal (projection entry) canonical_path)
+                    entries
+                in
+                (match matches with
+                | [ entry ] ->
+                    [%log.trace "resolved numeric reference through exact compiler module member"
+                      ~provider:(Delator.Field.string unit_name)
+                      ~stage:
+                        (Delator.Field.string
+                           "numeric-typed-reference-resolution")
+                      ~route:
+                        (Delator.Field.string "normalized-module-cmi-member")
+                      ~member_class:
+                        (Delator.Field.string
+                           (member_class [@log_value.trace]))
+                      ~decision:(Delator.Field.string "resolved")];
+                    (Path.Pdot (module_path, member_name), entry)
+                | [] | _ :: _ :: _ -> raise Not_found)
+            | Lident _ | Lapply _ -> raise Not_found
+          in
+          let carrier_path, carrier =
+            let reference = source_longident ~location carrier_reference in
+            try
+              Env.find_type_by_name reference environment
+            with Not_found | Env.Error _ | Failure _ ->
+              (try
+                 let path, entry =
+                   exact_module_member
+                     ~member_class:("carrier" [@log_value.trace]) reference
+                     type_entries (fun entry -> entry.numeric_type_path)
+                 in
+                 (path, entry.numeric_type_declaration)
+               with Not_found | Env.Error _ | Failure _ ->
+                 fail ~location
+                   "numeric role carrier reference is not compiler-resolved in its lexical environment")
+          in
+          let semantics_path, semantics, _ =
+            let reference = source_longident ~location semantics_reference in
+            try
+              let path, description =
+                Env.find_value_by_name reference environment
+              in
+              (path, description, ())
+            with Not_found | Env.Error _ | Failure _ ->
+              (try
+                 let path, entry =
+                   exact_module_member
+                     ~member_class:("semantics" [@log_value.trace]) reference
+                     value_entries (fun entry -> entry.numeric_value_path)
+                 in
+                 (path, entry.numeric_value_description, ())
+               with Not_found | Env.Error _ | Failure _ ->
+                 fail ~location
+                   "numeric role semantics reference is not compiler-resolved in its lexical environment")
+          in
+          let carrier_path =
+            Env.normalize_type_path (Some location) environment carrier_path
+          and semantics_path =
+            Env.normalize_value_path (Some location) environment semantics_path
+          in
+          [%log.trace "resolved numeric role references in compiler environment"
+            ~provider:(Delator.Field.string unit_name)
+            ~stage:(Delator.Field.string "numeric-typed-reference-resolution")
+            ~carrier_path:(Delator.Field.string (Path.name carrier_path))
+            ~carrier_uid:
+              (Delator.Field.string (compiler_uid carrier.Types.type_uid))
+            ~semantics_path:(Delator.Field.string (Path.name semantics_path))
+            ~semantics_uid:
+              (Delator.Field.string (compiler_uid semantics.Types.val_uid))
+            ~decision:(Delator.Field.string "resolved")];
+          ( carrier_path,
+            compiler_uid carrier.Types.type_uid,
+            semantics_path,
+            compiler_uid semantics.Types.val_uid )
+        with Env.Error _ | Failure _ ->
+          fail ~location
+            "numeric role reference normalization failed in its compiler lexical environment")
+  in
+  let resolve_in_environment environment location source_claim =
+    resolve_paths_in_environment environment location
+      ~carrier_reference:source_claim.Numeric_source_claim_private.carrier_path
+      ~semantics_reference:source_claim.semantics_path
+  in
+  let rec nested_structure expression =
+    match expression.Typedtree.mod_desc with
+    | Tmod_structure nested -> Some nested
+    | Tmod_constraint (nested, _, _, _) -> nested_structure nested
+    | Tmod_ident _ | Tmod_functor _ | Tmod_apply _ | Tmod_apply_unit _
+    | Tmod_unpack _ -> None
+  in
+  let rec typed_role_resolutions prefix structure =
+    List.concat_map
+      (fun item ->
+        match item.Typedtree.str_desc with
+        | Tstr_value (_, bindings) ->
+            List.filter_map
+              (fun binding ->
+                match
+                  parse_one Numeric_source_claim_private.role_marker
+                    Numeric_source_claim_private.parse_role
+                    binding.Typedtree.vb_attributes
+                with
+                | None -> None
+                | Some (source_claim, location) ->
+                    let identifiers =
+                      Typedtree.pat_bound_idents binding.Typedtree.vb_pat
+                    in
+                    let identifier =
+                      match identifiers with
+                      | [ identifier ] -> identifier
+                      | [] | _ :: _ :: _ ->
+                          fail ~location
+                            "numeric role implementation is not one compiler value slot"
+                    in
+                    let carrier_path, carrier_uid, semantics_path, semantics_uid =
+                      resolve_in_environment item.str_env location source_claim
+                    in
+                    Some
+                      { numeric_typed_callable_path =
+                          String.concat "."
+                            (unit_name :: prefix @ [ Ident.name identifier ]);
+                        numeric_typed_callable_uid =
+                          (Typedtree.pat_bound_idents_full binding.vb_pat
+                          |> List.find (fun (candidate, _, _, _, _) ->
+                                 Ident.same candidate identifier)
+                          |> fun (_, _, _, uid, _) -> compiler_uid uid);
+                        numeric_typed_source = source_claim;
+                        numeric_typed_source_claim =
+                          Numeric_source_claim_private.role_material source_claim;
+                        numeric_typed_carrier_path = Path.name carrier_path;
+                        numeric_typed_carrier_uid = carrier_uid;
+                        numeric_typed_semantics_path = Path.name semantics_path;
+                        numeric_typed_semantics_uid = semantics_uid })
+              bindings
+        | Tstr_module binding -> (
+            match (binding.Typedtree.mb_name.txt, nested_structure binding.mb_expr) with
+            | Some name, Some nested ->
+                typed_role_resolutions (prefix @ [ name ]) nested
+            | None, Some nested -> typed_role_resolutions prefix nested
+            | _, None -> [])
+        | Tstr_recmodule bindings ->
+            List.concat_map
+              (fun binding ->
+                match
+                  (binding.Typedtree.mb_name.txt, nested_structure binding.mb_expr)
+                with
+                | Some name, Some nested ->
+                    typed_role_resolutions (prefix @ [ name ]) nested
+                | None, Some nested -> typed_role_resolutions prefix nested
+                | _, None -> [])
+              bindings
+        | Tstr_eval _ | Tstr_primitive _ | Tstr_type _ | Tstr_typext _
+        | Tstr_exception _ | Tstr_modtype _ | Tstr_open _ | Tstr_class _
+        | Tstr_class_type _ | Tstr_include _ | Tstr_attribute _ -> [])
+      structure.Typedtree.str_items
+  in
+  let rec implementation_slots prefix structure =
+    List.fold_left
+      (fun (type_slots, value_slots) item ->
+        match item.Typedtree.str_desc with
+        | Tstr_value (_, bindings) ->
+            let values =
+              bindings
+              |> List.concat_map (fun binding ->
+                     Typedtree.pat_bound_idents binding.Typedtree.vb_pat
+                     |> List.map (fun identifier ->
+                            { numeric_implementation_value_path =
+                                String.concat "."
+                                  (unit_name :: prefix
+                                  @ [ Ident.name identifier ]);
+                              numeric_implementation_value_uid =
+                                compiler_uid
+                                  (Typedtree.pat_bound_idents_full
+                                     binding.Typedtree.vb_pat
+                                  |> List.find (fun (candidate, _, _, _, _) ->
+                                         Ident.same candidate identifier)
+                                  |> fun (_, _, _, uid, _) -> uid);
+                              numeric_implementation_value_environment =
+                                item.str_env;
+                              numeric_implementation_value_attributes =
+                                binding.vb_attributes;
+                              numeric_implementation_value_location =
+                                binding.vb_loc }))
+            in
+            (type_slots, values @ value_slots)
+        | Tstr_primitive description ->
+            let slot =
+              { numeric_implementation_value_path =
+                  String.concat "."
+                    (unit_name :: prefix @ [ description.val_name.txt ]);
+                numeric_implementation_value_uid =
+                  compiler_uid description.val_val.Types.val_uid;
+                numeric_implementation_value_environment = item.str_env;
+                numeric_implementation_value_attributes =
+                  description.val_attributes;
+                numeric_implementation_value_location = description.val_loc }
+            in
+            (type_slots, slot :: value_slots)
+        | Tstr_type (_, declarations) ->
+            let slots =
+              List.map
+                (fun (declaration : Typedtree.type_declaration) ->
+                  { numeric_implementation_type_path =
+                      String.concat "."
+                        (unit_name :: prefix @ [ declaration.typ_name.txt ]);
+                    numeric_implementation_type_uid =
+                      compiler_uid declaration.typ_type.Types.type_uid;
+                    numeric_implementation_type_environment = item.str_env;
+                    numeric_implementation_type_attributes = declaration.typ_attributes;
+                    numeric_implementation_type_location = declaration.typ_loc })
+                declarations
+            in
+            (slots @ type_slots, value_slots)
+        | Tstr_module binding -> (
+            match (binding.Typedtree.mb_name.txt, nested_structure binding.mb_expr) with
+            | Some name, Some nested ->
+                let nested_types, nested_values =
+                  implementation_slots (prefix @ [ name ]) nested
+                in
+                (nested_types @ type_slots, nested_values @ value_slots)
+            | None, Some nested ->
+                let nested_types, nested_values =
+                  implementation_slots prefix nested
+                in
+                (nested_types @ type_slots, nested_values @ value_slots)
+            | _, None -> (type_slots, value_slots))
+        | Tstr_recmodule bindings ->
+            List.fold_left
+              (fun (types, values) binding ->
+                match
+                  (binding.Typedtree.mb_name.txt, nested_structure binding.mb_expr)
+                with
+                | Some name, Some nested ->
+                    let nested_types, nested_values =
+                      implementation_slots (prefix @ [ name ]) nested
+                    in
+                    (nested_types @ types, nested_values @ values)
+                | None, Some nested ->
+                    let nested_types, nested_values =
+                      implementation_slots prefix nested
+                    in
+                    (nested_types @ types, nested_values @ values)
+                | _, None -> (types, values))
+              (type_slots, value_slots) bindings
+        | Tstr_eval _ | Tstr_typext _ | Tstr_exception _ | Tstr_modtype _
+        | Tstr_open _ | Tstr_class _ | Tstr_class_type _ | Tstr_include _
+        | Tstr_attribute _ ->
+            (type_slots, value_slots))
+      ([], []) structure.Typedtree.str_items
+  in
+  let rec nested_signature module_type =
+    match module_type.Typedtree.mty_desc with
+    | Tmty_signature nested -> Some nested
+    | Tmty_strengthen (nested, _, _) | Tmty_with (nested, _) ->
+        nested_signature nested
+    | Tmty_ident _ | Tmty_functor _ | Tmty_typeof _ | Tmty_alias _ -> None
+  in
+  let typed_interface_for_owner ~location
+      (artifact : authenticated_interface_artifact) =
+    let owner_unit =
+      Compilation_unit.Name.to_string artifact.artifact_interface.cmi_name
+    in
+    if String.equal owner_unit unit_name then
+      match typed_interface with
+      | Some signature -> signature
+      | None ->
+          fail ~location
+            "included numeric role owner has no exact typed interface witness"
+    else
+      let adjacent =
+        if artifact.artifact_filename = "" then []
+        else
+          [ Filename.remove_extension artifact.artifact_filename ^ ".cmti" ]
+      in
+      match
+        discover_authenticated_typed_interface ~unit_name:owner_unit
+          ~interface:artifact.artifact_interface ~adjacent ~load_paths ()
+      with
+      | Ok (_, typed) ->
+          [%log.trace "selected original numeric role CMTI witness"
+            ~provider:(Delator.Field.string unit_name)
+            ~stage:(Delator.Field.string "numeric-included-role-reconstruction")
+            ~route:(Delator.Field.string "authenticated-original-owner-cmti")
+            ~owner_unit:(Delator.Field.string owner_unit)
+            ~decision:(Delator.Field.string "accepted")];
+          typed.typed_signature
+      | Error reason -> fail ~location reason
+  in
+  let typed_type_declaration ~location (entry : numeric_type_entry) =
+    let signature =
+      typed_interface_for_owner ~location entry.numeric_type_owner_artifact
+    in
+    let rec declarations signature =
+      List.concat_map
+        (fun item ->
+          match item.Typedtree.sig_desc with
+          | Tsig_type (_, values) | Tsig_typesubst values ->
+              values
+              |> List.filter_map (fun declaration ->
+                     if
+                       String.equal
+                         (compiler_uid
+                            declaration.Typedtree.typ_type.Types.type_uid)
+                         entry.numeric_type_uid
+                     then Some (declaration, item.sig_env, signature.Typedtree.sig_final_env)
+                     else None)
+          | Tsig_module declaration -> (
+              match nested_signature declaration.md_type with
+              | Some nested -> declarations nested
+              | None -> [])
+          | Tsig_recmodule values ->
+              List.concat_map
+                (fun declaration ->
+                  match nested_signature declaration.Typedtree.md_type with
+                  | Some nested -> declarations nested
+                  | None -> [])
+                values
+          | Tsig_value _ | Tsig_typext _ | Tsig_exception _ | Tsig_modsubst _
+          | Tsig_modtype _ | Tsig_modtypesubst _ | Tsig_open _
+          | Tsig_include _ | Tsig_class _ | Tsig_class_type _
+          | Tsig_attribute _ ->
+              [])
+        signature.Typedtree.sig_items
+    in
+    match declarations signature with
+      | [ match_ ] -> match_
+      | [] ->
+          fail ~location
+            "numeric carrier has no exact typed owner declaration witness"
+      | _ :: _ :: _ ->
+          fail ~location
+            "numeric carrier has ambiguous typed owner declaration witnesses"
+  in
+  let compiler_type_representation ~location (entry : numeric_type_entry) =
+    let declaration, _, environment = typed_type_declaration ~location entry in
+    with_authenticated_interfaces resolution_artifacts (fun () ->
+        match Numeric_carrier_layout_private.reconstruct ~environment declaration with
+        | Error reason -> fail ~location reason
+        | Ok facts ->
+            let representation =
+              match facts.representation with
+              | Numeric_carrier_layout_private.Immediate -> Artifact_immediate
+              | Value -> Artifact_boxed
+            in
+            (facts.compiler_jkind_abi, representation))
+  in
+  let resolve_original_role ~location ~source_claim callable =
+    let original_signature =
+      typed_interface_for_owner ~location
+        callable.numeric_value_owner_artifact
+    in
+    let expected_source =
+      Numeric_source_claim_private.role_material source_claim
+    in
+    let rec find signature =
+      List.concat_map
+        (fun item ->
+          match item.Typedtree.sig_desc with
+          | Tsig_value description
+            when String.equal
+                   (compiler_uid description.Typedtree.val_val.Types.val_uid)
+                   callable.numeric_value_uid -> (
+              match
+                parse_one Numeric_source_claim_private.role_marker
+                  Numeric_source_claim_private.parse_role
+                  description.Typedtree.val_attributes
+              with
+              | Some (original_source, original_location)
+                when String.equal
+                       (Numeric_source_claim_private.role_material
+                          original_source)
+                       expected_source ->
+                  let carrier_path, carrier_uid, semantics_path, semantics_uid =
+                    resolve_in_environment item.sig_env original_location
+                      original_source
+                  in
+                  [ (Path.name carrier_path, carrier_uid,
+                     Path.name semantics_path, semantics_uid) ]
+              | Some _ ->
+                  fail ~location
+                    "included numeric role source claim differs from its original declaration"
+              | None ->
+                  fail ~location
+                    "included numeric role original declaration lacks its typed source claim")
+          | Tsig_module declaration -> (
+              match nested_signature declaration.md_type with
+              | Some nested -> find nested
+              | None -> [])
+          | Tsig_recmodule declarations ->
+              List.concat_map
+                (fun declaration ->
+                  match nested_signature declaration.Typedtree.md_type with
+                  | Some nested -> find nested
+                  | None -> [])
+                declarations
+          | Tsig_value _ | Tsig_type _ | Tsig_typesubst _ | Tsig_typext _
+          | Tsig_exception _ | Tsig_modsubst _ | Tsig_modtype _
+          | Tsig_modtypesubst _ | Tsig_open _ | Tsig_include _
+          | Tsig_class _ | Tsig_class_type _ | Tsig_attribute _ ->
+              [])
+        signature.Typedtree.sig_items
+    in
+    match find original_signature with
+    | [ resolution ] ->
+        [%log.debug "correlated included numeric role with original typed declaration"
+          ~provider:(Delator.Field.string unit_name)
+          ~stage:
+            (Delator.Field.string "numeric-included-role-reconstruction")
+          ~route:(Delator.Field.string "original-declaration-environment")
+          ~owner_unit:
+            (Delator.Field.string callable.numeric_value_owner_unit)
+          ~decision:(Delator.Field.string "accepted")];
+        resolution
+    | [] ->
+        fail ~location
+          "included numeric role has no exact original typed declaration witness"
+    | _ :: _ :: _ ->
+        fail ~location
+          "included numeric role has ambiguous original typed declaration witnesses"
+  in
+  let rec included_role_resolutions output_prefix items =
+    List.concat_map
+      (function
+        | Types.Sig_value (ident, description, Types.Exported) -> (
+            match
+              parse_one Numeric_source_claim_private.role_marker
+                Numeric_source_claim_private.parse_role
+                description.Types.val_attributes
+            with
+            | None -> []
+            | Some (source_claim, location) ->
+                let callable_uid = compiler_uid description.Types.val_uid in
+                let callable =
+                  match original_value_entries callable_uid with
+                  | [ callable ] -> callable
+                  | [] | _ :: _ :: _ ->
+                      fail ~location
+                        "included numeric role has no unique original callable owner"
+                in
+                let carrier_path, carrier_uid, semantics_path, semantics_uid =
+                  resolve_original_role ~location ~source_claim callable
+                in
+                [ { numeric_typed_callable_path =
+                      String.concat "."
+                        (unit_name :: output_prefix @ [ Ident.name ident ]);
+                    numeric_typed_callable_uid = callable_uid;
+                    numeric_typed_source = source_claim;
+                    numeric_typed_source_claim =
+                      Numeric_source_claim_private.role_material source_claim;
+                    numeric_typed_carrier_path = carrier_path;
+                    numeric_typed_carrier_uid = carrier_uid;
+                    numeric_typed_semantics_path = semantics_path;
+                    numeric_typed_semantics_uid = semantics_uid } ])
+        | Types.Sig_module (ident, _, declaration, _, Types.Exported) -> (
+            match signature_module_type items [] declaration.Types.md_type with
+            | Some nested ->
+                included_role_resolutions
+                  (output_prefix @ [ Ident.name ident ]) nested
+            | None -> [])
+        | Types.Sig_type _ | Types.Sig_value (_, _, Types.Hidden)
+        | Types.Sig_module (_, _, _, _, Types.Hidden) | Types.Sig_typext _
+        | Types.Sig_modtype _ | Types.Sig_class _ | Types.Sig_class_type _ ->
+            [])
+      items
+  in
+  let rec interface_role_resolutions prefix signature =
+    List.concat_map
+      (fun item ->
+        match item.Typedtree.sig_desc with
+        | Tsig_value description -> (
+            match
+              parse_one Numeric_source_claim_private.role_marker
+                Numeric_source_claim_private.parse_role
+                description.Typedtree.val_attributes
+            with
+            | None -> []
+            | Some (source_claim, location) ->
+                let carrier_path, carrier_uid, semantics_path, semantics_uid =
+                  resolve_in_environment item.sig_env location source_claim
+                in
+                [ { numeric_typed_callable_path =
+                      String.concat "."
+                        (unit_name :: prefix @ [ description.val_name.txt ]);
+                    numeric_typed_callable_uid =
+                      compiler_uid description.val_val.Types.val_uid;
+                    numeric_typed_source = source_claim;
+                    numeric_typed_source_claim =
+                      Numeric_source_claim_private.role_material source_claim;
+                    numeric_typed_carrier_path = Path.name carrier_path;
+                    numeric_typed_carrier_uid = carrier_uid;
+                    numeric_typed_semantics_path = Path.name semantics_path;
+                    numeric_typed_semantics_uid = semantics_uid } ])
+        | Tsig_module declaration -> (
+            match (declaration.Typedtree.md_name.txt, nested_signature declaration.md_type) with
+            | Some name, Some nested ->
+                interface_role_resolutions (prefix @ [ name ]) nested
+            | None, Some nested -> interface_role_resolutions prefix nested
+            | _, None -> [])
+        | Tsig_recmodule declarations ->
+            List.concat_map
+              (fun declaration ->
+                match
+                  (declaration.Typedtree.md_name.txt,
+                   nested_signature declaration.md_type)
+                with
+                | Some name, Some nested ->
+                    interface_role_resolutions (prefix @ [ name ]) nested
+                | None, Some nested -> interface_role_resolutions prefix nested
+                | _, None -> [])
+              declarations
+        | Tsig_include (included, _) ->
+            included_role_resolutions prefix included.incl_type
+        | Tsig_type _ | Tsig_typesubst _ | Tsig_typext _ | Tsig_exception _
+        | Tsig_modsubst _ | Tsig_modtype _ | Tsig_modtypesubst _ | Tsig_open _
+        | Tsig_class _ | Tsig_class_type _ | Tsig_attribute _ ->
+            [])
+      signature.Typedtree.sig_items
+  in
+  let implementation_marker_resolutions =
+    Option.fold ~none:[] ~some:(typed_role_resolutions []) structure
+  in
+  let implementation_type_slots, implementation_value_slots =
+    Option.fold ~none:([], []) ~some:(implementation_slots []) structure
+  in
+  let exact_by_uid ~identity_class uid entries projection =
+    match List.filter (fun entry -> String.equal (projection entry) uid) entries with
+    | [ entry ] -> Some entry
+    | [] -> None
+    | _ :: _ :: _ -> fail ("ambiguous " ^ identity_class ^ " compiler UID")
+  in
+  let exact_by_path ~identity_class path entries projection =
+    match List.filter (fun entry -> String.equal (projection entry) path) entries with
+    | [ entry ] -> entry
+    | [] -> fail ("missing " ^ identity_class ^ " compiler slot")
+    | _ :: _ :: _ ->
+        fail ("ambiguous same-spelling " ^ identity_class ^ " compiler slots")
+  in
+  let exported_implementation_uid ~is_type path =
+    match (structure, implementation_shape) with
+    | Some structure, Some shape ->
+        with_authenticated_interfaces resolution_artifacts (fun () ->
+            let namespace =
+              if is_type then Shape.Sig_component_kind.Type
+              else Shape.Sig_component_kind.Value
+            in
+            match
+              implementation_export_uid ~unit_name
+                ~environment:structure.Typedtree.str_final_env ~namespace shape path
+            with
+            | Some uid -> uid
+            | None -> fail "numeric reference has no exact implementation export")
+    | _ -> fail "numeric reference has no implementation export witness"
+  in
+  let require_exported_implementation_uid ~is_type path uid =
+    let exported_uid = exported_implementation_uid ~is_type path in
+    if not (String.equal uid exported_uid) then (
+      [%log.warn "rejected numeric reference to a hidden implementation binding"
+        ~provider:(Delator.Field.string unit_name)
+        ~stage:(Delator.Field.string "numeric-role-cmt-cmti-parity")
+        ~path:(Delator.Field.string path)
+        ~referenced_uid:(Delator.Field.string uid)
+        ~exported_uid:(Delator.Field.string exported_uid)
+        ~decision:(Delator.Field.string "rejected")];
+      fail "numeric metadata refers to an earlier binding that is hidden by a later declaration")
+    else
+      [%log.trace "correlated numeric reference with the final compiler binding"
+        ~provider:(Delator.Field.string unit_name)
+        ~stage:(Delator.Field.string "numeric-role-cmt-cmti-parity")
+        ~path:(Delator.Field.string path)
+        ~exported_uid:(Delator.Field.string exported_uid)
+        ~decision:(Delator.Field.string "accepted")]
+  in
+  let canonical_type_entry path uid =
+      match original_type_entries uid with
+      | [entry] -> entry
+      | _ :: _ :: _ -> fail "ambiguous original numeric type UID"
+      | [] ->
+          (match
+             List.filter
+               (fun slot ->
+                 String.equal slot.numeric_implementation_type_uid uid)
+               implementation_type_slots
+           with
+          | [ slot ] ->
+              require_exported_implementation_uid ~is_type:true
+                slot.numeric_implementation_type_path uid;
+              exact_by_path ~identity_class:"numeric carrier"
+                slot.numeric_implementation_type_path type_entries
+                (fun entry -> entry.numeric_type_path)
+          | [] ->
+              require_exported_implementation_uid ~is_type:true path uid;
+              exact_by_path ~identity_class:"numeric carrier" path type_entries
+                (fun entry -> entry.numeric_type_path)
+          | _ :: _ :: _ -> fail "ambiguous implementation carrier UID")
+  in
+  let canonical_type_identity path uid =
+    let entry = canonical_type_entry path uid in
+    Numeric_receipt_private.encode
+      ~schema:"verocaml.numeric-parity-type-slot.v1"
+      [ entry.numeric_type_owner_cmi_full_key; entry.numeric_type_uid ]
+  in
+  let canonical_value_identity path uid =
+    let entry =
+      match
+        exact_by_uid ~identity_class:"numeric semantics" uid value_entries
+          (fun entry -> entry.numeric_value_uid)
+      with
+      | Some entry -> entry
+      | None ->
+          (match
+             List.filter
+               (fun slot ->
+                 String.equal slot.numeric_implementation_value_uid uid)
+               implementation_value_slots
+           with
+          | [ slot ] ->
+              require_exported_implementation_uid ~is_type:false
+                slot.numeric_implementation_value_path uid;
+              exact_by_path ~identity_class:"numeric semantics"
+                slot.numeric_implementation_value_path value_entries
+                (fun entry -> entry.numeric_value_path)
+          | [] ->
+              require_exported_implementation_uid ~is_type:false path uid;
+              exact_by_path ~identity_class:"numeric semantics" path
+                value_entries (fun entry -> entry.numeric_value_path)
+          | _ :: _ :: _ -> fail "ambiguous implementation semantics UID")
+    in
+    Numeric_receipt_private.encode
+      ~schema:"verocaml.numeric-parity-value-slot.v1"
+      [ entry.numeric_value_owner_cmi_full_key; entry.numeric_value_uid ]
+  in
+  let typed_role_resolutions =
+    match typed_interface with
+    | None -> implementation_marker_resolutions
+    | Some signature ->
+        let interface_resolutions = interface_role_resolutions [] signature in
+        if Option.is_none structure then interface_resolutions
+        else (
+        List.iter
+          (fun implementation ->
+            require_exported_implementation_uid ~is_type:false
+              implementation.numeric_typed_callable_path
+              implementation.numeric_typed_callable_uid;
+            match
+              List.find_opt
+                (fun interface ->
+                  String.equal interface.numeric_typed_callable_path
+                    implementation.numeric_typed_callable_path)
+                interface_resolutions
+            with
+            | None ->
+                fail
+                  "numeric role implementation marker has no typed interface slot"
+            | Some interface
+              when String.equal interface.numeric_typed_source_claim
+                     implementation.numeric_typed_source_claim ->
+                ()
+            | Some _ ->
+                fail
+                  "numeric role implementation metadata differs from its typed interface")
+          implementation_marker_resolutions;
+        let implementation_witnesses =
+          interface_resolutions
+          |> List.filter_map (fun interface ->
+                 let marker_witnesses =
+                   List.filter
+                     (fun implementation ->
+                       String.equal implementation.numeric_typed_callable_path
+                         interface.numeric_typed_callable_path)
+                     implementation_marker_resolutions
+                 in
+                 let slots =
+                   List.filter
+                     (fun slot ->
+                       String.equal slot.numeric_implementation_value_path
+                         interface.numeric_typed_callable_path
+                       && String.equal slot.numeric_implementation_value_uid
+                            (exported_implementation_uid ~is_type:false
+                               interface.numeric_typed_callable_path))
+                     implementation_value_slots
+                 in
+                 match marker_witnesses with
+                 | [ witness ] -> Some witness
+                 | _ :: _ :: _ ->
+                     fail
+                       "numeric role has ambiguous implementation marker witnesses"
+                 | [] ->
+                 match slots with
+                 | [ slot ] ->
+                     (match
+                        parse_one Numeric_source_claim_private.role_marker
+                          Numeric_source_claim_private.parse_role
+                          slot.numeric_implementation_value_attributes
+                      with
+                     | Some (source, _)
+                       when not
+                              (String.equal
+                                 (Numeric_source_claim_private.role_material
+                                    source)
+                                 interface.numeric_typed_source_claim) ->
+                         fail
+                           "numeric role implementation metadata differs from its typed interface"
+                     | None ->
+                         [%log.trace "resolved interface-only numeric metadata"
+                           ~provider:(Delator.Field.string unit_name)
+                           ~stage:(Delator.Field.string "numeric-role-cmt-cmti-parity")
+                           ~callable:(Delator.Field.string interface.numeric_typed_callable_path)
+                           ~route:(Delator.Field.string "cmti-reference-and-exact-implementation-export")
+                           ~decision:(Delator.Field.string "accepted")];
+                         None
+                     | Some _ ->
+                     let carrier_path, carrier_uid, semantics_path,
+                         semantics_uid =
+                       resolve_in_environment
+                         slot.numeric_implementation_value_environment
+                         slot.numeric_implementation_value_location
+                         interface.numeric_typed_source
+                     in
+                     Some
+                       { interface with
+                         numeric_typed_carrier_path = Path.name carrier_path;
+                         numeric_typed_carrier_uid = carrier_uid;
+                         numeric_typed_semantics_path = Path.name semantics_path;
+                         numeric_typed_semantics_uid = semantics_uid })
+                 | [] -> (
+                     match original_value_entries interface.numeric_typed_callable_uid with
+                     | [ original ]
+                       when not
+                              (String.equal original.numeric_value_owner_unit
+                                 unit_name) ->
+                         None
+                     | [] | [ _ ] | _ :: _ :: _ ->
+                         fail
+                           "numeric role typed interface has no exact implementation callable slot")
+                 | _ :: _ :: _ ->
+                     fail
+                       "numeric role typed interface has ambiguous implementation callable slots")
+        in
+        List.iter2
+          (fun interface implementation ->
+            let interface_carrier =
+              canonical_type_identity interface.numeric_typed_carrier_path
+                interface.numeric_typed_carrier_uid
+            and implementation_carrier =
+              canonical_type_identity implementation.numeric_typed_carrier_path
+                implementation.numeric_typed_carrier_uid
+            and interface_semantics =
+              canonical_value_identity interface.numeric_typed_semantics_path
+                interface.numeric_typed_semantics_uid
+            and implementation_semantics =
+              canonical_value_identity
+                implementation.numeric_typed_semantics_path
+                implementation.numeric_typed_semantics_uid
+            in
+            if
+              not
+                (String.equal interface_carrier implementation_carrier
+                && String.equal interface_semantics implementation_semantics)
+            then
+              fail
+                "numeric role implementation and interface resolve different exact compiler slots";
+            [%log.trace "correlated numeric role implementation and interface slots"
+              ~provider:(Delator.Field.string unit_name)
+              ~stage:(Delator.Field.string "numeric-role-cmt-cmti-parity")
+              ~route:(Delator.Field.string "full-owner-and-compiler-slot")
+              ~decision:(Delator.Field.string "accepted")])
+          (List.filter
+             (fun interface ->
+               List.exists
+                 (fun implementation ->
+                   String.equal implementation.numeric_typed_callable_path
+                     interface.numeric_typed_callable_path)
+                 implementation_witnesses)
+             interface_resolutions)
+          implementation_witnesses;
+        interface_resolutions)
+  in
+  let local_type_uids owner =
+    let root = Subst.Lazy.force_signature owner.Cmi_format.cmi_sign in
+    let rec collect parent items =
+      List.concat_map
+        (function
+          | Types.Sig_type (ident, declaration, _, _) ->
+              let direct = Path.Pident ident in
+              let qualified =
+                match parent with
+                | None -> direct
+                | Some parent -> Path.Pdot (parent, Ident.name ident)
+              in
+              let uid = compiler_uid declaration.Types.type_uid in
+              if Path.same direct qualified then [ (direct, uid) ]
+              else [ (direct, uid); (qualified, uid) ]
+          | Types.Sig_module (ident, _, declaration, _, Types.Exported) -> (
+              match module_signature items declaration with
+              | None -> []
+              | Some nested ->
+                  let parent =
+                    match parent with
+                    | None -> Path.Pident ident
+                    | Some parent -> Path.Pdot (parent, Ident.name ident)
+                  in
+                  collect (Some parent) nested)
+          | Types.Sig_value _
+          | Types.Sig_module (_, _, _, _, Types.Hidden)
+          | Types.Sig_typext _ | Types.Sig_modtype _ | Types.Sig_class _
+          | Types.Sig_class_type _ ->
+              [])
+        items
+    in
+    collect None root
+  in
+  let abi_context owner =
+    let local_type_uids = local_type_uids owner in
+    let normalize typ = typ in
+    let root_signature =
+      Subst.Lazy.force_signature owner.Cmi_format.cmi_sign
+    in
+    let append_components path components =
+      List.fold_left (fun parent name -> Path.Pdot (parent, name)) path
+        components
+    in
+    let rec signature_uid seen path =
+      let key = Path.name path in
+      if List.mem key seen then None
+      else
+        let from_resolution = function
+          | Some (Signature_type_uid uid) -> Some uid
+          | Some (Signature_module_alias (alias, remaining)) ->
+              signature_uid (key :: seen) (append_components alias remaining)
+          | None -> (
+              match persistent_type_uid ~load_paths ~interface:owner path with
+              | Ok uid -> uid
+              | Error _ -> None)
+        in
+        match Path.flatten path with
+        | `Contains_apply -> None
+        | `Ok (root_ident, components)
+          when Ident.is_global_or_predef root_ident
+               && String.equal (Ident.name root_ident)
+                    (Compilation_unit.Name.to_string owner.Cmi_format.cmi_name) ->
+            from_resolution (signature_type_uid root_signature components)
+        | `Ok (root_ident, []) ->
+            root_signature
+            |> List.find_map (function
+                 | Types.Sig_type (ident, declaration, _, _)
+                   when Ident.same ident root_ident ->
+                     Some (compiler_uid declaration.Types.type_uid)
+                 | _ -> None)
+        | `Ok (root_ident, components) ->
+            let exact_local_module =
+              root_signature
+              |> List.find_map (function
+                   | Types.Sig_module (ident, _, declaration, _, _)
+                     when Ident.same ident root_ident ->
+                       Some declaration.Types.md_type
+                   | _ -> None)
+            in
+            (match exact_local_module with
+            | Some module_type -> (
+                match module_type with
+                | Types.Mty_alias alias ->
+                    signature_uid (key :: seen)
+                      (append_components alias components)
+                | Mty_signature nested ->
+                    from_resolution (signature_type_uid nested components)
+                | Mty_strengthen (Mty_signature nested, _, _) ->
+                    from_resolution (signature_type_uid nested components)
+                | Mty_strengthen _ | Mty_ident _ | Mty_functor _ -> None)
+            | None -> from_resolution None)
+    in
+    let constructor_uid path =
+      match
+        List.find_map
+          (fun (candidate, uid) ->
+            if Path.same candidate path then Some uid else None)
+          local_type_uids
+      with
+      | Some _ as uid -> uid
+      | None -> (
+          match signature_uid [] path with
+          | Some _ as uid -> uid
+          | None ->
+          match predef_type_uid path with
+          | Some _ as uid -> uid
+          | None -> (
+              match persistent_type_uid ~load_paths ~interface:owner path with
+              | Ok uid -> uid
+              | Error _ -> None))
+    in
+    let rec sorts seen candidate =
+      let identity =
+        Compilation_unit.Name.to_string candidate.Cmi_format.cmi_name
+        ^ "@"
+        ^ Option.value ~default:"missing-self-crc"
+            (interface_self_crc candidate)
+      in
+      if List.mem identity seen then (seen, [])
+      else
+        let seen = identity :: seen in
+        let issuer =
+          match interface_family_issuers candidate with
+          | [ issuer ] -> issuer
+          | [] | _ :: _ :: _ -> ""
+        in
+        authenticated_import_interfaces ~load_paths candidate
+        |> List.fold_left
+             (fun (seen, collected) artifact ->
+               let seen, imported = sorts seen artifact.artifact_interface in
+               (seen, collected @ imported))
+             (seen, interface_logical_sorts ~issuer candidate)
+    in
+    let _, logical_sorts = sorts [] owner in
+    ( constructor_uid,
+      List.sort_uniq Logical_sort_private.compare logical_sorts,
+      normalize )
+  in
+  let value_abi ~location entry =
+    let constructor_uid, logical_sorts, normalize =
+      abi_context entry.numeric_value_owner
+    in
+    match
+      symbolic_interface_abi ~canonical_path:entry.numeric_value_path
+        ~value_uid:entry.numeric_value_uid ~constructor_uid ~logical_sorts
+        ~normalize entry.numeric_value_description.Types.val_type
+    with
+    | Ok abi -> abi
+    | Error _ ->
+        fail ~location "numeric callable has unsupported compiler ABI"
+  in
+  let value_mode_abi ~location entry =
+    let prefix = entry.numeric_value_owner_unit ^ "." in
+    let relative =
+      if String.starts_with ~prefix entry.numeric_value_path then
+        String.sub entry.numeric_value_path (String.length prefix)
+          (String.length entry.numeric_value_path - String.length prefix)
+      else
+        fail ~location "numeric callable owner path is inconsistent"
+    in
+    match
+      List.assoc_opt ("value:" ^ relative)
+        (interface_mode_signatures entry.numeric_value_owner)
+    with
+    | Some (Some mode_abi) ->
+        if mode_abi = "" then
+          fail ~location "numeric callable has no exact compiler mode ABI"
+        else mode_abi
+    | Some None | None ->
+        fail ~location "numeric callable has no exact compiler mode ABI"
+  in
+  let variance_material variance =
+    let flag flag = string_of_bool (Types.Variance.mem flag variance) in
+    Numeric_receipt_private.encode ~schema:"verocaml.type-variance.v1"
+      [ flag Types.Variance.May_pos; flag Types.Variance.May_neg;
+        flag Types.Variance.May_weak; flag Types.Variance.Inj;
+        flag Types.Variance.Pos; flag Types.Variance.Neg;
+        flag Types.Variance.Inv ]
+  in
+  let binder_abi declaration =
+    Numeric_receipt_private.encode ~schema:"verocaml.numeric-type-binders.v1"
+      [ string_of_int declaration.Types.type_arity;
+        Numeric_receipt_private.list
+          (List.map variance_material declaration.type_variance);
+        Numeric_receipt_private.list
+          (List.map
+             (fun mode -> string_of_int (Types.Separability.rank mode))
+             declaration.type_separability) ]
+  in
+  let carrier_abi entry =
+    let declaration = entry.numeric_type_declaration in
+    let constructor_uid, logical_sorts, normalize =
+      abi_context entry.numeric_type_owner
+    in
+    let manifest =
+      match declaration.Types.type_manifest with
+      | None -> "opaque"
+      | Some typ -> (
+          match
+            symbolic_interface_abi
+              ~canonical_path:(entry.numeric_type_path ^ "#manifest")
+              ~value_uid:entry.numeric_type_uid ~constructor_uid
+              ~logical_sorts ~normalize typ
+          with
+          | Ok abi -> abi
+          | Error _ -> fail "numeric carrier manifest has unsupported compiler ABI")
+    in
+    let kind =
+      match declaration.Types.type_kind with
+      | Types.Type_abstract _ -> "abstract"
+      | Types.Type_record _ | Types.Type_record_unboxed_product _
+      | Types.Type_variant _ | Types.Type_open ->
+          fail "numeric carrier declaration has unsupported aggregate representation"
+    and privacy =
+      match declaration.Types.type_private with
+      | Asttypes.Public -> "public"
+      | Asttypes.Private -> "private"
+    in
+    Numeric_receipt_private.encode
+      ~schema:"verocaml.numeric-type-constructor-abi.v1"
+      [ entry.numeric_type_path; entry.numeric_type_uid;
+        string_of_int declaration.type_arity; kind; privacy; manifest;
+        string_of_bool declaration.type_is_newtype;
+        string_of_bool declaration.type_unboxed_default ]
+  in
+  let resolve_numeric_base environment location path =
+    with_authenticated_interfaces resolution_artifacts (fun () ->
+      try
+        let environment = Envaux.env_of_only_summary ~allow_missing_modules:false environment in
+        let reference = source_longident ~location path in
+        let resolved, declaration =
+          try Env.find_type_by_name reference environment
+          with Not_found | Env.Error _ | Failure _ ->
+            match reference with
+            | Longident.Ldot (prefix, name) ->
+                let parent, _ = Env.find_module_by_name_lazy prefix environment in
+                let parent = Env.normalize_module_path (Some location) environment parent in
+                let path = Path.name parent ^ "." ^ name in
+                let entry = exact_by_path ~identity_class:"numeric base" path type_entries
+                  (fun entry -> entry.numeric_type_path) in
+                Path.Pdot (parent, name), entry.numeric_type_declaration
+            | _ -> raise Not_found in
+        canonical_type_entry (Path.name resolved) (compiler_uid declaration.Types.type_uid)
+      with Not_found | Env.Error _ | Failure _ ->
+        fail ~location "The numeric base must name an accessible logical type declaration.")
+  in
+  let carrier_base ~location entry source =
+    let declaration, lexical_environment, _ = typed_type_declaration ~location entry in
+    let source_material = Numeric_source_claim_private.carrier_material source in
+    (match parse_one Numeric_source_claim_private.carrier_marker Numeric_source_claim_private.parse_carrier declaration.typ_attributes with
+    | Some (typed_source, _) when String.equal source_material (Numeric_source_claim_private.carrier_material typed_source) -> ()
+    | _ -> fail ~location "Numeric carrier metadata does not match its original typed declaration.");
+    let resolve environment location source =
+      Option.map (resolve_numeric_base environment location) source.Numeric_source_claim_private.base_path in
+    let base = resolve lexical_environment declaration.typ_loc source in
+    if String.equal entry.numeric_type_owner_unit unit_name then begin
+      match List.filter (fun slot -> String.equal slot.numeric_implementation_type_path entry.numeric_type_path) implementation_type_slots with
+      | [slot] ->
+          require_exported_implementation_uid ~is_type:true slot.numeric_implementation_type_path slot.numeric_implementation_type_uid;
+          (match parse_one Numeric_source_claim_private.carrier_marker Numeric_source_claim_private.parse_carrier slot.numeric_implementation_type_attributes with
+          | None ->
+              [%log.trace "retained interface-only numeric base reference"
+                ~carrier:(Delator.Field.string entry.numeric_type_path)
+                ~route:(Delator.Field.string "original-cmti-lexical-environment")]
+          | Some (implementation_source, _) ->
+              if not (String.equal source_material (Numeric_source_claim_private.carrier_material implementation_source)) then
+                fail ~location "Numeric carrier metadata differs between its implementation and interface.";
+              let implementation_base = resolve slot.numeric_implementation_type_environment slot.numeric_implementation_type_location implementation_source in
+              let identity = Option.map (fun entry -> entry.numeric_type_owner_cmi_full_key, entry.numeric_type_uid) in
+              if identity base <> identity implementation_base then
+                fail ~location "The numeric base resolves to different types in the implementation and interface.")
+      | [] -> ()
+      | _ -> fail ~location "The numeric carrier has ambiguous implementation declarations."
+    end;
+    Option.map (fun entry ->
+      let owner = Numeric_interface_claim_private.owner
+        ~owner_unit:entry.numeric_type_owner_unit ~owner_cmi_full_key:entry.numeric_type_owner_cmi_full_key
+        ~owner_cmi_checked_digest:entry.numeric_type_owner_cmi_checked_digest ~import_routes:entry.numeric_type_import_routes in
+      let base = Result.bind owner (fun base_owner -> Numeric_interface_claim_private.base_reference
+        ~type_path:entry.numeric_type_path ~type_uid:entry.numeric_type_uid ~base_owner) in
+      match base with
+      | Error reason -> fail ~location reason
+      | Ok reference ->
+          [%log.debug "resolved numeric base type reference"
+            ~type_uid:(Delator.Field.string reference.type_uid)
+            ~owner:(Delator.Field.string reference.base_owner.owner_unit)
+            ~authority:(Delator.Field.string "compiler-type-reference-not-logical-admission")];
+          reference) base
+  in
+  let semantic_attributes description =
+    List.filter
+      (fun attribute ->
+        List.mem attribute.Parsetree.attr_name.txt
+          [ "verocaml.spec"; "verocaml.proof";
+            "verocaml.external_specification";
+            "verocaml.internal.symbolic.interface.v1" ])
+      description.Types.val_attributes
+  in
+  let root = Subst.Lazy.force_signature interface.Cmi_format.cmi_sign in
+  let rec scan prefix items =
+    List.fold_left
+      (fun (carriers, roles) -> function
+        | Types.Sig_type (_ident, declaration, _, Types.Exported) ->
+            (match
+               exact_markers Numeric_source_claim_private.role_marker
+                 declaration.Types.type_attributes
+             with
+            | [] -> ()
+            | marker :: _ ->
+                fail ~location:marker.Parsetree.attr_loc
+                  "numeric semantic-role marker is attached to a type");
+            (match
+               parse_one Numeric_source_claim_private.carrier_marker
+                 Numeric_source_claim_private.parse_carrier
+                 declaration.Types.type_attributes
+             with
+            | None -> (carriers, roles)
+            | Some (numeric_carrier_source, claim_location) ->
+                let uid = compiler_uid declaration.Types.type_uid in
+                let entry =
+                  match original_type_entries uid with
+                  | [ entry ] -> entry
+                  | [] | _ :: _ :: _ ->
+                      fail ~location:claim_location
+                        "numeric carrier marker is not bound to one exact type slot"
+                in
+                let numeric_carrier_compiler_jkind_abi,
+                    numeric_carrier_compiler_representation =
+                  compiler_type_representation ~location:claim_location entry
+                in
+                let receipt =
+                  { numeric_carrier_source;
+                    numeric_carrier_base = carrier_base ~location:claim_location entry numeric_carrier_source;
+                    numeric_carrier_path = entry.numeric_type_path;
+                    numeric_carrier_uid = uid;
+                    numeric_carrier_owner_unit = entry.numeric_type_owner_unit;
+                    numeric_carrier_owner_cmi_full_key =
+                      entry.numeric_type_owner_cmi_full_key;
+                    numeric_carrier_owner_cmi_checked_digest =
+                      entry.numeric_type_owner_cmi_checked_digest;
+                    numeric_carrier_import_routes =
+                      entry.numeric_type_import_routes;
+                    numeric_carrier_constructor_abi =
+                      (try carrier_abi entry
+                       with Numeric_claim_failure failure ->
+                         raise
+                           (Numeric_claim_failure
+                              { failure with location = Some claim_location }));
+                    numeric_carrier_binder_abi =
+                      binder_abi entry.numeric_type_declaration;
+                    numeric_carrier_compiler_jkind_abi;
+                    numeric_carrier_compiler_representation }
+                in
+                [%log.trace "reconstructed numeric carrier compiler identity"
+                  ~provider:(Delator.Field.string unit_name)
+                  ~stage:
+                    (Delator.Field.string "numeric-source-cmi-reconstruction")
+                  ~route:(Delator.Field.string "exact-type-slot")
+                  ~type_arity:(Delator.Field.int declaration.type_arity)
+                  ~decision:(Delator.Field.string "reconstructed")];
+                (receipt :: carriers, roles))
+        | Types.Sig_value (ident, description, Types.Exported) ->
+            (match
+               exact_markers Numeric_source_claim_private.carrier_marker
+                 description.Types.val_attributes
+             with
+            | [] -> ()
+            | marker :: _ ->
+                fail ~location:marker.Parsetree.attr_loc
+                  "numeric carrier marker is attached to a value");
+            (match
+               parse_one Numeric_source_claim_private.role_marker
+                 Numeric_source_claim_private.parse_role
+                 description.Types.val_attributes
+             with
+            | None -> (carriers, roles)
+            | Some (numeric_role_source, claim_location) ->
+                let path =
+                  String.concat "."
+                    (unit_name :: prefix @ [ Ident.name ident ])
+                and uid = compiler_uid description.Types.val_uid in
+                let callable =
+                  match original_value_entries uid with
+                  | [ entry ] -> entry
+                  | [] | _ :: _ :: _ ->
+                      fail ~location:claim_location
+                        "numeric role marker is not bound to one exact value slot"
+                in
+                let typed_resolution =
+                  let source_material =
+                    Numeric_source_claim_private.role_material numeric_role_source
+                  in
+                  match
+                    List.filter
+                      (fun resolution ->
+                        String.equal resolution.numeric_typed_callable_path path
+                        && String.equal resolution.numeric_typed_source_claim
+                             source_material)
+                      typed_role_resolutions
+                  with
+                  | [ resolution ] -> resolution
+                  | [] ->
+                      fail ~location:claim_location
+                        "numeric role has no exact typed implementation reference witness"
+                  | _ :: _ :: _ ->
+                      fail ~location:claim_location
+                        "numeric role typed implementation reference witness is ambiguous"
+                in
+                let carrier =
+                  match
+                    original_type_entries
+                      typed_resolution.numeric_typed_carrier_uid
+                  with
+                  | [ entry ] -> entry
+                  | [] ->
+                      fail ~location:claim_location
+                        "numeric role carrier typed identity is absent from authenticated CMIs"
+                  | _ :: _ :: _ ->
+                      fail ~location:claim_location
+                        "numeric role carrier typed identity is ambiguous"
+                in
+                (match
+                   exact_markers Numeric_source_claim_private.carrier_marker
+                     carrier.numeric_type_declaration.Types.type_attributes
+                 with
+                | [ marker ] -> (
+                    match Numeric_source_claim_private.parse_carrier marker with
+                    | Ok _ -> ()
+                    | Error reason ->
+                        fail ~location:claim_location
+                          ("numeric role carrier declaration is malformed: "
+                         ^ reason))
+                | [] ->
+                    fail ~location:claim_location
+                      "numeric role carrier path does not name a declared numeric carrier"
+                | _ :: _ :: _ ->
+                    fail ~location:claim_location
+                      "numeric role carrier declaration is ambiguous");
+                let semantics =
+                  match
+                    original_value_entries
+                      typed_resolution.numeric_typed_semantics_uid
+                  with
+                  | [ entry ] -> entry
+                  | [] ->
+                      fail ~location:claim_location
+                        "numeric role semantics typed identity is absent from authenticated CMIs"
+                  | _ :: _ :: _ ->
+                      fail ~location:claim_location
+                        "numeric role semantics typed identity is ambiguous"
+                in
+                if semantic_attributes semantics.numeric_value_description = [] then
+                  fail ~location:claim_location
+                    "numeric role semantics path does not name a typed specification, proof, axiom, external specification, or symbolic declaration";
+                let checked_value_abi (identity_class [@log_value.warn]) entry =
+                  try value_abi ~location:claim_location entry
+                  with Numeric_claim_failure failure ->
+                    [%log.warn "rejected numeric role callable ABI reconstruction"
+                      ~provider:(Delator.Field.string unit_name)
+                      ~stage:
+                        (Delator.Field.string "numeric-source-cmi-reconstruction")
+                      ~identity_class:
+                        (Delator.Field.string
+                           (identity_class [@log_value.warn]))
+                      ~role_identity:
+                        (Delator.Field.string numeric_role_source.role_identity)
+                      ~decision:(Delator.Field.string "rejected")
+                      ~reason_class:(Delator.Field.string "unsupported-typed-abi")];
+                    raise (Numeric_claim_failure failure)
+                in
+                let receipt =
+                  { numeric_role_callable_shape =
+                      (let constructor_uid, logical_sorts, _ = abi_context callable.numeric_value_owner in
+                       Numeric_callable_domain_private.shape ~constructor_uid ~logical_sorts
+                         ~carrier_uid:carrier.numeric_type_uid
+                         ~carrier:carrier.numeric_type_declaration callable.numeric_value_description.Types.val_type);
+                    numeric_role_callable_domain =
+                      (let constructor_uid, logical_sorts, _ = abi_context callable.numeric_value_owner in
+                       Numeric_callable_domain_private.classify ~constructor_uid ~logical_sorts
+                         ~carrier_uid:carrier.numeric_type_uid
+                         ~carrier:carrier.numeric_type_declaration callable.numeric_value_description.Types.val_type);
+                    numeric_role_source;
+                    numeric_role_callable_path = callable.numeric_value_path;
+                    numeric_role_callable_uid = uid;
+                    numeric_role_callable_abi =
+                      checked_value_abi
+                        ("operation" [@log_value.warn]) callable;
+                    numeric_role_callable_mode_abi =
+                      value_mode_abi ~location:claim_location callable;
+                    numeric_role_callable_owner_unit =
+                      callable.numeric_value_owner_unit;
+                    numeric_role_callable_owner_cmi_full_key =
+                      callable.numeric_value_owner_cmi_full_key;
+                    numeric_role_callable_owner_cmi_checked_digest =
+                      callable.numeric_value_owner_cmi_checked_digest;
+                    numeric_role_callable_import_routes =
+                      callable.numeric_value_import_routes;
+                    numeric_role_semantics_path = semantics.numeric_value_path;
+                    numeric_role_semantics_uid = semantics.numeric_value_uid;
+                    numeric_role_semantics_abi =
+                      checked_value_abi
+                        ("semantics" [@log_value.warn]) semantics;
+                    numeric_role_semantics_mode_abi =
+                      value_mode_abi ~location:claim_location semantics;
+                    numeric_role_semantics_owner_unit =
+                      semantics.numeric_value_owner_unit;
+                    numeric_role_semantics_owner_cmi_full_key =
+                      semantics.numeric_value_owner_cmi_full_key;
+                    numeric_role_semantics_owner_cmi_checked_digest =
+                      semantics.numeric_value_owner_cmi_checked_digest;
+                    numeric_role_semantics_import_routes =
+                      semantics.numeric_value_import_routes;
+                    numeric_role_carrier_uid = carrier.numeric_type_uid;
+                    numeric_role_carrier_owner_unit =
+                      carrier.numeric_type_owner_unit;
+                    numeric_role_carrier_owner_cmi_full_key =
+                      carrier.numeric_type_owner_cmi_full_key;
+                    numeric_role_carrier_owner_cmi_checked_digest =
+                      carrier.numeric_type_owner_cmi_checked_digest;
+                    numeric_role_carrier_import_routes =
+                      carrier.numeric_type_import_routes }
+                in
+                [%log.trace "reconstructed numeric role compiler identities"
+                  ~provider:(Delator.Field.string unit_name)
+                  ~stage:
+                    (Delator.Field.string "numeric-source-cmi-reconstruction")
+                  ~route:
+                    (Delator.Field.string "exact-callable-and-semantics-slots")
+                  ~decision:(Delator.Field.string "reconstructed")];
+                (carriers, receipt :: roles))
+        | Types.Sig_module (ident, _, declaration, _, Types.Exported) -> (
+            match module_signature items declaration with
+            | None -> (carriers, roles)
+            | Some nested ->
+                let nested_carriers, nested_roles =
+                  scan (prefix @ [ Ident.name ident ]) nested
+                in
+                (nested_carriers @ carriers, nested_roles @ roles))
+        | Types.Sig_type (_, _, _, Types.Hidden)
+        | Types.Sig_value (_, _, Types.Hidden)
+        | Types.Sig_module (_, _, _, _, Types.Hidden)
+        | Types.Sig_typext _ | Types.Sig_modtype _ | Types.Sig_class _
+        | Types.Sig_class_type _ ->
+            (carriers, roles))
+      ([], []) items
+  in
+  let numeric_carriers, numeric_roles = scan [] root in
+  let numeric_carriers =
+    List.sort
+      (fun left right ->
+        compare
+          (left.numeric_carrier_uid, left.numeric_carrier_constructor_abi)
+          (right.numeric_carrier_uid, right.numeric_carrier_constructor_abi))
+      numeric_carriers
+  and numeric_roles =
+    List.sort
+      (fun left right ->
+        compare
+          (left.numeric_role_callable_uid, left.numeric_role_semantics_uid,
+           left.numeric_role_callable_abi)
+          (right.numeric_role_callable_uid, right.numeric_role_semantics_uid,
+           right.numeric_role_callable_abi))
+      numeric_roles
+  in
+  let duplicate projection values =
+    let keys = List.map projection values in
+    List.length keys <> List.length (List.sort_uniq compare keys)
+  in
+  if duplicate (fun value -> value.numeric_carrier_uid) numeric_carriers then
+    fail "duplicate numeric carrier compiler identity"
+  else if duplicate (fun value -> value.numeric_role_callable_uid) numeric_roles
+  then fail "duplicate numeric role callable compiler identity"
+  else (
+    [%log.info "completed numeric source claim compiler reconstruction"
+      ~provider:(Delator.Field.string unit_name)
+      ~stage:(Delator.Field.string "numeric-source-cmi-reconstruction")
+      ~route:(Delator.Field.string "exact-compiler-signature")
+      ~carrier_count:(Delator.Field.int (List.length numeric_carriers))
+      ~role_count:(Delator.Field.int (List.length numeric_roles))
+      ~authority:(Delator.Field.string "claim-only-not-completion-authority")
+      ~decision:(Delator.Field.string "completed")];
+    { numeric_carriers; numeric_roles;
+      numeric_provenance_nodes = !node_count;
+      numeric_provenance_edges = !edge_count;
+      numeric_provenance_bytes = !graph_bytes })
+[@@delator.instrument] [@@delator.level info]
+
+let retained_numeric_claims (claims : interface_numeric_claims) =
+  let fail reason =
+    raise
+      (Numeric_claim_failure
+         { provider = "retained-numeric-interface"; reason; location = None })
+  in
+  let owner ~owner_unit ~owner_cmi_full_key ~owner_cmi_checked_digest
+      ~import_routes =
+    match
+      Numeric_interface_claim_private.owner ~owner_unit ~owner_cmi_full_key
+        ~owner_cmi_checked_digest ~import_routes
+    with
+    | Ok owner -> owner
+    | Error reason -> fail reason
+  in
+  let carrier_reconstruction_claims =
+    claims.numeric_carriers
+    |> List.map (fun carrier ->
+           let owner =
+             owner ~owner_unit:carrier.numeric_carrier_owner_unit
+               ~owner_cmi_full_key:carrier.numeric_carrier_owner_cmi_full_key
+               ~owner_cmi_checked_digest:
+                 carrier.numeric_carrier_owner_cmi_checked_digest
+               ~import_routes:carrier.numeric_carrier_import_routes
+           in
+           match
+             Numeric_interface_claim_private.carrier_with_base
+               ~base_reference:carrier.numeric_carrier_base
+               ~source_claim:
+                 (Numeric_source_claim_private.carrier_material
+                    carrier.numeric_carrier_source)
+               ~carrier_path:carrier.numeric_carrier_path
+               ~carrier_uid:carrier.numeric_carrier_uid ~owner
+               ~constructor_abi:carrier.numeric_carrier_constructor_abi
+               ~binder_abi:carrier.numeric_carrier_binder_abi
+               ~compiler_jkind_abi:carrier.numeric_carrier_compiler_jkind_abi
+               ~compiler_representation:
+                 (numeric_artifact_representation_name
+                    carrier.numeric_carrier_compiler_representation)
+           with
+           | Ok claim -> claim.transport_key
+           | Error reason -> fail reason)
+    |> List.sort String.compare
+  in
+  let role_reconstruction_claims =
+    claims.numeric_roles
+    |> List.map (fun role ->
+           let callable_owner =
+             owner ~owner_unit:role.numeric_role_callable_owner_unit
+               ~owner_cmi_full_key:
+                 role.numeric_role_callable_owner_cmi_full_key
+               ~owner_cmi_checked_digest:
+                 role.numeric_role_callable_owner_cmi_checked_digest
+               ~import_routes:role.numeric_role_callable_import_routes
+           and semantics_owner =
+             owner ~owner_unit:role.numeric_role_semantics_owner_unit
+               ~owner_cmi_full_key:
+                 role.numeric_role_semantics_owner_cmi_full_key
+               ~owner_cmi_checked_digest:
+                 role.numeric_role_semantics_owner_cmi_checked_digest
+               ~import_routes:role.numeric_role_semantics_import_routes
+           and carrier_owner =
+             owner ~owner_unit:role.numeric_role_carrier_owner_unit
+               ~owner_cmi_full_key:
+                 role.numeric_role_carrier_owner_cmi_full_key
+               ~owner_cmi_checked_digest:
+                 role.numeric_role_carrier_owner_cmi_checked_digest
+               ~import_routes:role.numeric_role_carrier_import_routes
+           in
+           match
+             Numeric_interface_claim_private.role
+               ~source_claim:
+                 (Numeric_source_claim_private.role_material
+                    role.numeric_role_source)
+               ~callable_path:role.numeric_role_callable_path
+               ~callable_uid:role.numeric_role_callable_uid
+               ~callable_type_abi:role.numeric_role_callable_abi
+               ~callable_mode_abi:role.numeric_role_callable_mode_abi
+               ~callable_owner
+               ~semantics_path:role.numeric_role_semantics_path
+               ~semantics_uid:role.numeric_role_semantics_uid
+               ~semantics_type_abi:role.numeric_role_semantics_abi
+               ~semantics_mode_abi:role.numeric_role_semantics_mode_abi
+               ~semantics_owner ~carrier_uid:role.numeric_role_carrier_uid
+               ~carrier_owner
+           with
+           | Ok claim -> claim.transport_key
+           | Error reason -> fail reason)
+    |> List.sort String.compare
+  in
+  let payload_bytes =
+    List.fold_left (fun total claim -> total + String.length claim) 0
+      (carrier_reconstruction_claims @ role_reconstruction_claims)
+  in
+  if payload_bytes > maximum_numeric_provenance_bytes then (
+    [%log.warn "rejected oversized retained numeric claim payload"
+      ~stage:(Delator.Field.string "numeric-retained-inventory")
+      ~route:(Delator.Field.string "pre-emission-size-gate")
+      ~payload_bytes:(Delator.Field.int payload_bytes)
+      ~carrier_count:
+        (Delator.Field.int (List.length carrier_reconstruction_claims))
+      ~role_count:(Delator.Field.int (List.length role_reconstruction_claims))
+      ~decision:(Delator.Field.string "rejected")
+      ~reason_class:(Delator.Field.string "retained-payload-byte-bound")];
+    fail "retained numeric reconstruction inventory exceeds its byte bound"
+  );
+  [%log.info "constructed retained numeric reconstruction inventory"
+    ~stage:(Delator.Field.string "numeric-retained-inventory")
+    ~route:(Delator.Field.string "compiler-reconstructed")
+    ~carrier_count:
+      (Delator.Field.int (List.length carrier_reconstruction_claims))
+    ~role_count:(Delator.Field.int (List.length role_reconstruction_claims))
+    ~authority:(Delator.Field.string "claim-only-not-completion-authority")
+    ~decision:(Delator.Field.string "constructed")];
+  { Retained_interface_authority_private.carrier_reconstruction_claims;
+    role_reconstruction_claims }
+[@@delator.instrument] [@@delator.level info]
 
 let embedded_interface_metadata ~load_paths = function
   | None ->
@@ -3627,7 +6249,9 @@ let adjacent_interface filename =
     try Filename.chop_extension filename with Invalid_argument _ -> filename
   in
   let filename = basename ^ ".cmi" in
-  if Sys.file_exists filename then Some (filename, Cmi_format.read_cmi_lazy filename)
+  if Sys.file_exists filename then
+    let interface, receipt = read_stable_cmi filename in
+    Some (filename, interface, receipt)
   else None
 
 let implementation_interface_digest info =
@@ -4074,12 +6698,18 @@ let coalesce_authority_candidates ~unit_name:(_unit_name [@delator.field Fun.id]
           (Failure "retained interface dependency authority candidates conflict"));
       (filename, authority)
 
-let validate_authority_payload ~unit_name ~cmti_filename ~load_paths interface
-    authority =
+let validate_authority_payload ?implementation_shape ?structure ~unit_name
+    ~cmti_filename ~load_paths interface authority =
   let syntax = interface_broadcast_syntax ~load_paths interface in
   let interface_digest = Option.value ~default:"" (interface_self_crc interface) in
+  let typed_interface =
+    match authenticate_typed_interface ~unit_name ~interface cmti_filename with
+    | Ok artifact -> artifact
+    | Error reason -> raise (Failure reason)
+  in
   let typed_members =
-    typed_interface_broadcast_members ~filename:cmti_filename ~unit_name
+    typed_interface_broadcast_members
+      ~typed_interface:typed_interface.typed_signature ~unit_name
       ~interface_digest ~load_paths ~interface ~interface_syntax:syntax
   in
   let family =
@@ -4169,6 +6799,61 @@ let validate_authority_payload ~unit_name ~cmti_filename ~load_paths interface
     raise
       (Failure
          "retained dependency logical-sort descriptors differ from the compiler interface")
+  else
+    let symbolic_declarations =
+      interface_symbolic_declarations ~load_paths interface
+    in
+    let logical_values =
+      interface_logical_values ~load_paths ~symbolic_declarations interface
+    and retained_logical_values =
+      Retained_interface_authority_private.logical_values authority
+    in
+    if List.sort compare logical_values <> List.sort compare retained_logical_values
+    then
+      raise
+        (Failure
+           "retained dependency logical-value descriptors differ from the compiler interface");
+    let retained_numeric_inventory =
+      Retained_interface_authority_private.numeric_claims authority
+    in
+    let compiler_numeric_claims =
+      interface_numeric_claims ~load_paths
+        ~root_cmi_receipt:authority.cmi_receipt
+        ~typed_interface:typed_interface.typed_signature ?implementation_shape
+        ?structure interface
+      |> retained_numeric_claims
+    in
+    let expected_numeric_claims =
+      if
+        compiler_numeric_claims.carrier_reconstruction_claims = []
+        && compiler_numeric_claims.role_reconstruction_claims = []
+      then []
+      else [ compiler_numeric_claims ]
+    in
+    if retained_numeric_inventory <> expected_numeric_claims then (
+      [%log.warn "rejected substituted retained numeric reconstruction inventory"
+        ~provider:(Delator.Field.string unit_name)
+        ~stage:(Delator.Field.string "numeric-retained-reconciliation")
+        ~route:(Delator.Field.string "exact-cmi-cmti-vri")
+        ~decision:(Delator.Field.string "rejected")
+        ~reason_class:(Delator.Field.string "full-claim-set-mismatch")];
+      raise
+        (Failure
+           "retained numeric reconstruction claims differ from the compiler interface")
+    ) else
+      [%log.info "authenticated retained numeric reconstruction inventory"
+        ~provider:(Delator.Field.string unit_name)
+        ~stage:(Delator.Field.string "numeric-retained-reconciliation")
+        ~route:(Delator.Field.string "exact-cmi-cmti-vri")
+        ~carrier_count:
+          (Delator.Field.int
+             (List.length
+                compiler_numeric_claims.carrier_reconstruction_claims))
+        ~role_count:
+          (Delator.Field.int
+             (List.length compiler_numeric_claims.role_reconstruction_claims))
+        ~authority:(Delator.Field.string "retained-claim-authenticated")
+        ~decision:(Delator.Field.string "accepted")]
 
 let rec dependency_authority_receipt_with validation ~load_paths artifact =
   let interface = artifact.artifact_interface in
@@ -4180,6 +6865,13 @@ let rec dependency_authority_receipt_with validation ~load_paths artifact =
   if
     interface_broadcast_syntax ~load_paths interface = []
     && interface_logical_sorts ~issuer interface = []
+    &&
+    let symbolic_declarations =
+      interface_symbolic_declarations ~load_paths interface
+    in
+    interface_logical_values ~load_paths ~symbolic_declarations interface = []
+    &&
+    not (interface_has_numeric_markers interface)
   then None
   else
     let unit_name = Compilation_unit.Name.to_string interface.Cmi_format.cmi_name in
@@ -4209,116 +6901,163 @@ let rec dependency_authority_receipt_with validation ~load_paths artifact =
             let filename, authority =
               coalesce_authority_candidates ~unit_name candidates
             in
+            let provider_matches =
+              String.equal authority.provider_unit unit_name
+              && String.equal authority.provider_origin unit_name
+            and compiler_matches =
+              String.equal authority.compiler_abi
+                (Config.cmi_magic_number ^ Config.cmt_magic_number)
+            and content_matches =
+              String.equal authority.cmi_receipt
+                artifact.artifact_content_digest
+            and self_crc_matches =
+              String.equal authority.cmi_self_crc
+                (Option.value ~default:"" (interface_self_crc interface))
+            and identity_matches =
+              String.equal authority.cmi_identity (cmi_identity interface)
+            and imports_match =
+              List.sort compare authority.cmi_imports
+              = (imports_of_array interface.Cmi_format.cmi_crcs
+                |> Array.to_list
+                |> List.map (fun (imported : import) ->
+                       (imported.unit_name, imported.crc))
+                |> List.sort compare)
+            in
             if
               not
-                (String.equal authority.provider_unit unit_name
-                && String.equal authority.provider_origin unit_name
-                && String.equal authority.compiler_abi
-                     (Config.cmi_magic_number ^ Config.cmt_magic_number)
-                && String.equal authority.cmi_receipt
-                     artifact.artifact_content_digest
-                && String.equal authority.cmi_self_crc
-                     (Option.value ~default:"" (interface_self_crc interface))
-                && String.equal authority.cmi_identity (cmi_identity interface)
-                && List.sort compare authority.cmi_imports
-                   = (imports_of_array interface.Cmi_format.cmi_crcs
-                     |> Array.to_list
-                     |> List.map (fun (imported : import) ->
-                            (imported.unit_name, imported.crc))
-                     |> List.sort compare))
-            then
+                (provider_matches && compiler_matches && content_matches
+                && self_crc_matches && identity_matches && imports_match)
+            then (
+              [%log.warn "rejected retained dependency CMI authority binding"
+                ~provider:(Delator.Field.string unit_name)
+                ~stage:(Delator.Field.string "dependency-closure")
+                ~route:(Delator.Field.string "exact-cmi-vri")
+                ~provider_matches:(Delator.Field.bool provider_matches)
+                ~compiler_matches:(Delator.Field.bool compiler_matches)
+                ~content_matches:(Delator.Field.bool content_matches)
+                ~self_crc_matches:(Delator.Field.bool self_crc_matches)
+                ~identity_matches:(Delator.Field.bool identity_matches)
+                ~imports_match:(Delator.Field.bool imports_match)
+                ~decision:(Delator.Field.string "rejected")
+                ~reason_class:(Delator.Field.string "complete-cmi-binding")];
               raise
                 (Failure
-                   "retained interface dependency CMI or ABI receipt mismatch");
-            let cmti_candidates =
-              artifact_candidates ~extension:".cmti" ~unit_name
-                ~adjacent:
-                  (Filename.remove_extension artifact.artifact_filename ^ ".cmti")
-                ~load_paths
-              |> List.filter (fun candidate ->
-                     String.equal (artifact_content_receipt candidate)
-                       authority.cmti_receipt)
-            in
-            let cmti_filename, cmti =
-              match cmti_candidates with
-              | [] ->
+                   "retained interface dependency CMI or ABI receipt mismatch"));
+            let cmti_filename, typed_interface =
+              match
+                discover_authenticated_typed_interface
+                  ~required_receipt:authority.cmti_receipt ~unit_name ~interface
+                  ~adjacent:
+                    [ Filename.remove_extension artifact.artifact_filename
+                      ^ ".cmti" ]
+                  ~load_paths ()
+              with
+              | Error _ ->
+                  [%log.warn "rejected missing retained dependency CMTI binding"
+                    ~provider:(Delator.Field.string unit_name)
+                    ~stage:(Delator.Field.string "dependency-closure")
+                    ~route:(Delator.Field.string "stable-cmti-vri")
+                    ~decision:(Delator.Field.string "rejected")
+                    ~reason_class:
+                      (Delator.Field.string "missing-or-stale-cmti")];
                   raise
                     (Failure
                        "retained interface dependency CMTI artifact is missing or stale")
-              | filename :: _ -> (
-                  match Cmt_format.read filename with
-                  | _, Some info -> (filename, info)
-                  | _, None ->
-                      raise
-                        (Failure
-                           "retained interface dependency CMTI metadata is missing"))
+              | Ok pair -> pair
             in
+            let cmti = typed_interface.typed_metadata in
             let cmti_imports =
               imports cmti |> Array.to_list
               |> List.map (fun (imported : import) ->
                      (imported.unit_name, imported.crc))
               |> List.sort compare
             in
+            let cmti_digest_matches =
+              authority.cmti_interface_digest
+              = Option.map Digest.to_hex cmti.Cmt_format.cmt_interface_digest
+            and cmti_identity_matches =
+              String.equal authority.cmti_identity (cmti_identity cmti)
+            and cmti_imports_match =
+              List.sort compare authority.cmti_imports = cmti_imports
+            in
             if
               not
-                (String.equal
-                   (Compilation_unit.name_as_string cmti.Cmt_format.cmt_modname)
-                   unit_name
-                && authority.cmti_interface_digest
-                   = Option.map Digest.to_hex cmti.Cmt_format.cmt_interface_digest
-                && String.equal authority.cmti_identity (cmti_identity cmti)
-                && List.sort compare authority.cmti_imports = cmti_imports)
-            then
+                (cmti_digest_matches && cmti_identity_matches
+                && cmti_imports_match)
+            then (
+              [%log.warn "rejected retained dependency CMTI authority binding"
+                ~provider:(Delator.Field.string unit_name)
+                ~stage:(Delator.Field.string "dependency-closure")
+                ~route:(Delator.Field.string "stable-cmti-vri")
+                ~digest_matches:(Delator.Field.bool cmti_digest_matches)
+                ~identity_matches:(Delator.Field.bool cmti_identity_matches)
+                ~imports_match:(Delator.Field.bool cmti_imports_match)
+                ~decision:(Delator.Field.string "rejected")
+                ~reason_class:(Delator.Field.string "complete-cmti-binding")];
               raise
                 (Failure
-                   "retained interface dependency CMTI identity or import receipt mismatch");
-            (match cmti.Cmt_format.cmt_annots with
-            | Cmt_format.Interface _ -> ()
-            | Implementation _ | Partial_implementation _ | Partial_interface _
-            | Packed _ ->
-                raise
-                  (Failure
-                     "retained interface dependency CMTI is not a finalized interface"));
+                   "retained interface dependency CMTI identity or import receipt mismatch"));
             validate_authority_payload ~unit_name ~cmti_filename ~load_paths
               interface authority;
+            let interface_imports =
+              imports_of_array interface.Cmi_format.cmi_crcs
+              |> Array.to_list
+              |> List.filter (fun (imported : import) ->
+                     not (String.equal imported.unit_name unit_name))
+            in
+            let missing_interface_edge =
+              List.find_opt
+                (fun (imported : import) ->
+                  not
+                    (List.exists
+                       (fun edge ->
+                         String.equal edge.Retained_interface_authority_private.dependency_unit
+                           imported.unit_name
+                         && edge.dependency_compiler_receipt = imported.crc)
+                       authority.dependencies))
+                interface_imports
+            in
+            if Option.is_some missing_interface_edge then
+              raise
+                (Failure
+                   "retained interface dependency authority omits a compiler interface import");
             let dependencies =
-              Array.to_list interface.Cmi_format.cmi_crcs
-              |> List.filter_map (fun imported ->
-                     let name = Import_info.name imported in
-                     if Compilation_unit.Name.equal name interface.Cmi_format.cmi_name
-                     then None
-                     else
-                       let dependency_unit = Compilation_unit.Name.to_string name in
-                       match Import_info.crc imported with
-                       | None ->
-                           raise
-                             (Failure
-                                "retained interface dependency has no compiler receipt")
-                       | Some crc -> (
-                           match
-                             find_imported_interface_artifact ~load_paths
-                               ~unit_name:dependency_unit
-                               ~expected_crc:(Digest.to_hex crc)
-                           with
-                           | None ->
-                               raise
-                                 (Failure
-                                    "retained transitive interface artifact is missing or stale")
-                           | Some dependency ->
-                               Some
-                                 {
-                                   Retained_interface_authority_private.dependency_unit;
-                                   dependency_compiler_receipt =
-                                     Some (Digest.to_hex crc);
-                                   dependency_interface_receipt =
-                                     dependency.artifact_content_digest;
-                                   dependency_authority_receipt =
-                                     dependency_authority_receipt_with validation
-                                       ~load_paths dependency;
-                                 }))
+              authority.dependencies
+              |> List.map (fun edge ->
+                     let dependency_unit =
+                       edge.Retained_interface_authority_private.dependency_unit
+                     in
+                     match edge.dependency_compiler_receipt with
+                     | None ->
+                         raise
+                           (Failure
+                              "retained interface dependency has no compiler receipt")
+                     | Some crc -> (
+                         match
+                           find_imported_interface_artifact ~load_paths
+                             ~unit_name:dependency_unit ~expected_crc:crc ()
+                         with
+                         | None ->
+                             raise
+                               (Failure
+                                  "retained transitive interface artifact is missing or stale")
+                         | Some dependency ->
+                             {
+                               Retained_interface_authority_private.dependency_unit;
+                               dependency_compiler_receipt = Some crc;
+                               dependency_interface_receipt =
+                                 dependency.artifact_content_digest;
+                               dependency_authority_receipt =
+                                 dependency_authority_receipt_with validation
+                                   ~load_paths dependency;
+                             }))
               |> List.sort compare
             in
-            if List.sort compare authority.dependencies <> dependencies then
+            if
+              List.length dependencies
+              <> List.length (List.sort_uniq compare dependencies)
+              || List.sort compare authority.dependencies <> dependencies
+            then
               raise
                 (Failure
                    "retained interface dependency authority closure differs");
@@ -4333,15 +7072,19 @@ let rec dependency_authority_receipt_with validation ~load_paths artifact =
               ~decision:(Delator.Field.string "accepted")];
             Some receipt)
 
-let retained_authority_record ~unit_name ~cmi_filename ~cmti_filename
-    ~ordinary_cmi_receipts ~load_paths interface interface_broadcasts
-    interface_logical_sorts =
-  let _, cmti = Cmt_format.read cmti_filename in
-  let cmti =
-    match cmti with
-    | Some info -> info
-    | None -> raise (Failure "retained interface CMTI metadata is missing")
+let retained_authority_record ~unit_name ~cmi_receipt ~cmti_filename
+    ~cmti_receipt ~ordinary_cmi_receipts ~load_paths ~implementation_imports interface
+    interface_broadcasts interface_logical_sorts interface_logical_values
+    interface_numeric_claims =
+  let typed_interface =
+    match authenticate_typed_interface ~unit_name ~interface cmti_filename with
+    | Ok artifact -> artifact
+    | Error reason -> raise (Failure reason)
   in
+  let cmti = typed_interface.typed_metadata
+  and observed_cmti_receipt = typed_interface.typed_content_receipt in
+  if not (String.equal cmti_receipt observed_cmti_receipt) then
+    raise (Failure "retained interface CMTI snapshot receipt changed");
   if
     not
       (String.equal
@@ -4370,51 +7113,97 @@ let retained_authority_record ~unit_name ~cmi_filename ~cmti_filename
       ~reason_class:(Delator.Field.string "complete-import-vector")];
     raise (Failure "retained interface CMI and CMTI import vectors differ"));
   let authority_validation = authority_validation () in
+  let interface_dependency_imports =
+    Array.to_list (imports_of_array interface.Cmi_format.cmi_crcs)
+    |> List.filter (fun (imported : import) ->
+           not (String.equal imported.unit_name unit_name))
+  in
+  let dependency_imports =
+    List.map (fun imported -> (imported, true)) interface_dependency_imports
+    @ (Array.to_list implementation_imports
+      |> List.filter (fun (imported : import) ->
+             not (String.equal imported.unit_name unit_name))
+      |> List.map (fun imported -> (imported, false)))
+    |> List.sort (fun ((left : import), _) ((right : import), _) ->
+           compare (left.unit_name, left.crc) (right.unit_name, right.crc))
+    |> fun imports ->
+    let rec coalesce merged = function
+      | [] -> List.rev merged
+      | ((imported : import), required) :: rest -> (
+          match merged with
+          | ((existing : import), existing_required) :: tail
+            when String.equal existing.unit_name imported.unit_name
+                 && existing.crc = imported.crc ->
+              coalesce
+                ((existing, existing_required || required) :: tail)
+                rest
+          | _ -> coalesce ((imported, required) :: merged) rest)
+    in
+    coalesce [] imports
+  in
   let dependencies =
-    Array.to_list interface.Cmi_format.cmi_crcs
-    |> List.filter_map (fun imported ->
-           let name = Import_info.name imported in
-           if Compilation_unit.Name.equal name interface.Cmi_format.cmi_name then
-             None
-           else
-             let dependency_unit = Compilation_unit.Name.to_string name in
-             match Import_info.crc imported with
-             | None ->
+    dependency_imports
+    |> List.filter_map (fun ((imported : import), interface_required) ->
+           let dependency_unit = imported.unit_name in
+           match imported.crc with
+             | None when interface_required ->
                  raise
                    (Failure
                       "retained interface dependency has no compiler receipt")
+             | None -> None
              | Some crc -> (
                  match
                    find_imported_interface_artifact ~load_paths ~unit_name:dependency_unit
-                     ~expected_crc:(Digest.to_hex crc)
-                 with
-                 | None ->
+                     ~expected_crc:crc ()
+                  with
+                 | None when interface_required ->
                      raise
                        (Failure
                           "retained interface dependency artifact is missing or stale")
+                 | None -> None
                  | Some artifact ->
-                     Some
-                       {
-                         Retained_interface_authority_private.dependency_unit;
-                         dependency_compiler_receipt = Some (Digest.to_hex crc);
-                         dependency_interface_receipt =
-                           artifact.artifact_content_digest;
-                         dependency_authority_receipt =
-                           dependency_authority_receipt_with authority_validation
-                             ~load_paths artifact;
-                       }))
+                     let dependency_authority_receipt =
+                       try
+                         dependency_authority_receipt_with authority_validation
+                           ~load_paths artifact
+                       with Failure (reason [@log_value.warn]) as failure ->
+                         [%log.warn "rejected retained dependency during authority closure"
+                           ~provider:(Delator.Field.string unit_name)
+                           ~stage:(Delator.Field.string "dependency-closure")
+                           ~route:(Delator.Field.string "exact-cmi-cmti-vri")
+                           ~dependency_unit:
+                             (Delator.Field.string dependency_unit)
+                           ~decision:(Delator.Field.string "rejected")
+                           ~reason_class:
+                             (Delator.Field.string
+                                (reason [@log_value.warn]))];
+                         raise failure
+                     in
+                     if
+                       (not interface_required)
+                       && Option.is_none dependency_authority_receipt
+                     then None
+                     else
+                       Some
+                         {
+                           Retained_interface_authority_private.dependency_unit;
+                           dependency_compiler_receipt = Some crc;
+                           dependency_interface_receipt =
+                             artifact.artifact_content_digest;
+                           dependency_authority_receipt;
+                         }))
     |> List.sort_uniq compare
   in
   {
     Retained_interface_authority_private.provider_unit = unit_name;
     provider_origin = unit_name;
     compiler_abi = Config.cmi_magic_number ^ Config.cmt_magic_number;
-    cmi_receipt = artifact_content_receipt cmi_filename;
+    cmi_receipt;
     cmi_self_crc =
       Option.value ~default:"" (interface_self_crc interface);
     cmi_imports;
     cmi_identity = cmi_identity interface;
-    cmti_receipt = artifact_content_receipt cmti_filename;
+    cmti_receipt;
     cmti_interface_digest =
       Option.map Digest.to_hex cmti.Cmt_format.cmt_interface_digest;
     cmti_imports;
@@ -4422,10 +7211,19 @@ let retained_authority_record ~unit_name ~cmi_filename ~cmti_filename
     ordinary_cmi_receipts = List.sort_uniq String.compare ordinary_cmi_receipts;
     dependencies;
     payloads =
-      [
-        Broadcast_witnesses interface_broadcasts;
-        Logical_sorts interface_logical_sorts;
-      ];
+      [ Retained_interface_authority_private.Broadcast_witnesses
+          interface_broadcasts;
+        Retained_interface_authority_private.Logical_sorts
+          interface_logical_sorts;
+        Retained_interface_authority_private.Logical_values
+          interface_logical_values ]
+      @
+      let numeric = retained_numeric_claims interface_numeric_claims in
+      if
+        numeric.carrier_reconstruction_claims = []
+        && numeric.role_reconstruction_claims = []
+      then []
+      else [ Retained_interface_authority_private.Numeric_claims numeric ];
   }
 
 let discover_retained_authority ~unit_name ~cmi_filename ~load_paths
@@ -4522,7 +7320,7 @@ let discover_retained_authority ~unit_name ~cmi_filename ~load_paths
           ~reason_class:(Delator.Field.string "conflicting-complete-receipts")];
         raise (Failure "retained interface authority candidates conflict"));
       let expected = expected first in
-      if not (Retained_interface_authority_private.equal first expected) then (
+      if not (Retained_interface_authority_private.equal_known first expected) then (
         [%log.debug "rejected mismatched retained interface authority"
           ~provider:(Delator.Field.string unit_name)
           ~stage:(Delator.Field.string "sidecar-validation")
@@ -4545,7 +7343,7 @@ let discover_retained_authority ~unit_name ~cmi_filename ~load_paths
               ~load_paths:ordinary_directories
             |> List.filter_map (fun candidate ->
                    try
-                     let interface = Cmi_format.read_cmi_lazy candidate in
+                     let interface, _ = read_stable_cmi candidate in
                      let unit_matches =
                        Compilation_unit.Name.equal interface.Cmi_format.cmi_name
                          (Compilation_unit.Name.of_string unit_name)
@@ -4593,7 +7391,8 @@ let discover_retained_authority ~unit_name ~cmi_filename ~load_paths
         ~decision:(Delator.Field.string "accepted")];
       (filename, first)
 
-let load_internal ?int_size ?interface_info ?interface_filename ?cmti_filename
+let load_internal ?int_size ?interface_info ?interface_filename
+    ?interface_content_receipt ?cmti_filename
     ?(authority_filenames = []) ?(authority_mode = Import_authority)
     ?(implicit_authority_discovery = true)
     ?(ordinary_cmi_receipts = [])
@@ -4611,40 +7410,63 @@ let load_internal ?int_size ?interface_info ?interface_filename ?cmti_filename
       | Malformed -> input_error Malformed_input
       | Readable_abi -> (
           try
-            (* The accepted loader threat model requires the CMT path to remain
-               stable for the duration of this load.  Capture the digest before
-               decoding so the raw bytes are part of the exact decoded
-               artifact's narrow callback identity. *)
-            let raw_artifact_digest = artifact_digest filename in
-            let embedded_interface_info, info =
-              match Cmt_format.read filename with
-              | embedded_interface, Some info -> (embedded_interface, info)
-              | _, None -> raise (Failure "missing CMT metadata")
+            let (embedded_interface_info, info), raw_artifact_receipt =
+              stable_file_snapshot filename (fun snapshot ->
+                  match Cmt_format.read snapshot with
+                  | embedded_interface, Some info -> (embedded_interface, info)
+                  | _, None -> raise (Failure "missing CMT metadata"))
             in
-            if not (String.equal raw_artifact_digest (artifact_digest filename))
-            then raise (Failure "CMT changed while it was being loaded");
+            let raw_artifact_digest =
+              digest_of_content_receipt raw_artifact_receipt
+            in
             let embedded_interface =
               Option.is_some embedded_interface_info
             in
+            let preflight_provider =
+              Compilation_unit.name_as_string info.Cmt_format.cmt_modname
+            in
+            (match
+               validate_numeric_load_path_inventory
+                 ~provider:preflight_provider inventory_load_paths
+             with
+            | Ok () -> ()
+            | Error reason ->
+                raise
+                  (Numeric_claim_failure
+                     { provider = preflight_provider; reason; location = None }));
             (* The compiler embeds the implementation interface only when no
                separately compiled interface constrained the unit.  A CMTI is
                optional, so its presence cannot authenticate this boundary. *)
             let explicit_interface = not embedded_interface in
-            let interface_filename, interface_info =
+            let interface_filename, interface_info, interface_content_receipt =
               match interface_info with
-              | Some explicit -> (interface_filename, Some explicit)
+              | Some explicit ->
+                  (interface_filename, Some explicit, interface_content_receipt)
               | None -> (
                   match
                     (adjacent_interface filename, embedded_interface_info)
                   with
-                  | Some (filename, adjacent), _ ->
-                      (Some filename, Some adjacent)
-                  | None, Some embedded -> (None, Some embedded)
+                  | Some (filename, adjacent, receipt), _ ->
+                      (Some filename, Some adjacent, Some receipt)
+                  | None, Some embedded -> (None, Some embedded, None)
                   | None, None ->
                       raise
                         (Failure
                            "separate implementation interface has no adjacent CMI"))
             in
+            (match
+               validate_numeric_load_path_sequences
+                 ~provider:preflight_provider
+                 [
+                   List.to_seq info.Cmt_format.cmt_loadpath.visible;
+                   List.to_seq info.Cmt_format.cmt_loadpath.hidden;
+                 ]
+             with
+            | Ok () -> ()
+            | Error reason ->
+                raise
+                  (Numeric_claim_failure
+                     { provider = preflight_provider; reason; location = None }));
             let build_directory, load_path_visible, load_path_hidden =
               relocated_paths ~filename
                 ~build_directory:info.Cmt_format.cmt_builddir
@@ -4807,6 +7629,36 @@ let load_internal ?int_size ?interface_info ?interface_filename ?cmti_filename
                   Option.value ~default:(Filename.remove_extension cmi_filename ^ ".cmti")
                     cmti_filename
                 in
+                let typed_interface_artifact =
+                  if Sys.file_exists typed_interface_filename then
+                    match interface_info with
+                    | Some interface -> (
+                        match
+                          authenticate_typed_interface ~unit_name ~interface
+                            typed_interface_filename
+                        with
+                        | Ok artifact -> Some artifact
+                        | Error reason -> raise (Failure reason))
+                    | None ->
+                        raise
+                          (Failure
+                             "typed interface has no exact compiler interface")
+                  else None
+                in
+                let typed_interface =
+                  Option.map
+                    (fun artifact -> artifact.typed_signature)
+                    typed_interface_artifact
+                in
+                let cmi_content_receipt =
+                  match interface_content_receipt with
+                  | Some receipt -> receipt
+                  | None -> artifact_content_receipt cmi_filename
+                and cmti_content_receipt =
+                  Option.map
+                    (fun artifact -> artifact.typed_content_receipt)
+                    typed_interface_artifact
+                in
                 let interface_broadcasts =
                   match interface_broadcast_syntax with
                   | [] -> []
@@ -4833,7 +7685,13 @@ let load_internal ?int_size ?interface_info ?interface_filename ?cmti_filename
                             | None -> fail "has no retained interface receipt"
                           in
                           typed_interface_broadcast_members
-                            ~filename:typed_interface_filename ~unit_name
+                            ~typed_interface:
+                              (match typed_interface with
+                              | Some signature -> signature
+                              | None ->
+                                  fail
+                                    "has no authenticated typed interface receipt")
+                            ~unit_name
                             ~interface_digest:digest
                             ~load_paths:interface_load_paths ~interface
                             ~interface_syntax:interface_broadcast_syntax
@@ -4979,23 +7837,64 @@ let load_internal ?int_size ?interface_info ?interface_filename ?cmti_filename
                       in
                       interface_logical_sorts ~issuer interface
                 in
+                let interface_logical_values =
+                  match interface_info with
+                  | None -> []
+                  | Some interface ->
+                      interface_logical_values
+                        ~load_paths:interface_load_paths
+                        ~symbolic_declarations:interface_symbolic_declarations
+                        interface
+                in
+                let interface_numeric_claims =
+                  match interface_info with
+                  | None ->
+                      { numeric_carriers = []; numeric_roles = [];
+                        numeric_provenance_nodes = 0;
+                        numeric_provenance_edges = 0;
+                        numeric_provenance_bytes = 0 }
+                  | Some interface ->
+                      interface_numeric_claims
+                        ~load_paths:interface_load_paths
+                        ~root_cmi_receipt:cmi_content_receipt
+                        ?typed_interface
+                        ?implementation_shape:info.Cmt_format.cmt_impl_shape
+                        ~structure interface
+                in
                 let has_retained_authority =
                   interface_broadcast_syntax <> []
                   || interface_logical_sorts <> []
+                  || interface_logical_values <> []
+                  || interface_numeric_claims.numeric_carriers <> []
+                  || interface_numeric_claims.numeric_roles <> []
                 in
                 let retained_authority_filename, retained_authority,
                     interface_broadcasts =
                   match (interface_info, has_retained_authority) with
                   | Some interface, true ->
+                      let cmti_content_receipt =
+                        match cmti_content_receipt with
+                        | Some receipt -> receipt
+                        | None ->
+                            raise
+                              (Broadcast_artifact_failure
+                                 { provider = unit_name;
+                                   reason =
+                                     "has no authenticated typed interface receipt" })
+                      in
                       (try
                          match authority_mode with
                       | Emit_authority ->
                           let expected =
-                            retained_authority_record ~unit_name ~cmi_filename
+                            retained_authority_record ~unit_name
+                              ~cmi_receipt:cmi_content_receipt
                               ~cmti_filename:typed_interface_filename
+                              ~cmti_receipt:cmti_content_receipt
                               ~ordinary_cmi_receipts
+                              ~implementation_imports:imports
                               ~load_paths:interface_load_paths interface
                               interface_broadcasts interface_logical_sorts
+                              interface_logical_values interface_numeric_claims
                           in
                           [%log.info "completed retained interface authority generation"
                             ~provider:(Delator.Field.string unit_name)
@@ -5015,8 +7914,9 @@ let load_internal ?int_size ?interface_info ?interface_filename ?cmti_filename
                               ~implicit_discovery:implicit_authority_discovery
                               ~expected:(fun authority ->
                                 validate_authority_payload ~unit_name
+                                  ?implementation_shape:info.Cmt_format.cmt_impl_shape
                                   ~cmti_filename:typed_interface_filename
-                                  ~load_paths:interface_load_paths interface
+                                  ~load_paths:interface_load_paths ~structure interface
                                   authority;
                                 [%log.debug
                                   "independently recomputed direct-provider retained witnesses"
@@ -5030,12 +7930,17 @@ let load_internal ?int_size ?interface_info ?interface_filename ?cmti_filename
                                     (Delator.Field.int
                                        (List.length interface_broadcasts))
                                   ~decision:(Delator.Field.string "accepted")];
-                                retained_authority_record ~unit_name ~cmi_filename
+                                retained_authority_record ~unit_name
+                                  ~cmi_receipt:cmi_content_receipt
                                   ~cmti_filename:typed_interface_filename
+                                  ~cmti_receipt:cmti_content_receipt
                                   ~ordinary_cmi_receipts:
                                     authority.ordinary_cmi_receipts
+                                  ~implementation_imports:imports
                                   ~load_paths:interface_load_paths interface
-                                  interface_broadcasts interface_logical_sorts)
+                                  interface_broadcasts interface_logical_sorts
+                                  interface_logical_values
+                                  interface_numeric_claims)
                           in
                           ( Some authority_filename,
                             Some authority,
@@ -5134,6 +8039,7 @@ let load_internal ?int_size ?interface_info ?interface_filename ?cmti_filename
                     metadata = info;
                     embedded_interface_metadata = interface_info;
                     raw_artifact_digest;
+                    raw_artifact_receipt;
                     filename;
                     source_file;
                     unit_name;
@@ -5183,7 +8089,9 @@ let load_internal ?int_size ?interface_info ?interface_filename ?cmti_filename
                     interface_broadcast_declarations;
                     interface_broadcast_groups;
                     interface_symbolic_declarations;
+                    interface_logical_values;
                     interface_logical_sorts;
+                    interface_numeric_claims;
                     interface_broadcasts;
                     declaration_dependency_count =
                       List.length info.Cmt_format.cmt_declaration_dependencies;
@@ -5224,6 +8132,25 @@ let load_internal ?int_size ?interface_info ?interface_filename ?cmti_filename
                   ~decision:(Delator.Field.string "accepted")];
                 Ok implementation
           with
+          | Numeric_claim_failure { provider; reason; location } ->
+              [%log.debug "routing numeric declaration rejection"
+                ~provider:(Delator.Field.string provider)
+                ~stage:(Delator.Field.string "artifact-diagnostic")
+                ~failure_class:
+                  (Delator.Field.string "numeric-source-claim")
+                ~decision:(Delator.Field.string "rejected")];
+              let span =
+                match location with
+                | None -> Diagnostic.file_span filename
+                | Some location ->
+                    Diagnostic.span_of_location ~fallback_file:filename location
+              in
+              Error
+                (Diagnostic.make
+                   (Diagnostic.Invalid_numeric_declaration
+                      ("Invalid numeric declaration in " ^ provider ^ ": "
+                     ^ reason))
+                   span)
           | Symbolic_artifact_failure { provider; reason } ->
               [%log.debug "routing typed symbolic artifact rejection"
                 ~provider:(Delator.Field.string provider)
@@ -5247,9 +8174,10 @@ let load_internal ?int_size ?interface_info ?interface_filename ?cmti_filename
                 ~route:(Delator.Field.string "artifact-load")
                 ~stage:(Delator.Field.string "broadcast-artifact-receipt")
                 ~failure_class:(Delator.Field.string "dependency-artifact")
-                ~cause_class:
-                  (Delator.Field.string
-                     (_broadcast_artifact_failure_name failure))
+                  ~cause_class:
+                    (Delator.Field.string
+                       (_broadcast_artifact_failure_name failure))
+                  ~reason_class:(Delator.Field.string _reason)
                 ~correlation:
                   (Delator.Field.string
                      (Digest.string
@@ -5267,11 +8195,16 @@ let load_internal ?int_size ?interface_info ?interface_filename ?cmti_filename
                    })
           | Unsupported_interface_metadata classification ->
               input_error classification
-          | Cmt_format.Error _
-          | Cmi_format.Error _
-          | End_of_file
-          | Failure _
-          | Invalid_argument _ ->
+          | Failure (reason [@log_value.warn])
+          | Invalid_argument (reason [@log_value.warn]) ->
+              [%log.warn "rejected malformed compiler artifact"
+                ~stage:(Delator.Field.string "artifact-load")
+                ~route:(Delator.Field.string "cmt-cmi")
+                ~reason:
+                  (Delator.Field.string (reason [@log_value.warn]))
+                ~decision:(Delator.Field.string "rejected")];
+              input_error Malformed_input
+          | Cmt_format.Error _ | Cmi_format.Error _ | End_of_file ->
               input_error Malformed_input
           | Sys_error _ ->
               artifact_io_warning ~route:"cmt-cmi";
@@ -5331,7 +8264,7 @@ let normalize_value_path (implementation : implementation) location environment
                Option.bind imported.crc (fun expected_crc ->
                    find_imported_interface_artifact
                      ~load_paths:(normalization_load_paths implementation)
-                     ~unit_name:imported.unit_name ~expected_crc))
+                     ~unit_name:imported.unit_name ~expected_crc ()))
     in
     Some
       (with_authenticated_interfaces artifacts (fun () ->
@@ -5367,7 +8300,9 @@ let load_with_interface ?int_size ?cmti ?vri ?(vri_candidates = [])
       | Malformed -> input_error Malformed_input
       | Readable_abi -> (
           try
-            let interface_info = Cmi_format.read_cmi_lazy cmi in
+            let interface_info, interface_content_receipt =
+              read_stable_cmi cmi
+            in
             match explicit_interface_unsupported interface_info with
             | Some classification -> input_error classification
             | None ->
@@ -5376,7 +8311,7 @@ let load_with_interface ?int_size ?cmti ?vri ?(vri_candidates = [])
                   |> stable_unique String.equal
                 in
                 load_internal ?int_size ~interface_info
-                  ~interface_filename:cmi
+                  ~interface_filename:cmi ~interface_content_receipt
                   ?cmti_filename:cmti ~authority_filenames
                   ~implicit_authority_discovery
                   ~inventory_load_paths:artifact_directories cmt
@@ -5405,14 +8340,16 @@ let emit_retained_interface_authority ?int_size ?(ordinary_cmis = [])
     let ordinary_cmi_receipts =
     ordinary_cmis
     |> List.map (fun filename ->
-           let interface = Cmi_format.read_cmi_lazy filename in
+           let interface, _ = read_stable_cmi filename in
            match interface_self_crc interface with
            | Some receipt -> receipt
            | None -> raise (Failure "ordinary CMI view has no compiler receipt"))
     |> List.sort_uniq String.compare
     in
+    let interface_info, interface_content_receipt = read_stable_cmi cmi in
     match
-      load_internal ?int_size ~interface_info:(Cmi_format.read_cmi_lazy cmi)
+      load_internal ?int_size ~interface_info
+        ~interface_content_receipt
         ~interface_filename:cmi ~cmti_filename:cmti
         ~ordinary_cmi_receipts
         ~inventory_load_paths:artifact_directories
@@ -5424,6 +8361,14 @@ let emit_retained_interface_authority ?int_size ?(ordinary_cmis = [])
       | None -> Ok ()
       | Some authority ->
           let encoded = Retained_interface_authority_private.encode authority in
+          (match Retained_interface_authority_private.decode encoded with
+          | Ok decoded
+            when Retained_interface_authority_private.equal authority decoded ->
+              ()
+          | Ok _ | Error _ ->
+              raise
+                (Failure
+                   "retained interface authority exceeds canonical decoder bounds"));
           let temporary = ref None in
           (try
              let filename =
@@ -5651,7 +8596,7 @@ let erase_retained_interface_authority ~input ~output =
       signature
   in
   try
-    let interface = Cmi_format.read_cmi_lazy input in
+    let interface, _ = read_stable_cmi input in
     let signature =
       Subst.Lazy.force_signature interface.Cmi_format.cmi_sign
       |> signature_items |> Subst.Lazy.of_signature
@@ -5704,3 +8649,30 @@ let erase_retained_interface_authority ~input ~output =
 [@@delator.instrument]
 [@@delator.level debug]
 [@@delator.no_exn_log]
+
+let implementation_type_logical_sorts (implementation [@delator.skip]) ~implementation_uid =
+  let matches = match implementation.embedded_interface_metadata, implementation.metadata.Cmt_format.cmt_impl_shape with
+    | Some interface, Some shape ->
+        let signature = Subst.Lazy.force_signature interface.Cmi_format.cmi_sign in
+        List.filter (fun descriptor ->
+          String.equal descriptor.Logical_sort_private.provider_origin implementation.unit_name
+          && (let components = String.split_on_char '.' descriptor.type_path in
+              match components with
+              | root :: components when String.equal root implementation.unit_name ->
+                  (match signature_type_uid signature components with
+                  | Some (Signature_type_uid uid) when String.equal uid descriptor.type_uid ->
+                      implementation_export_uid ~unit_name:implementation.unit_name
+                        ~environment:implementation.structure.str_final_env
+                        ~namespace:Shape.Sig_component_kind.Type shape descriptor.type_path
+                      = Some implementation_uid
+                  | _ -> false)
+              | _ -> false)) implementation.interface_logical_sorts
+        |> List.sort_uniq Logical_sort_private.compare
+    | _ -> [] in
+  [%log.trace "correlated local logical type through its exact compiler export"
+    ~provider:(Delator.Field.string implementation.unit_name)
+    ~implementation_uid:(Delator.Field.string implementation_uid)
+    ~matching_receipts:(Delator.Field.int (List.length matches))
+    ~identity_basis:(Delator.Field.string "source-uid-shape-export-cmi-slot")];
+  matches
+[@@delator.instrument] [@@delator.level trace]

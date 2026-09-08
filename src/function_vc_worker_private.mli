@@ -21,10 +21,15 @@ type recursive_route : value mod contended portable = {
   retry_rlimit : int;
 }
 
+type direct_route : value mod contended portable = {
+  direct_query : Z3_bridge.detached_query;
+  deliver_original_model : bool;
+}
+
 type route : value mod contended portable =
   | Ordinary of Z3_bridge.detached_query
-  | Structural_rank of Z3_bridge.detached_query
-  | Logical_aggregate of Z3_bridge.detached_query
+  | Structural_rank of direct_route
+  | Logical_aggregate of direct_route
   | Recursive of recursive_route
 
 type vc_request : value mod contended portable = {

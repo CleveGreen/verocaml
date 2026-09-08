@@ -79,6 +79,22 @@ type provider_external_specification = {
   target_link : Sst.target_link;
 }
 
+type provider_logical_constant =
+  | Provider_symbolic_logical_value of {
+      constant_symbolic : provider_callable;
+      constant_interface_receipt :
+        Retained_interface_authority_private.logical_value;
+    }
+  | Provider_defined_logical_value of {
+      constant_path : string;
+      constant_uid : string;
+      constant_definition : Sst.logical_constant_definition;
+      constant_dependency_closure : string;
+      constant_trust_dependencies : string list;
+      constant_interface_receipt :
+        Retained_interface_authority_private.logical_value;
+    }
+
 type provider_description = {
   unit_name : string;
   interface_digest : string;
@@ -90,6 +106,7 @@ type provider_description = {
   broadcast_groups : provider_broadcast_group list;
   types : provider_type list;
   logical_sorts : Logical_sort_private.t list;
+  logical_constants : provider_logical_constant list;
   external_specifications : provider_external_specification list;
 }
 
@@ -123,6 +140,32 @@ type type_snapshot = {
   definition : Sst.type_definition;
   parametric_descriptor : Parametric_adt.t option;
 }
+
+type logical_constant_route = {
+  logical_constant_path : string;
+  logical_constant_uid : string;
+}
+
+type logical_constant_snapshot =
+  | Imported_symbolic_logical_value of {
+      symbolic : callable_snapshot;
+      routes : logical_constant_route list;
+      provenance : Retained_interface_authority_private.logical_value;
+      source_definition : Sst.function_definition;
+      source_signature : Parametric_signature_private.t;
+    }
+  | Imported_defined_logical_value of {
+      routes : logical_constant_route list;
+      definition : Sst.logical_constant_definition;
+      semantic_authority : Sst.logical_constant_definition;
+      dependency_closure : string;
+      trust_dependencies : string list;
+      provider_unit : string;
+      provider_interface : string;
+      provider_source : string;
+      provider_family : string;
+      provider_import : string;
+    }
 
 type external_specification_snapshot = {
   definition : Sst.function_definition;
@@ -172,11 +215,15 @@ val provider_matches :
   bool
 
 val create : provider list -> (environment, string) result
+val artifact_full_key : Cmt_input.implementation -> string
+val artifact_inventory : environment -> string list
+val artifacts : environment -> Cmt_input.implementation list
 val callables : environment -> callable_snapshot list
 val broadcast_declarations : environment -> broadcast_declaration_snapshot list
 val broadcast_groups : environment -> broadcast_group_snapshot list
 val types : environment -> type_snapshot list
 val logical_sorts : environment -> Logical_sort_private.t list
+val logical_constants : environment -> logical_constant_snapshot list
 val external_specifications : environment -> external_specification_snapshot list
 val empty : environment
 

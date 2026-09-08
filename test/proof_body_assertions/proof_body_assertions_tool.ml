@@ -180,6 +180,7 @@ let error_class = function
       Printf.sprintf "frontend:%s" diagnostic.Diagnostic.code
   | Validation_error _ -> "validation"
   | Invariant_error _ -> "invariant"
+  | Provider_surface_error message -> "provider-surface:" ^ message
   | Pipeline_error (Verification_pipeline.Engine_error error) ->
       "engine:" ^ Symbolic_executor_private.error_to_string error
   | Pipeline_error (Verification_pipeline.Solve_error message) ->

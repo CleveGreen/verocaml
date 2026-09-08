@@ -18,7 +18,7 @@ let of_symbol (symbol : Vir.symbol) =
           Vir.parametric_sort = binder;
           parametric_desc = Vir.Parametric_symbol symbol;
         }
-  | Vir.Integer | Vir.Boolean | Vir.Aggregate _ ->
+  | Vir.Integer | Vir.Boolean | Vir.Bit_vector _ | Vir.Aggregate _ ->
       Error "abstract parameter term requires a parametric symbol"
 
 let validate (term : Vir.parametric_term) =
@@ -36,7 +36,7 @@ let validate (term : Vir.parametric_term) =
               Ok ()
           | Vir.Parametric _ ->
               Error "abstract symbol changes named parameter sort"
-          | Vir.Integer | Vir.Boolean | Vir.Aggregate _ ->
+          | Vir.Integer | Vir.Boolean | Vir.Bit_vector _ | Vir.Aggregate _ ->
               Error "abstract term contains a non-parametric symbol")
       | Vir.Parametric_selector (selector, source) ->
           if selector.selector_range = Vir.Parametric term.parametric_sort
@@ -57,7 +57,8 @@ let validate (term : Vir.parametric_term) =
               && Spec_function_logic_private.is_binder_for arrow
                    term.parametric_sort ->
               Ok ()
-          | Parameter _ | Int | Mathematical_int | Bool | Unit | Tuple _
+          | Parameter _ | Int | Mathematical_int | Bool | Bit_vector _ | Unit
+          | Tuple _
           | Aggregate _
           | Application _ ->
               Error "symbolic application changes named parameter sort")
@@ -131,6 +132,7 @@ let symbol_string ~span_string (symbol : Vir.symbol) =
     (match symbol.sort with
     | Vir.Integer -> "int"
     | Vir.Boolean -> "bool"
+    | Vir.Bit_vector width -> "bv:" ^ Bv_width.to_string width
     | Vir.Aggregate typ ->
         Printf.sprintf "aggregate:%s#%d" typ.aggregate_type_name
           typ.aggregate_type_index
@@ -138,7 +140,8 @@ let symbol_string ~span_string (symbol : Vir.symbol) =
     (match symbol.role with
     | Vir.Input -> "input"
     | Local -> "local"
-    | Result -> "result")
+    | Result -> "result"
+    | Logical_constant _ -> "logical-constant")
     (span_string symbol.span)
 
 let _parametric_desc_name = function

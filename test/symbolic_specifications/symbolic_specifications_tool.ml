@@ -718,6 +718,7 @@ let imported_issuance () =
       policy = Sst.Default_linear_z3;
       parametric_adts = [];
       types = [];
+      logical_constants = [];
       functions = [];
     }
   in

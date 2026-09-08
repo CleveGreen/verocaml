@@ -35,6 +35,12 @@ val authenticated_spec_definition :
 
 val classify_typedtree_program : Sst.program -> Sst.program
 
+val classify_expression :
+  callee_mode:(Sst.function_id -> Sst.verification_mode option) ->
+  Sst.expression_stage ->
+  Sst.expression ->
+  Sst.expression
+
 val authenticated_proof_definition :
   source_file:string ->
   function_id:Sst.function_id ->

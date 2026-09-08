@@ -89,6 +89,7 @@ type authenticated_spec_carrier = {
 type top_function_kind =
   | Top_exec
   | Top_spec of authenticated_spec_carrier
+  | Top_logical_constant of Typedtree_logical_constant_private.declaration
   | Top_type_invariant of authenticated_spec_carrier
   | Top_recursive_spec of authenticated_spec_carrier
   | Top_proof of authenticated_spec_carrier

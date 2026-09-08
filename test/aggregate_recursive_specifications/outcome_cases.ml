@@ -49,19 +49,6 @@ let materialize_project ~workspace ~project_name sources =
     sources;
   (root, modules)
 
-let with_environment variables action =
-  let previous =
-    List.map (fun (name, _) -> (name, Sys.getenv_opt name)) variables
-  in
-  List.iter (fun (name, value) -> Unix.putenv name value) variables;
-  Fun.protect
-    ~finally:(fun () ->
-      List.iter
-        (fun (name, value) ->
-          Unix.putenv name (Option.value ~default:"" value))
-        previous)
-    action
-
 let dune_environment environment root =
   [
     ("PATH", Project_environment.tool_path environment);
@@ -75,20 +62,49 @@ let dune_environment environment root =
   ]
 
 let build_project ~environment root =
-  match
-    with_environment (dune_environment environment root) (fun () ->
-        Verocaml_bin_dune_private.build_and_describe root)
-  with
-  | Ok project -> Ok project
-  | Error (Verocaml_bin_dune_private.Cli_error message) ->
-      Error (Failure.make Failure.Dune_build message)
-  | Error
-      (Verocaml_bin_dune_private.Dependency_error { provider; reason_class }) ->
-      Error
-        (Failure.make Failure.Selected_cmt_load
-           (Printf.sprintf "Dune dependency inventory failed provider=%s reason=%s"
-              (Option.value ~default:"unknown" provider)
-              reason_class))
+  let result_path = Filename.concat root ".build-and-describe" in
+  let process_result =
+    Process_adapter.run ~cwd:(Sys.getcwd ())
+      {
+        program =
+          (try Unix.realpath Sys.executable_name
+           with Unix.Unix_error _ -> Sys.executable_name);
+        arguments = [ "--build-and-describe"; root; result_path ];
+        forwarded = dune_environment environment root;
+        cleanup_paths = [];
+        adjacency = [];
+      }
+  in
+  match process_result with
+  | Error failure -> Error failure
+  | Ok _ ->
+      Fun.protect
+        ~finally:(fun () ->
+          if Sys.file_exists result_path then Sys.remove result_path)
+        (fun () ->
+          if not (Sys.file_exists result_path) then
+            Error
+              (Failure.make Failure.Dune_build
+                 "Dune build child produced no result")
+          else
+            let channel = open_in_bin result_path in
+            Fun.protect
+              ~finally:(fun () -> close_in_noerr channel)
+              (fun () ->
+                (Marshal.from_channel channel
+                  : (Verocaml_bin_dune_private.project,
+                     Verocaml_bin_dune_private.error)
+                     result)
+                |> Result.map_error (function
+                     | Verocaml_bin_dune_private.Cli_error message ->
+                         Failure.make Failure.Dune_build message
+                     | Verocaml_bin_dune_private.Dependency_error
+                         { provider; reason_class } ->
+                         Failure.make Failure.Selected_cmt_load
+                           (Printf.sprintf
+                              "Dune dependency inventory failed provider=%s reason=%s"
+                              (Option.value ~default:"unknown" provider)
+                              reason_class))))
 
 type loaded_artifact = {
   artifact : Verocaml_bin_dune_private.artifact;
@@ -407,6 +423,17 @@ let tuple_parity =
     tuple_source_project_parity
 
 let () =
-  Suite.run_cli ~suite_path ~manifest:Integration_environment.manifest
-    ~expected_environment:Integration_environment.expected
-    [ positive_matrix; tuple_parity ]
+  match Array.to_list Sys.argv with
+  | _ :: "--build-and-describe" :: root :: result_path :: [] ->
+      let result = Verocaml_bin_dune_private.build_and_describe root in
+      let channel = open_out_bin result_path in
+      Fun.protect
+        ~finally:(fun () -> close_out_noerr channel)
+        (fun () ->
+          Marshal.to_channel channel result [];
+          flush channel);
+      exit (match result with Ok _ -> 0 | Error _ -> 1)
+  | _ ->
+      Suite.run_cli ~suite_path ~manifest:Integration_environment.manifest
+        ~expected_environment:Integration_environment.expected
+        [ positive_matrix; tuple_parity ]

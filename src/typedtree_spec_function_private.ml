@@ -99,7 +99,8 @@ let residual_type arrow arguments =
   apply arrow arguments
 
 let rec admissible_capture_type ~aggregate = function
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Parameter _ ->
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
+  | Sst.Parameter _ ->
       true
   | typ when Parametric_type.is_spec_function typ -> true
   | Sst.Tuple components ->
@@ -204,7 +205,8 @@ let lower_lambda services ~source_file ~bindings ~arrow ~location ~parameters
         | _ -> Error (services.higher_order_error location))
     | closed when Parametric_type.equal closed actual -> Ok (closed, substitutions)
     | Parametric_type.Unit | Parametric_type.Bool | Parametric_type.Int
-    | Parametric_type.Mathematical_int | Parametric_type.Aggregate _ ->
+    | Parametric_type.Mathematical_int | Parametric_type.Bit_vector _
+    | Parametric_type.Aggregate _ ->
         Error (services.higher_order_error location)
   in
   let rec stages index bindings substitutions arrow = function

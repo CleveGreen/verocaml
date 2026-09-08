@@ -186,6 +186,7 @@ let validated_program definitions =
         policy = Default_linear_z3;
         parametric_adts = [];
         types = [];
+        logical_constants = [];
         functions = definitions;
       }
   in

@@ -332,7 +332,8 @@ let vir_aggregate_type_of_sst descriptors = function
                 ^ ">";
               aggregate_type_arguments = arguments;
             })
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+  | Sst.Bit_vector _ | Sst.Tuple _
   | Sst.Parameter _ ->
       None
 

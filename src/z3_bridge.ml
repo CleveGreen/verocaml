@@ -7,10 +7,17 @@ type model_value =
   | Integer of Z.t
   | Boolean of bool
   | Aggregate_identity of Z.t
+  | Bit_vector of Bv_value.t
 
 type model_binding = {
   symbol : Vir.symbol;
   value : model_value option;
+}
+
+type bv_model_binding = {
+  projection_identity : string;
+  width : Bv_width.t;
+  value : Bv_value.t;
 }
 
 type inconclusive_reason : value mod contended portable =
@@ -22,6 +29,11 @@ type outcome =
   | Verified
   | Counterexample of model_binding list
   | Inconclusive of inconclusive_reason
+
+type bv_query_outcome =
+  | Bv_verified
+  | Bv_counterexample of bv_model_binding list
+  | Bv_inconclusive of inconclusive_reason
 
 type error =
   | Invalid_configuration of string
@@ -47,6 +59,13 @@ type controlled : value mod contended portable =
   | Force_timeout
   | Force_backend_failure
 
+type bv_model_fault : value mod contended portable =
+  | Missing_evaluation
+  | Wrong_sort
+  | Non_numeral
+  | Width_mismatch
+  | Residue_text of string
+
 type counters : value mod contended portable = {
   capability_resolutions : int;
   translations : int;
@@ -62,6 +81,7 @@ type counters : value mod contended portable = {
 type detached_sort : value mod contended portable =
   | Detached_int_sort
   | Detached_bool_sort
+  | Detached_bv_sort of string
   | Detached_named_sort of int
 
 type detached_term : value mod contended portable =
@@ -93,6 +113,26 @@ type detached_term : value mod contended portable =
   | Detached_exists_term of
       (int * string * detached_sort) list * detached_term * string * string
   | Detached_ite_term of detached_term * detached_term * detached_term
+  | Detached_bv_literal_term of string * string
+  | Detached_bv_eq_term of detached_term * detached_term
+  | Detached_bv_distinct_term of detached_term * detached_term
+  | Detached_bv_add_mod_term of detached_term * detached_term
+  | Detached_bv_sub_mod_term of detached_term * detached_term
+  | Detached_bv_not_term of detached_term
+  | Detached_bv_and_term of detached_term * detached_term
+  | Detached_bv_or_term of detached_term * detached_term
+  | Detached_bv_xor_term of detached_term * detached_term
+  | Detached_bv_ult_term of detached_term * detached_term
+  | Detached_bv_ule_term of detached_term * detached_term
+  | Detached_bv_ugt_term of detached_term * detached_term
+  | Detached_bv_uge_term of detached_term * detached_term
+  | Detached_bv_slt_term of detached_term * detached_term
+  | Detached_bv_sle_term of detached_term * detached_term
+  | Detached_bv_sgt_term of detached_term * detached_term
+  | Detached_bv_sge_term of detached_term * detached_term
+  | Detached_bv_to_int_unsigned_term of detached_term
+  | Detached_bv_to_int_signed_term of detached_term
+  | Detached_int_to_bv_mod_term of string * detached_term
 
 type detached_declaration : value mod contended portable =
   | Detached_sort_declaration of int * string
@@ -116,21 +156,34 @@ type detached_projection_sort : value mod contended portable =
   | Detached_project_boolean
   | Detached_project_aggregate
 
+type detached_projection : value mod contended portable =
+  | Detached_function_projection of string * int * detached_projection_sort
+  | Detached_bv_projection of string * string * detached_term
+
 type detached_plan : value mod contended portable = {
   detached_requirements : Logic_ir.feature list;
   detached_declarations : detached_declaration list;
   detached_axioms : detached_axiom list;
   detached_assertions : detached_term list;
-  detached_projections : (int * detached_projection_sort) list;
+  detached_projections : detached_projection list;
 }
 
 type detached_query : value mod contended portable =
   | Detached_query of string
 
 type detached_model_value : value mod contended portable =
-  | Detached_integer of string
-  | Detached_boolean of bool
-  | Detached_aggregate of string
+  | Detached_integer of string * string
+  | Detached_boolean of string * bool
+  | Detached_aggregate of string * string
+  | Detached_bit_vector of string * string * string
+
+type vir_projection_metadata = {
+  projection_symbol : Vir.symbol;
+  projection_identity : string;
+  projection_order : int;
+  projection_width : Bv_width.t option;
+  projection_width_reference : string option;
+}
 
 type detached_outcome : value mod contended portable =
   | Detached_verified
@@ -142,10 +195,17 @@ type detached_attempt : value mod contended portable = {
   detached_telemetry : counters;
 }
 
+type detached_preflight_defect =
+  | Mixed_bv_add_widths
+  | Omitted_bv_capability
+  | Wrong_int_to_bv_operand
+  | Bv_projection_width_mismatch
+
 type datatype_worker_operations : value mod portable = {
   declare :
     context:Z3.context ->
     resolve_named_sort:(int -> Z3.Sort.sort) ->
+    resolve_bv_sort:(string -> Z3.Sort.sort) ->
     Z3_datatype_private.declaration ->
     (Z3_datatype_private.bindings, string) result;
 }
@@ -204,7 +264,8 @@ let maximum_contexts_live = ref 0
 let selected_logics_reversed = ref []
 
 let solver_logic requirements =
-  if List.mem Logic_ir.Nonlinear_integer_arithmetic requirements then "AUFNIA"
+  if List.mem Logic_ir.Bit_vectors requirements then "general"
+  else if List.mem Logic_ir.Nonlinear_integer_arithmetic requirements then "AUFNIA"
   else "AUFLIA"
 
 let nonlinear_reasoning_enabled = false
@@ -297,6 +358,7 @@ let is_supported = function
   | Models
   | Nonlinear_integer_arithmetic ->
       true
+  | Bit_vectors | Int_bitvector_conversions -> true
 
 let note_capability_resolution = function
   | Global -> incr capability_resolutions
@@ -321,6 +383,7 @@ type translated_logic = {
   declaration_snapshot : string list;
   functions : (int * Z3.FuncDecl.func_decl) list;
   projected : (Vir.symbol * Z3.Expr.expr) list;
+  bv_projected : (Logic_ir.bv_projection * Z3.Expr.expr) list;
 }
 
 type translation_environment = {
@@ -339,9 +402,52 @@ let find_index kind index values =
            (Printf.sprintf "%s index %d is absent from declaration order" kind
               index))
 
+let decode_detached_width @ portable = fun reference ->
+  Bv_width.decode_reference_for_worker reference
+  |> Result.fold ~ok:Fun.id ~error:(fun message -> invalid_arg message)
+
+let decimal_double @ portable = fun text ->
+  let length = String.length text in
+  let output = Bytes.create (length + 1) in
+  let carry = ref 0 in
+  for index = length - 1 downto 0 do
+    let value = ((Char.code text.[index] - Char.code '0') * 2) + !carry in
+    Bytes.set output (index + 1) (Char.chr (Char.code '0' + (value mod 10)));
+    carry := value / 10
+  done;
+  if !carry = 0 then Bytes.sub_string output 1 length
+  else (
+    Bytes.set output 0 (Char.chr (Char.code '0' + !carry));
+    Bytes.to_string output)
+
+let decimal_power_of_two @ portable = fun width ->
+  let rec loop remaining value =
+    if remaining = 0 then value
+    else loop (remaining - 1) (decimal_double value)
+  in
+  loop width "1"
+
+let validate_detached_bv_decimal @ portable = fun width text ->
+  let length = String.length text in
+  if length > 1234 then Error "BV literal or residue exceeds 1234 bytes"
+  else if length = 0 then Error "BV literal or residue is empty"
+  else if length > 1 && Char.equal text.[0] '0' then
+    Error "BV literal or residue is not canonical decimal"
+  else if not (String.for_all (fun c -> c >= '0' && c <= '9') text) then
+    Error "BV literal or residue is not unsigned decimal"
+  else
+    let modulus = decimal_power_of_two (Bv_width.to_int width) in
+    if
+      length > String.length modulus
+      || (length = String.length modulus && String.compare text modulus >= 0)
+    then Error "BV literal or residue is outside its width"
+    else Ok text
+
 let translate_sort environment = function
   | Logic_ir.Int -> Z3.Arithmetic.Integer.mk_sort environment.context
   | Bool -> Z3.Boolean.mk_sort environment.context
+  | Bv width ->
+      Z3.BitVector.mk_sort environment.context (Bv_width.to_int width)
   | Named sort ->
       find_index "named sort"
         (Logic_ir.View.named_sort_index sort)
@@ -468,6 +574,49 @@ let rec translate_term environment term =
   | Ite (condition, then_, else_) ->
       Z3.Boolean.mk_ite environment.context (recurse condition) (recurse then_)
         (recurse else_)
+  | Bv_literal value ->
+      Z3.Expr.mk_numeral_string environment.context
+        (Bv_value.canonical_decimal value)
+        (Z3.BitVector.mk_sort environment.context
+           (Bv_width.to_int value.width))
+  | Bv_eq (left, right) ->
+      Z3.Boolean.mk_eq environment.context (recurse left) (recurse right)
+  | Bv_distinct (left, right) ->
+      Z3.Boolean.mk_distinct environment.context [ recurse left; recurse right ]
+  | Bv_add_mod (left, right) ->
+      Z3.BitVector.mk_add environment.context (recurse left) (recurse right)
+  | Bv_sub_mod (left, right) ->
+      Z3.BitVector.mk_sub environment.context (recurse left) (recurse right)
+  | Bv_not value -> Z3.BitVector.mk_not environment.context (recurse value)
+  | Bv_and (left, right) ->
+      Z3.BitVector.mk_and environment.context (recurse left) (recurse right)
+  | Bv_or (left, right) ->
+      Z3.BitVector.mk_or environment.context (recurse left) (recurse right)
+  | Bv_xor (left, right) ->
+      Z3.BitVector.mk_xor environment.context (recurse left) (recurse right)
+  | Bv_ult (left, right) ->
+      Z3.BitVector.mk_ult environment.context (recurse left) (recurse right)
+  | Bv_ule (left, right) ->
+      Z3.BitVector.mk_ule environment.context (recurse left) (recurse right)
+  | Bv_ugt (left, right) ->
+      Z3.BitVector.mk_ugt environment.context (recurse left) (recurse right)
+  | Bv_uge (left, right) ->
+      Z3.BitVector.mk_uge environment.context (recurse left) (recurse right)
+  | Bv_slt (left, right) ->
+      Z3.BitVector.mk_slt environment.context (recurse left) (recurse right)
+  | Bv_sle (left, right) ->
+      Z3.BitVector.mk_sle environment.context (recurse left) (recurse right)
+  | Bv_sgt (left, right) ->
+      Z3.BitVector.mk_sgt environment.context (recurse left) (recurse right)
+  | Bv_sge (left, right) ->
+      Z3.BitVector.mk_sge environment.context (recurse left) (recurse right)
+  | Bv_to_int_unsigned value ->
+      Z3.BitVector.mk_bv2int environment.context (recurse value) false
+  | Bv_to_int_signed value ->
+      Z3.BitVector.mk_bv2int environment.context (recurse value) true
+  | Int_to_bv_mod (width, value) ->
+      Z3.Arithmetic.Integer.mk_int2bv environment.context
+        (Bv_width.to_int width) (recurse value)
 
 and translate_user_quantifier environment universal quantifier =
   let binders = Logic_ir.View.user_quantifier_binders quantifier in
@@ -619,6 +768,9 @@ let translate_logic_query context query =
                    ~resolve_named_sort:(fun index ->
                      find_index "named datatype dependency" index
                        !(environment.sorts))
+                   ~resolve_bv_sort:(fun reference ->
+                     Z3.BitVector.mk_sort context
+                       (Bv_width.to_int (decode_detached_width reference)))
                    detached
                  |> Result.fold ~ok:Fun.id
                       ~error:(fun message -> invalid_arg message)
@@ -668,11 +820,25 @@ let translate_logic_query context query =
     declaration_snapshot = List.rev !declaration_snapshot;
     functions = !(environment.functions);
     projected = [];
+    bv_projected =
+      List.map
+        (fun projection ->
+          ( projection,
+            translate_term environment
+              (Logic_ir.View.bv_projection_term projection) ))
+        (Logic_ir.View.bv_projections query);
   }
+
+let detach_width width =
+  Bv_width.encode_reference
+    (Bv_backend_capability_receipt_private.capability ())
+    width
+  |> Result.fold ~ok:Fun.id ~error:(fun message -> invalid_arg message)
 
 let detach_sort = function
   | Logic_ir.Int -> Detached_int_sort
   | Bool -> Detached_bool_sort
+  | Bv width -> Detached_bv_sort (detach_width width)
   | Named sort ->
       Detached_named_sort (Logic_ir.View.named_sort_index sort)
 
@@ -754,6 +920,33 @@ let rec detach_term term =
   | Ite (condition, then_, else_) ->
       Detached_ite_term
         (recurse condition, recurse then_, recurse else_)
+  | Bv_literal value ->
+      Detached_bv_literal_term
+        (detach_width value.Bv_value.width, Bv_value.canonical_decimal value)
+  | Bv_eq (left, right) -> Detached_bv_eq_term (recurse left, recurse right)
+  | Bv_distinct (left, right) ->
+      Detached_bv_distinct_term (recurse left, recurse right)
+  | Bv_add_mod (left, right) ->
+      Detached_bv_add_mod_term (recurse left, recurse right)
+  | Bv_sub_mod (left, right) ->
+      Detached_bv_sub_mod_term (recurse left, recurse right)
+  | Bv_not value -> Detached_bv_not_term (recurse value)
+  | Bv_and (left, right) -> Detached_bv_and_term (recurse left, recurse right)
+  | Bv_or (left, right) -> Detached_bv_or_term (recurse left, recurse right)
+  | Bv_xor (left, right) -> Detached_bv_xor_term (recurse left, recurse right)
+  | Bv_ult (left, right) -> Detached_bv_ult_term (recurse left, recurse right)
+  | Bv_ule (left, right) -> Detached_bv_ule_term (recurse left, recurse right)
+  | Bv_ugt (left, right) -> Detached_bv_ugt_term (recurse left, recurse right)
+  | Bv_uge (left, right) -> Detached_bv_uge_term (recurse left, recurse right)
+  | Bv_slt (left, right) -> Detached_bv_slt_term (recurse left, recurse right)
+  | Bv_sle (left, right) -> Detached_bv_sle_term (recurse left, recurse right)
+  | Bv_sgt (left, right) -> Detached_bv_sgt_term (recurse left, recurse right)
+  | Bv_sge (left, right) -> Detached_bv_sge_term (recurse left, recurse right)
+  | Bv_to_int_unsigned value ->
+      Detached_bv_to_int_unsigned_term (recurse value)
+  | Bv_to_int_signed value -> Detached_bv_to_int_signed_term (recurse value)
+  | Int_to_bv_mod (width, value) ->
+      Detached_int_to_bv_mod_term (detach_width width, recurse value)
 
 let detach_axiom axiom =
   {
@@ -824,6 +1017,14 @@ let detach_query_with_projections query projections =
                       detach_sort
                         (Logic_ir.View.function_range function_) )))
   in
+  let bv_projections =
+    Logic_ir.View.bv_projections query
+    |> List.map (fun projection ->
+           Detached_bv_projection
+             ( Logic_ir.View.bv_projection_identity projection,
+               detach_width (Logic_ir.View.bv_projection_width projection),
+               detach_term (Logic_ir.View.bv_projection_term projection) ))
+  in
   Detached_query
     (Marshal.to_string
        {
@@ -833,16 +1034,69 @@ let detach_query_with_projections query projections =
            List.map detach_axiom (Logic_ir.View.axioms query);
          detached_assertions =
            List.map detach_term (Logic_ir.View.assertions query);
-         detached_projections = projections;
+         detached_projections = projections @ bv_projections;
        }
        [])
 
 let detach_query query = detach_query_with_projections query []
 
+let detach_bv_query query =
+  ( detach_query query,
+    Logic_ir.View.bv_projections query
+    |> List.map Logic_ir.View.bv_projection_identity )
+
+let malformed_detached_bv_query_for_testing ~width ~other_width defect =
+  let reference = detach_width width
+  and other_reference = detach_width other_width in
+  let literal reference value = Detached_bv_literal_term (reference, value) in
+  let plan =
+    match defect with
+    | Mixed_bv_add_widths ->
+        { detached_requirements = [ Logic_ir.Bit_vectors ];
+          detached_declarations = [];
+          detached_axioms = [];
+          detached_assertions =
+            [ Detached_bv_eq_term
+                ( Detached_bv_add_mod_term
+                    (literal reference "0", literal other_reference "0"),
+                  literal reference "0" ) ];
+          detached_projections = [] }
+    | Omitted_bv_capability ->
+        { detached_requirements = [];
+          detached_declarations = [];
+          detached_axioms = [];
+          detached_assertions =
+            [ Detached_bv_eq_term
+                (literal reference "0", literal reference "0") ];
+          detached_projections = [] }
+    | Wrong_int_to_bv_operand ->
+        { detached_requirements =
+            [ Logic_ir.Bit_vectors; Logic_ir.Int_bitvector_conversions ];
+          detached_declarations = [];
+          detached_axioms = [];
+          detached_assertions =
+            [ Detached_bv_eq_term
+                ( Detached_int_to_bv_mod_term
+                    (reference, Detached_boolean_term true),
+                  literal reference "0" ) ];
+          detached_projections = [] }
+    | Bv_projection_width_mismatch ->
+        { detached_requirements = [ Logic_ir.Bit_vectors; Logic_ir.Models ];
+          detached_declarations = [];
+          detached_axioms = [];
+          detached_assertions = [ Detached_boolean_term true ];
+          detached_projections =
+            [ Detached_bv_projection
+                ("wrong-width", other_reference, literal reference "0") ] }
+  in
+  Detached_query (Marshal.to_string plan [])
+
 let projection_sort (symbol : Vir.symbol) =
   match symbol.sort with
   | Vir.Integer -> Detached_project_integer
   | Boolean -> Detached_project_boolean
+  | Bit_vector _ ->
+      invalid_arg "BV symbols require a width-bearing detached projection"
   | Aggregate _ -> Detached_project_aggregate
   | Parametric _ ->
       invalid_arg "parametric symbols must not be projected through aggregate ABI"
@@ -852,18 +1106,77 @@ let detach_vir ~requires obligation =
   | Error message -> Error (Malformed_vir message)
   | Ok translation ->
       let projected = Vir_logic_ir_translation_private.projected translation in
-      let projections =
-        List.map
-          (fun (symbol, function_) ->
-            ( Logic_ir.View.function_index function_,
-              projection_sort symbol ))
-          projected
+      let projections, metadata =
+        projected
+        |> List.mapi (fun order ((symbol : Vir.symbol), function_) ->
+               let identity =
+                 Printf.sprintf "vir-model-v1:f%d:s%d:o%d"
+                   obligation.Vir.function_ref.function_index symbol.symbol_id
+                   order
+               in
+               let projection, metadata =
+                 match symbol.sort with
+                 | Vir.Bit_vector width ->
+                     let width_reference = detach_width width in
+                     ( Detached_bv_projection
+                         ( identity,
+                           width_reference,
+                           Detached_apply_term
+                             (Logic_ir.View.function_index function_, []) ),
+                       {
+                         projection_symbol = symbol;
+                         projection_identity = identity;
+                         projection_order = order;
+                         projection_width = Some width;
+                         projection_width_reference = Some width_reference;
+                       } )
+                 | Vir.Integer | Boolean | Aggregate _ ->
+                     ( Detached_function_projection
+                         ( identity,
+                           Logic_ir.View.function_index function_,
+                           projection_sort symbol ),
+                       {
+                         projection_symbol = symbol;
+                         projection_identity = identity;
+                         projection_order = order;
+                         projection_width = None;
+                         projection_width_reference = None;
+                       } )
+                 | Vir.Parametric _ ->
+                     invalid_arg
+                       "parametric symbols cannot enter the model manifest"
+               in
+               [%log.trace "issued detached VIR model projection metadata"
+                 ~stage:(Delator.Field.string "vir-model-manifest")
+                 ~projection_order:(Delator.Field.int order)
+                 ~symbol_id:(Delator.Field.int symbol.symbol_id)
+                 ~identity_bytes:(Delator.Field.int (String.length identity))
+                 ~width:
+                   (Delator.Field.int
+                      (match metadata.projection_width with
+                      | None -> 0
+                      | Some width -> Bv_width.to_int width))
+                 ~decision:(Delator.Field.string "issued")];
+               (projection, metadata))
+        |> List.split
       in
+      [%log.debug "completed detached VIR model projection manifest"
+        ~stage:(Delator.Field.string "vir-model-manifest")
+        ~function_index:
+          (Delator.Field.int obligation.function_ref.function_index)
+        ~projection_count:(Delator.Field.int (List.length metadata))
+        ~decision:(Delator.Field.string "issued")];
       Ok
         ( detach_query_with_projections
             (Vir_logic_ir_translation_private.query translation)
             projections,
-          List.map fst projected )
+          metadata )
+
+let projection_symbol metadata = metadata.projection_symbol
+let projection_identity metadata = metadata.projection_identity
+let projection_order metadata = metadata.projection_order
+let projection_width metadata = metadata.projection_width
+let projection_width_reference metadata = metadata.projection_width_reference
 
 type detached_translation_environment = {
   detached_context : Z3.context;
@@ -872,11 +1185,407 @@ type detached_translation_environment = {
   detached_bound : (int * Z3.Expr.expr) list;
 }
 
+type detached_preflight_sort =
+  | Preflight_int
+  | Preflight_bool
+  | Preflight_bv of string
+  | Preflight_named of int
+
+type detached_preflight_environment = {
+  preflight_sorts : int list;
+  preflight_functions :
+    (int * (detached_preflight_sort list * detached_preflight_sort)) list;
+  preflight_bound : (int * detached_preflight_sort) list;
+  preflight_features : Logic_ir.feature list ref;
+}
+
+let preflight_fail @ portable = fun reason ->
+  raise (Invalid_argument ("detached typed preflight: " ^ reason))
+
+let preflight_add_feature @ portable = fun environment feature ->
+  if not (List.mem feature !(environment.preflight_features)) then
+    environment.preflight_features := feature :: !(environment.preflight_features)
+
+let preflight_sort_equal @ portable = fun left right ->
+  match (left, right) with
+  | Preflight_int, Preflight_int | Preflight_bool, Preflight_bool -> true
+  | Preflight_bv left, Preflight_bv right -> String.equal left right
+  | Preflight_named left, Preflight_named right -> left = right
+  | (Preflight_int | Preflight_bool | Preflight_bv _ | Preflight_named _), _ ->
+      false
+
+let preflight_sort_name @ portable = function
+  | Preflight_int -> "Int"
+  | Preflight_bool -> "Bool"
+  | Preflight_bv _ -> "BV"
+  | Preflight_named _ -> "named"
+
+let preflight_expect_sort @ portable = fun expected observed operation ->
+  if not (preflight_sort_equal expected observed) then
+    preflight_fail
+      (Printf.sprintf "%s expected %s but found %s" operation
+         (preflight_sort_name expected) (preflight_sort_name observed))
+
+let preflight_detached_sort @ portable = fun environment -> function
+  | Detached_int_sort -> Preflight_int
+  | Detached_bool_sort -> Preflight_bool
+  | Detached_bv_sort reference ->
+      ignore (decode_detached_width reference);
+      preflight_add_feature environment Logic_ir.Bit_vectors;
+      Preflight_bv reference
+  | Detached_named_sort index ->
+      if not (List.mem index environment.preflight_sorts) then
+        preflight_fail "named sort is absent from declaration order";
+      preflight_add_feature environment Logic_ir.Named_sorts;
+      Preflight_named index
+
+let preflight_features_of_sort @ portable = fun environment -> function
+  | Preflight_bv _ ->
+      preflight_add_feature environment Logic_ir.Bit_vectors
+  | Preflight_named _ ->
+      preflight_add_feature environment Logic_ir.Named_sorts
+  | Preflight_int | Preflight_bool -> ()
+
+let preflight_exact_arguments @ portable = fun expected observed ->
+  let rec loop expected observed =
+    match (expected, observed) with
+    | [], [] -> ()
+    | expected :: expected_rest, observed :: observed_rest ->
+        preflight_expect_sort expected observed "function application";
+        loop expected_rest observed_rest
+    | [], _ :: _ | _ :: _, [] ->
+        preflight_fail "function application arity changed"
+  in
+  loop expected observed
+
+let preflight_binders @ portable = fun environment binders ->
+  if binders = [] then preflight_fail "quantifier binder vector is empty";
+  let rec extend scoped seen_indices seen_names = function
+    | [] -> scoped
+    | (index, name, sort) :: rest ->
+        if List.mem index seen_indices || List.mem name seen_names then
+          preflight_fail "quantifier binder vector contains a duplicate";
+        let sort = preflight_detached_sort scoped sort in
+        extend
+          { scoped with
+            preflight_bound = (index, sort) :: scoped.preflight_bound }
+          (index :: seen_indices) (name :: seen_names) rest
+  in
+  extend environment [] [] binders
+
+let rec preflight_detached_term @ portable = fun environment term ->
+  let infer = preflight_detached_term environment in
+  let integer_binary operation feature left right result =
+    let left = infer left and right = infer right in
+    preflight_expect_sort Preflight_int left operation;
+    preflight_expect_sort Preflight_int right operation;
+    preflight_add_feature environment feature;
+    result
+  in
+  let boolean_binary operation left right =
+    let left = infer left and right = infer right in
+    preflight_expect_sort Preflight_bool left operation;
+    preflight_expect_sort Preflight_bool right operation;
+    Preflight_bool
+  in
+  let same_binary operation left right result =
+    let left = infer left and right = infer right in
+    preflight_expect_sort left right operation;
+    result left
+  in
+  let bv_unary operation value result =
+    match infer value with
+    | Preflight_bv reference ->
+        preflight_add_feature environment Logic_ir.Bit_vectors;
+        result reference
+    | observed ->
+        preflight_fail
+          (Printf.sprintf "%s expected BV but found %s" operation
+             (preflight_sort_name observed))
+  in
+  let bv_binary operation left right result =
+    match (infer left, infer right) with
+    | Preflight_bv left, Preflight_bv right when String.equal left right ->
+        preflight_add_feature environment Logic_ir.Bit_vectors;
+        result left
+    | Preflight_bv _, Preflight_bv _ ->
+        preflight_fail (operation ^ " operands have unequal authenticated widths")
+    | left, right ->
+        preflight_fail
+          (Printf.sprintf "%s expected two BV operands but found %s and %s"
+             operation (preflight_sort_name left) (preflight_sort_name right))
+  in
+  match term with
+  | Detached_integer_term _ -> Preflight_int
+  | Detached_boolean_term _ -> Preflight_bool
+  | Detached_bound_term index -> (
+      match List.assoc_opt index environment.preflight_bound with
+      | Some sort ->
+          preflight_features_of_sort environment sort;
+          sort
+      | None -> preflight_fail "bound term is absent from quantifier scope")
+  | Detached_apply_term (index, values) -> (
+      match List.assoc_opt index environment.preflight_functions with
+      | None -> preflight_fail "function is absent from declaration order"
+      | Some (domain, range) ->
+          let observed = List.map infer values in
+          preflight_exact_arguments domain observed;
+          preflight_add_feature environment Logic_ir.Uninterpreted_functions;
+          List.iter (preflight_features_of_sort environment) (range :: domain);
+          range)
+  | Detached_add_term (left, right) | Detached_subtract_term (left, right) ->
+      integer_binary "integer additive operation"
+        Logic_ir.Linear_integer_arithmetic left right Preflight_int
+  | Detached_negate_term value ->
+      let observed = infer value in
+      preflight_expect_sort Preflight_int observed "integer negation";
+      preflight_add_feature environment Logic_ir.Linear_integer_arithmetic;
+      Preflight_int
+  | Detached_multiply_term (left, right) ->
+      integer_binary "integer multiplication"
+        Logic_ir.Nonlinear_integer_arithmetic left right Preflight_int
+  | Detached_scale_term (_, value) ->
+      let observed = infer value in
+      preflight_expect_sort Preflight_int observed "integer scaling";
+      preflight_add_feature environment Logic_ir.Linear_integer_arithmetic;
+      Preflight_int
+  | Detached_less_than_term (left, right)
+  | Detached_less_or_equal_term (left, right)
+  | Detached_greater_than_term (left, right)
+  | Detached_greater_or_equal_term (left, right) ->
+      integer_binary "integer comparison" Logic_ir.Linear_integer_arithmetic
+        left right Preflight_bool
+  | Detached_equal_term (left, right)
+  | Detached_distinct_term (left, right) ->
+      same_binary "generic equality" left right (function
+        | Preflight_bv _ ->
+            preflight_fail "generic equality cannot encode a BV operation"
+        | Preflight_int | Preflight_bool | Preflight_named _ -> Preflight_bool)
+  | Detached_not_term value ->
+      let observed = infer value in
+      preflight_expect_sort Preflight_bool observed "Boolean negation";
+      Preflight_bool
+  | Detached_and_term values | Detached_or_term values ->
+      if values = [] then preflight_fail "Boolean connective has no operands";
+      List.iter
+        (fun value ->
+          preflight_expect_sort Preflight_bool (infer value)
+            "Boolean connective")
+        values;
+      Preflight_bool
+  | Detached_implies_term (left, right) ->
+      boolean_binary "Boolean implication" left right
+  | Detached_forall_term (binders, body, trigger, _, _) ->
+      let scoped = preflight_binders environment binders in
+      preflight_expect_sort Preflight_bool
+        (preflight_detached_term scoped body)
+        "universal quantifier body";
+      ignore (preflight_detached_term scoped trigger);
+      preflight_add_feature environment Logic_ir.Quantifiers;
+      preflight_add_feature environment Logic_ir.Explicit_patterns;
+      preflight_add_feature environment Logic_ir.Quantifier_ids;
+      Preflight_bool
+  | Detached_exists_term (binders, body, _, _) ->
+      let scoped = preflight_binders environment binders in
+      preflight_expect_sort Preflight_bool
+        (preflight_detached_term scoped body)
+        "existential quantifier body";
+      preflight_add_feature environment Logic_ir.Quantifiers;
+      preflight_add_feature environment Logic_ir.Quantifier_ids;
+      Preflight_bool
+  | Detached_ite_term (condition, then_, else_) ->
+      preflight_expect_sort Preflight_bool (infer condition) "ITE condition";
+      let then_sort = infer then_ and else_sort = infer else_ in
+      preflight_expect_sort then_sort else_sort "ITE branches";
+      then_sort
+  | Detached_bv_literal_term (reference, unsigned_bits) ->
+      let width = decode_detached_width reference in
+      ignore
+        (validate_detached_bv_decimal width unsigned_bits
+        |> Result.fold ~ok:Fun.id ~error:(fun message -> invalid_arg message));
+      preflight_add_feature environment Logic_ir.Bit_vectors;
+      Preflight_bv reference
+  | Detached_bv_eq_term (left, right)
+  | Detached_bv_distinct_term (left, right)
+  | Detached_bv_ult_term (left, right)
+  | Detached_bv_ule_term (left, right)
+  | Detached_bv_ugt_term (left, right)
+  | Detached_bv_uge_term (left, right)
+  | Detached_bv_slt_term (left, right)
+  | Detached_bv_sle_term (left, right)
+  | Detached_bv_sgt_term (left, right)
+  | Detached_bv_sge_term (left, right) ->
+      bv_binary "BV predicate" left right (fun _ -> Preflight_bool)
+  | Detached_bv_add_mod_term (left, right)
+  | Detached_bv_sub_mod_term (left, right)
+  | Detached_bv_and_term (left, right)
+  | Detached_bv_or_term (left, right)
+  | Detached_bv_xor_term (left, right) ->
+      bv_binary "BV binary operation" left right (fun reference ->
+          Preflight_bv reference)
+  | Detached_bv_not_term value ->
+      bv_unary "BV complement" value (fun reference -> Preflight_bv reference)
+  | Detached_bv_to_int_unsigned_term value
+  | Detached_bv_to_int_signed_term value ->
+      bv_unary "BV-to-Int conversion" value (fun _ ->
+          preflight_add_feature environment Logic_ir.Int_bitvector_conversions;
+          Preflight_int)
+  | Detached_int_to_bv_mod_term (reference, value) ->
+      ignore (decode_detached_width reference);
+      preflight_expect_sort Preflight_int (infer value) "Int-to-BV conversion";
+      preflight_add_feature environment Logic_ir.Bit_vectors;
+      preflight_add_feature environment Logic_ir.Int_bitvector_conversions;
+      Preflight_bv reference
+
+let preflight_datatype_sort @ portable = fun environment self -> function
+  | Z3_datatype_private.Int_sort -> Preflight_int
+  | Bool_sort -> Preflight_bool
+  | Bv_sort reference ->
+      ignore (decode_detached_width reference);
+      preflight_add_feature environment Logic_ir.Bit_vectors;
+      Preflight_bv reference
+  | Named_sort index ->
+      if not (List.mem index environment.preflight_sorts) then
+        preflight_fail "datatype field named sort is absent";
+      preflight_add_feature environment Logic_ir.Named_sorts;
+      Preflight_named index
+  | Recursive_self -> Preflight_named self
+
+let preflight_add_function @ portable = fun environment index signature ->
+  if List.mem_assoc index environment.preflight_functions then
+    preflight_fail "function declaration identity is duplicated";
+  { environment with
+    preflight_functions = (index, signature) :: environment.preflight_functions }
+
+let preflight_detached_plan @ portable = fun plan ->
+  let features = ref [] in
+  let initial =
+    { preflight_sorts = []; preflight_functions = []; preflight_bound = [];
+      preflight_features = features }
+  in
+  let environment =
+    List.fold_left
+      (fun environment declaration ->
+        match declaration with
+        | Detached_sort_declaration (index, _) ->
+            if List.mem index environment.preflight_sorts then
+              preflight_fail "sort declaration identity is duplicated";
+            preflight_add_feature environment Logic_ir.Named_sorts;
+            { environment with preflight_sorts = index :: environment.preflight_sorts }
+        | Detached_function_declaration (index, _, domain, range) ->
+            let domain =
+              List.map (preflight_detached_sort environment) domain
+            and range = preflight_detached_sort environment range in
+            preflight_add_feature environment Logic_ir.Uninterpreted_functions;
+            preflight_add_function environment index (domain, range)
+        | Detached_datatype_declaration datatype ->
+            let self = datatype.Z3_datatype_private.sort_index in
+            if List.mem self environment.preflight_sorts then
+              preflight_fail "datatype sort identity is duplicated";
+            preflight_add_feature environment Logic_ir.Named_sorts;
+            preflight_add_feature environment Logic_ir.Algebraic_datatypes;
+            preflight_add_feature environment Logic_ir.Uninterpreted_functions;
+            let environment =
+              { environment with
+                preflight_sorts = self :: environment.preflight_sorts }
+            in
+            List.fold_left
+              (fun environment constructor ->
+                let fields =
+                  List.map
+                    (fun field ->
+                      preflight_datatype_sort environment self
+                        field.Z3_datatype_private.field_sort)
+                    constructor.Z3_datatype_private.fields
+                in
+                let environment =
+                  preflight_add_function environment
+                    constructor.Z3_datatype_private.constructor_function_index
+                    (fields, Preflight_named self)
+                in
+                let environment =
+                  preflight_add_function environment
+                    constructor.Z3_datatype_private.recognizer_function_index
+                    ([ Preflight_named self ], Preflight_bool)
+                in
+                List.fold_left2
+                  (fun environment field range ->
+                    preflight_add_function environment
+                      field.Z3_datatype_private.field_function_index
+                      ([ Preflight_named self ], range))
+                  environment constructor.Z3_datatype_private.fields fields)
+              environment datatype.Z3_datatype_private.constructors)
+      initial plan.detached_declarations
+  in
+  List.iter
+    (fun axiom ->
+      let scoped = preflight_binders environment axiom.detached_binders in
+      preflight_expect_sort Preflight_bool
+        (preflight_detached_term scoped axiom.detached_body)
+        "axiom body";
+      if axiom.detached_patterns = [] then
+        preflight_fail "axiom has no explicit pattern";
+      List.iter
+        (fun pattern ->
+          if pattern = [] then preflight_fail "axiom pattern is empty";
+          List.iter (fun term -> ignore (preflight_detached_term scoped term)) pattern)
+        axiom.detached_patterns;
+      preflight_add_feature environment Logic_ir.Quantifiers;
+      preflight_add_feature environment Logic_ir.Explicit_patterns;
+      preflight_add_feature environment Logic_ir.Quantifier_ids)
+    plan.detached_axioms;
+  List.iter
+    (fun assertion ->
+      preflight_expect_sort Preflight_bool
+        (preflight_detached_term environment assertion)
+        "query assertion")
+    plan.detached_assertions;
+  List.iter
+    (function
+      | Detached_function_projection (_, index, expected) -> (
+          match List.assoc_opt index environment.preflight_functions with
+          | Some ([], range) ->
+              let expected =
+                match expected with
+                | Detached_project_integer -> Preflight_int
+                | Detached_project_boolean -> Preflight_bool
+                | Detached_project_aggregate -> (
+                    match range with
+                    | Preflight_named _ | Preflight_int -> range
+                    | Preflight_bool | Preflight_bv _ ->
+                        preflight_fail
+                          "aggregate projection does not have an aggregate-compatible sort")
+              in
+              preflight_expect_sort expected range "function projection"
+          | Some (_ :: _, _) ->
+              preflight_fail "projected function is not a constant"
+          | None -> preflight_fail "projected function is absent")
+      | Detached_bv_projection (_, reference, term) ->
+          ignore (decode_detached_width reference);
+          let observed = preflight_detached_term environment term in
+          preflight_expect_sort (Preflight_bv reference) observed "BV projection";
+          preflight_add_feature environment Logic_ir.Models)
+    plan.detached_projections;
+  let inferred = !features in
+  List.iter
+    (fun feature ->
+      if not (List.mem feature plan.detached_requirements) then
+        preflight_fail
+          "transported requirements omitted an inferred feature")
+    inferred;
+  List.fold_left
+    (fun validated feature ->
+      if List.mem feature validated then validated else feature :: validated)
+    inferred plan.detached_requirements
+
 let translate_detached_sort environment = function
   | Detached_int_sort ->
       Z3.Arithmetic.Integer.mk_sort environment.detached_context
   | Detached_bool_sort ->
       Z3.Boolean.mk_sort environment.detached_context
+  | Detached_bv_sort reference ->
+      Z3.BitVector.mk_sort environment.detached_context
+        (Bv_width.to_int (decode_detached_width reference))
   | Detached_named_sort index ->
       find_index "detached named sort" index !(environment.detached_sorts)
 
@@ -970,6 +1679,89 @@ let rec translate_detached_term environment = function
         (translate_detached_term environment condition)
         (translate_detached_term environment then_)
         (translate_detached_term environment else_)
+  | Detached_bv_literal_term (reference, unsigned_bits) ->
+      let width = decode_detached_width reference in
+      let unsigned_bits =
+        validate_detached_bv_decimal width unsigned_bits
+        |> Result.fold ~ok:Fun.id ~error:(fun message -> invalid_arg message)
+      in
+      Z3.Expr.mk_numeral_string environment.detached_context
+        unsigned_bits
+        (Z3.BitVector.mk_sort environment.detached_context
+           (Bv_width.to_int width))
+  | Detached_bv_eq_term (left, right) ->
+      Z3.Boolean.mk_eq environment.detached_context
+        (translate_detached_term environment left)
+        (translate_detached_term environment right)
+  | Detached_bv_distinct_term (left, right) ->
+      Z3.Boolean.mk_distinct environment.detached_context
+        [ translate_detached_term environment left;
+          translate_detached_term environment right ]
+  | Detached_bv_add_mod_term (left, right) ->
+      Z3.BitVector.mk_add environment.detached_context
+        (translate_detached_term environment left)
+        (translate_detached_term environment right)
+  | Detached_bv_sub_mod_term (left, right) ->
+      Z3.BitVector.mk_sub environment.detached_context
+        (translate_detached_term environment left)
+        (translate_detached_term environment right)
+  | Detached_bv_not_term value ->
+      Z3.BitVector.mk_not environment.detached_context
+        (translate_detached_term environment value)
+  | Detached_bv_and_term (left, right) ->
+      Z3.BitVector.mk_and environment.detached_context
+        (translate_detached_term environment left)
+        (translate_detached_term environment right)
+  | Detached_bv_or_term (left, right) ->
+      Z3.BitVector.mk_or environment.detached_context
+        (translate_detached_term environment left)
+        (translate_detached_term environment right)
+  | Detached_bv_xor_term (left, right) ->
+      Z3.BitVector.mk_xor environment.detached_context
+        (translate_detached_term environment left)
+        (translate_detached_term environment right)
+  | Detached_bv_ult_term (left, right) ->
+      Z3.BitVector.mk_ult environment.detached_context
+        (translate_detached_term environment left)
+        (translate_detached_term environment right)
+  | Detached_bv_ule_term (left, right) ->
+      Z3.BitVector.mk_ule environment.detached_context
+        (translate_detached_term environment left)
+        (translate_detached_term environment right)
+  | Detached_bv_ugt_term (left, right) ->
+      Z3.BitVector.mk_ugt environment.detached_context
+        (translate_detached_term environment left)
+        (translate_detached_term environment right)
+  | Detached_bv_uge_term (left, right) ->
+      Z3.BitVector.mk_uge environment.detached_context
+        (translate_detached_term environment left)
+        (translate_detached_term environment right)
+  | Detached_bv_slt_term (left, right) ->
+      Z3.BitVector.mk_slt environment.detached_context
+        (translate_detached_term environment left)
+        (translate_detached_term environment right)
+  | Detached_bv_sle_term (left, right) ->
+      Z3.BitVector.mk_sle environment.detached_context
+        (translate_detached_term environment left)
+        (translate_detached_term environment right)
+  | Detached_bv_sgt_term (left, right) ->
+      Z3.BitVector.mk_sgt environment.detached_context
+        (translate_detached_term environment left)
+        (translate_detached_term environment right)
+  | Detached_bv_sge_term (left, right) ->
+      Z3.BitVector.mk_sge environment.detached_context
+        (translate_detached_term environment left)
+        (translate_detached_term environment right)
+  | Detached_bv_to_int_unsigned_term value ->
+      Z3.BitVector.mk_bv2int environment.detached_context
+        (translate_detached_term environment value) false
+  | Detached_bv_to_int_signed_term value ->
+      Z3.BitVector.mk_bv2int environment.detached_context
+        (translate_detached_term environment value) true
+  | Detached_int_to_bv_mod_term (reference, value) ->
+      Z3.Arithmetic.Integer.mk_int2bv environment.detached_context
+        (Bv_width.to_int (decode_detached_width reference))
+        (translate_detached_term environment value)
 
 and translate_detached_user_quantifier environment universal binders body trigger
     qid skid =
@@ -1054,10 +1846,14 @@ let translate_detached_axiom environment axiom =
     (symbol axiom.detached_skid)
   |> Z3.Quantifier.expr_of_quantifier
 
+type detached_backend_projection =
+  | Detached_backend_function of
+      string * detached_projection_sort * Z3.Expr.expr
+  | Detached_backend_bv of string * string * Bv_width.t * Z3.Expr.expr
+
 type detached_translated = {
   detached_assertions_backend : Z3.Expr.expr list;
-  detached_projected_backend :
-    (detached_projection_sort * Z3.Expr.expr) list;
+  detached_projected_backend : detached_backend_projection list;
 }
 
 let translate_detached_plan context plan =
@@ -1081,6 +1877,9 @@ let translate_detached_plan context plan =
               ~resolve_named_sort:(fun index ->
                 find_index "detached datatype dependency" index
                   !(environment.detached_sorts))
+              ~resolve_bv_sort:(fun reference ->
+                Z3.BitVector.mk_sort context
+                  (Bv_width.to_int (decode_detached_width reference)))
               datatype
             |> Result.fold ~ok:Fun.id
                  ~error:(fun message -> invalid_arg message)
@@ -1100,12 +1899,20 @@ let translate_detached_plan context plan =
     plan.detached_declarations;
   let projected =
     List.map
-      (fun (index, sort) ->
-        let declaration =
-          find_index "detached projection" index
-            !(environment.detached_functions)
-        in
-        (sort, Z3.Expr.mk_app context declaration []))
+      (function
+        | Detached_function_projection (identity, index, sort) ->
+            let declaration =
+              find_index "detached projection" index
+                !(environment.detached_functions)
+            in
+            Detached_backend_function
+              (identity, sort, Z3.Expr.mk_app context declaration [])
+        | Detached_bv_projection (identity, reference, term) ->
+            Detached_backend_bv
+              ( identity,
+                reference,
+                decode_detached_width reference,
+                translate_detached_term environment term ))
       plan.detached_projections
   in
   {
@@ -1204,13 +2011,22 @@ let with_solver accounting ?policy ~requirements config translate use =
             !solver))
     (fun () ->
       let translated = translate context in
-      let created = Z3.Solver.mk_solver_s context logic in
+      let created =
+        if List.mem Logic_ir.Bit_vectors requirements then
+          Z3.Solver.mk_solver context None
+        else Z3.Solver.mk_solver_s context logic
+      in
       solver := Some created;
       note_solver_created accounting logic;
       Z3.Solver.set_parameters created (parameters ?policy context config);
       Z3.Solver.add created translated.assertions;
       [%log.trace "initialized direct Z3 solver"
         ~logic:(Delator.Field.string logic)
+        ~bit_vectors:
+          (Delator.Field.bool (List.mem Logic_ir.Bit_vectors requirements))
+        ~int_bitvector_conversions:
+          (Delator.Field.bool
+             (List.mem Logic_ir.Int_bitvector_conversions requirements))
         ~nonlinear_terms:(Delator.Field.string "admitted")
         ~nonlinear_reasoning:
           (Delator.Field.string
@@ -1262,7 +2078,11 @@ let solve_translated @ portable = fun controlled solver ->
 [@@delator.instrument] [@@delator.level trace]
 
 let solve_query ?(controlled = Real) ?rlimit config query =
-  match resolve_policy ?rlimit config with
+  if Logic_ir.View.bv_projections query <> [] then
+    Error
+      (Malformed_logic_ir
+         "BV projections require the structured BV query solver")
+  else match resolve_policy ?rlimit config with
   | Error _ as error -> error
   | Ok policy -> (
       match resolve_capabilities Global (Logic_ir.requirements query) with
@@ -1270,6 +2090,8 @@ let solve_query ?(controlled = Real) ?rlimit config query =
       | Ok () ->
           note_translation Global;
           protect (fun () ->
+              if List.mem Logic_ir.Bit_vectors (Logic_ir.requirements query) then
+                ignore (detach_query query);
               with_solver Global ~policy
                 ~requirements:(Logic_ir.requirements query) config
                 (fun context -> translate_logic_query context query)
@@ -1277,7 +2099,11 @@ let solve_query ?(controlled = Real) ?rlimit config query =
 [@@delator.instrument] [@@delator.level trace]
 
 let solve_query_with accounting ~controlled ~rlimit config query =
-  match resolve_policy ~rlimit config with
+  if Logic_ir.View.bv_projections query <> [] then
+    Error
+      (Malformed_logic_ir
+         "BV projections require the structured BV query solver")
+  else match resolve_policy ~rlimit config with
   | Error _ as error -> error
   | Ok policy -> (
       match resolve_capabilities accounting (Logic_ir.requirements query) with
@@ -1285,6 +2111,8 @@ let solve_query_with accounting ~controlled ~rlimit config query =
       | Ok () ->
           note_translation accounting;
           protect (fun () ->
+              if List.mem Logic_ir.Bit_vectors (Logic_ir.requirements query) then
+                ignore (detach_query query);
               with_solver accounting ~policy
                 ~requirements:(Logic_ir.requirements query) config
                 (fun context -> translate_logic_query context query)
@@ -1308,19 +2136,192 @@ let detached_parameters context ~timeout_ms ~rlimit ~model =
     nonlinear_reasoning_enabled;
   parameters
 
-let detached_model_value sort expression =
-  match sort with
-  | Detached_project_integer ->
-      Detached_integer (Z3.Expr.to_string expression)
-  | Detached_project_boolean -> (
+let bv_model_failure () reason =
+  [%log.error "rejected structured BV model projection"
+    ~stage:(Delator.Field.string "bv-model-decode")
+    ~reason_class:(Delator.Field.string reason)
+    ~decision:(Delator.Field.string "rejected")];
+  raise (Failure reason)
+[@@delator.instrument] [@@delator.level error]
+
+let bv_model_fault_class @ portable = function
+  | Missing_evaluation -> "missing-evaluation"
+  | Wrong_sort -> "wrong-sort"
+  | Non_numeral -> "non-numeral"
+  | Width_mismatch -> "width-mismatch"
+  | Residue_text _ -> "residue-text"
+
+(* FIXME(delator): return the bounded class so erased builds retain an ordinary
+   use without exporting this private test seam through the log-value ABI. *)
+let note_bv_model_fault @ portable = fun fault ->
+  let fault_class = bv_model_fault_class fault in
+  [%log.debug "injected a test-owned BV model observation fault"
+    ~stage:(Delator.Field.string "bv-model-decode-fault")
+    ~fault_class:(Delator.Field.string fault_class)
+    ~decision:(Delator.Field.string "injected")];
+  fault_class
+[@@delator.instrument] [@@delator.level debug]
+
+let evaluate_bv_model @ portable = fun fault model expression ->
+  match fault with
+  | Some Missing_evaluation ->
+      ignore (note_bv_model_fault Missing_evaluation);
+      None
+  | None | Some (Wrong_sort | Non_numeral | Width_mismatch | Residue_text _) ->
+      Z3.Model.evaluate model expression true
+
+let decode_bv_model_residue @ portable = fun fault width expression ->
+  let sort = Z3.Expr.get_sort expression in
+  let sort_kind =
+    match fault with
+    | Some Wrong_sort ->
+        ignore (note_bv_model_fault Wrong_sort);
+        Z3enums.INT_SORT
+    | None
+    | Some
+        ( Missing_evaluation | Non_numeral | Width_mismatch | Residue_text _ ) ->
+        Z3.Sort.get_sort_kind sort
+  in
+  if sort_kind <> Z3enums.BV_SORT then
+    Error "BV model binding has the wrong backend sort"
+  else
+    let width_int = Bv_width.to_int width in
+    let observed_width =
+      match fault with
+      | Some Width_mismatch ->
+          ignore (note_bv_model_fault Width_mismatch);
+          width_int + 1
+      | None
+      | Some (Missing_evaluation | Wrong_sort | Non_numeral | Residue_text _) ->
+          Z3.BitVector.get_size sort
+    in
+    if observed_width <> width_int then
+      Error "BV model binding width differs from its projection"
+    else
+      let is_numeral =
+        match fault with
+        | Some Non_numeral ->
+            ignore (note_bv_model_fault Non_numeral);
+            false
+        | None
+        | Some
+            ( Missing_evaluation | Wrong_sort | Width_mismatch | Residue_text _ ) ->
+            Z3.Expr.is_numeral expression
+      in
+      if not is_numeral then Error "BV model binding is not a numeral"
+      else
+        let residue =
+          match fault with
+          | Some (Residue_text text) ->
+              ignore (note_bv_model_fault (Residue_text text));
+              text
+          | None
+          | Some
+              (Missing_evaluation | Wrong_sort | Non_numeral | Width_mismatch) ->
+              Z3.BitVector.numeral_to_string expression
+        in
+        validate_detached_bv_decimal width residue
+
+let decode_bv_model_value fault width expression =
+  match decode_bv_model_residue fault width expression with
+  | Error reason -> bv_model_failure () reason
+  | Ok residue ->
+      let value =
+        Bv_value.of_string ~width residue
+        |> Result.fold ~ok:Fun.id ~error:(bv_model_failure ())
+      in
+      [%log.trace "decoded structured BV model projection"
+        ~stage:(Delator.Field.string "bv-model-decode")
+        ~width:(Delator.Field.int (Bv_width.to_int width))
+        ~residue_decimal_bytes:
+          (Delator.Field.int
+             (String.length (Bv_value.canonical_decimal value)))
+        ~decision:(Delator.Field.string "accepted")];
+      value
+
+let solve_bv_query_with_model_fault model_fault ?(controlled = Real) ?rlimit
+    config query =
+  let projections = Logic_ir.View.bv_projections query in
+  if projections <> [] && not config.model then
+    Error
+      (Invalid_configuration
+         "BV model projections require model production")
+  else
+    match resolve_policy ?rlimit config with
+    | Error _ as error -> error
+    | Ok policy -> (
+        match resolve_capabilities Global (Logic_ir.requirements query) with
+        | Error _ as error -> error
+        | Ok () ->
+            note_translation Global;
+            protect (fun () ->
+                if List.mem Logic_ir.Bit_vectors (Logic_ir.requirements query) then
+                  ignore (detach_query query);
+                with_solver Global ~policy
+                  ~requirements:(Logic_ir.requirements query) config
+                  (fun context -> translate_logic_query context query)
+                  (fun solver translated ->
+                    match solve_translated controlled solver with
+                    | Error _ as error -> error
+                    | Ok Verified -> Ok Bv_verified
+                    | Ok (Inconclusive reason) -> Ok (Bv_inconclusive reason)
+                    | Ok (Counterexample _) ->
+                        let model =
+                          match Z3.Solver.get_model solver with
+                          | Some model -> model
+                          | None ->
+                              raise
+                                (Failure
+                                   "Z3 returned satisfiable without a BV model")
+                        in
+                        let bindings =
+                          List.map
+                            (fun (projection, expression) ->
+                              let value =
+                                match
+                                  evaluate_bv_model model_fault model expression
+                                with
+                                | Some value ->
+                                    decode_bv_model_value model_fault
+                                      (Logic_ir.View.bv_projection_width projection)
+                                      value
+                                | None ->
+                                    raise
+                                      (Failure
+                                         "BV model projection has no backend value")
+                              in
+                              { projection_identity =
+                                  Logic_ir.View.bv_projection_identity projection;
+                                width =
+                                  Logic_ir.View.bv_projection_width projection;
+                                value })
+                            translated.bv_projected
+                        in
+                        Ok (Bv_counterexample bindings))))
+[@@delator.instrument] [@@delator.level trace]
+
+let solve_bv_query ?controlled ?rlimit config query =
+  solve_bv_query_with_model_fault None ?controlled ?rlimit config query
+
+let detached_model_value model_fault projection expression =
+  match projection with
+  | Detached_backend_function (identity, Detached_project_integer, _) ->
+      Detached_integer (identity, Z3.Expr.to_string expression)
+  | Detached_backend_function (identity, Detached_project_boolean, _) -> (
       match Z3.Boolean.get_bool_value expression with
-      | Z3enums.L_TRUE -> Detached_boolean true
-      | L_FALSE -> Detached_boolean false
+      | Z3enums.L_TRUE -> Detached_boolean (identity, true)
+      | L_FALSE -> Detached_boolean (identity, false)
       | L_UNDEF ->
           raise
             (Failure "Boolean model binding has an undefined backend value"))
-  | Detached_project_aggregate ->
-      Detached_aggregate (Z3.Expr.to_string expression)
+  | Detached_backend_function (identity, Detached_project_aggregate, _) ->
+      Detached_aggregate (identity, Z3.Expr.to_string expression)
+  | Detached_backend_bv (identity, reference, width, _) ->
+      let residue =
+        decode_bv_model_residue model_fault width expression
+        |> Result.fold ~ok:Fun.id ~error:(fun reason -> raise (Failure reason))
+      in
+      Detached_bit_vector (identity, reference, residue)
 
 let detached_note_capability_resolution local =
   local.local_capability_resolutions <-
@@ -1363,15 +2364,18 @@ let detached_feature_to_string @ portable = function
   | Models -> "models"
   | Nonlinear_integer_arithmetic -> "nonlinear-integer-arithmetic"
   | Algebraic_datatypes -> "algebraic-datatypes"
+  | Bit_vectors -> "bit-vectors"
+  | Int_bitvector_conversions -> "int-bitvector-conversions"
 
 let detached_feature_supported @ portable = function
   | Logic_ir.Named_sorts | Uninterpreted_functions | Linear_integer_arithmetic
   | Quantifiers | Explicit_patterns | Quantifier_ids | Models
-  | Algebraic_datatypes | Nonlinear_integer_arithmetic ->
+  | Algebraic_datatypes | Nonlinear_integer_arithmetic | Bit_vectors
+  | Int_bitvector_conversions ->
       true
 
-let solve_detached_query_local ~controlled ~timeout_ms ~rlimit ~model
-    (Detached_query encoded) =
+let solve_detached_query_local_with_model_fault model_fault ~controlled
+    ~timeout_ms ~rlimit ~model (Detached_query encoded) =
   [%log.trace "begin detached solver query"
     ~timeout_ms:(Delator.Field.int timeout_ms)
     ~rlimit:(Delator.Field.int rlimit)
@@ -1399,7 +2403,15 @@ let solve_detached_query_local ~controlled ~timeout_ms ~rlimit ~model
              (String.concat ", "
                 (List.map detached_feature_to_string unsupported)))
       else
-      let logic = solver_logic plan.detached_requirements in
+      let validated_requirements = preflight_detached_plan plan in
+      [%log.trace "completed detached typed preflight before solver allocation"
+        ~stage:(Delator.Field.string "detached-typed-preflight")
+        ~transported_features:
+          (Delator.Field.int (List.length plan.detached_requirements))
+        ~validated_features:
+          (Delator.Field.int (List.length validated_requirements))
+        ~decision:(Delator.Field.string "accepted")];
+      let logic = solver_logic validated_requirements in
       let context =
         Z3.mk_context
           [ ("model", string_of_bool model); ("auto_config", "false") ]
@@ -1419,7 +2431,11 @@ let solve_detached_query_local ~controlled ~timeout_ms ~rlimit ~model
                 !solver))
         (fun () ->
           let translated = translate_detached_plan context plan in
-          let created = Z3.Solver.mk_solver_s context logic in
+          let created =
+            if List.mem Logic_ir.Bit_vectors validated_requirements then
+              Z3.Solver.mk_solver context None
+            else Z3.Solver.mk_solver_s context logic
+          in
           solver := Some created;
           detached_note_solver_created local logic;
           Z3.Solver.set_parameters created
@@ -1427,6 +2443,13 @@ let solve_detached_query_local ~controlled ~timeout_ms ~rlimit ~model
           Z3.Solver.add created translated.detached_assertions_backend;
           [%log.trace "initialized detached Z3 solver"
             ~logic:(Delator.Field.string logic)
+            ~bit_vectors:
+              (Delator.Field.bool
+                 (List.mem Logic_ir.Bit_vectors validated_requirements))
+            ~int_bitvector_conversions:
+              (Delator.Field.bool
+                 (List.mem Logic_ir.Int_bitvector_conversions
+                    validated_requirements))
             ~nonlinear_terms:(Delator.Field.string "admitted")
             ~nonlinear_reasoning:
               (Delator.Field.string
@@ -1454,9 +2477,33 @@ let solve_detached_query_local ~controlled ~timeout_ms ~rlimit ~model
                   Ok
                     (Detached_counterexample
                        (List.map
-                          (fun (sort, expression) ->
-                            Z3.Model.evaluate backend_model expression true
-                            |> Option.map (detached_model_value sort))
+                          (fun projection ->
+                            let expression =
+                              match projection with
+                              | Detached_backend_function (_, _, expression)
+                              | Detached_backend_bv (_, _, _, expression) ->
+                                  expression
+                            in
+                            let evaluated =
+                              match projection with
+                              | Detached_backend_bv _ ->
+                                  evaluate_bv_model model_fault backend_model
+                                    expression
+                              | Detached_backend_function _ ->
+                                  Z3.Model.evaluate backend_model expression true
+                            in
+                            match evaluated with
+                            | Some value ->
+                                Some
+                                  (detached_model_value model_fault projection
+                                     value)
+                            | None -> (
+                                match projection with
+                                | Detached_backend_bv _ ->
+                                    raise
+                                      (Failure
+                                         "BV model projection has no backend value")
+                                | Detached_backend_function _ -> None))
                           translated.detached_projected_backend)))
     with
     | Invalid_argument message ->
@@ -1468,6 +2515,15 @@ let solve_detached_query_local ~controlled ~timeout_ms ~rlimit ~model
           ("direct-Z3 backend failure: " ^ Printexc.to_string exn)
   in
   let detached_telemetry = local_snapshot local in
+  (match detached_result with
+  | Error (reason [@log_value.error]) ->
+      [%log.error "detached direct-Z3 query failed"
+        ~stage:(Delator.Field.string "detached-direct-z3")
+        ~reason_class:(Delator.Field.string (reason [@log_value.error]))
+        ~contexts_created:(Delator.Field.int detached_telemetry.contexts_created)
+        ~contexts_cleaned:(Delator.Field.int detached_telemetry.contexts_cleaned)
+        ~decision:(Delator.Field.string "failed")]
+  | Ok _ -> ());
   [%log.trace "completed detached solver query"
     ~outcome:
       (Delator.Field.string
@@ -1482,6 +2538,10 @@ let solve_detached_query_local ~controlled ~timeout_ms ~rlimit ~model
     ~contexts_cleaned:(Delator.Field.int detached_telemetry.contexts_cleaned)];
   { detached_result; detached_telemetry }
 [@@delator.instrument] [@@delator.level trace]
+
+let solve_detached_query_local ~controlled ~timeout_ms ~rlimit ~model query =
+  solve_detached_query_local_with_model_fault None ~controlled ~timeout_ms
+    ~rlimit ~model query
 [@@unsafe_allow_any_mode_crossing
   "The portable closure captures only Z3 datatype operations; every native \
    handle is created, used, and released inside the invoking worker."]
@@ -1518,7 +2578,7 @@ let aggregate_model_identity expression =
       with _ -> Z.of_int (Hashtbl.hash rendered))
   | _ -> Z.of_int (Hashtbl.hash rendered)
 
-let model_value expected_sort expression =
+let model_value model_fault expected_sort expression =
   match expected_sort with
   | Vir.Integer ->
       Integer (Z3.Arithmetic.Integer.get_big_int expression)
@@ -1533,10 +2593,33 @@ let model_value expected_sort expression =
       Aggregate_identity
         (try Z3.Arithmetic.Integer.get_big_int expression
          with _ -> aggregate_model_identity expression)
+  | Bit_vector width ->
+      Bit_vector (decode_bv_model_value model_fault width expression)
   | Parametric _ ->
       raise (Failure "parametric symbols are not projected through aggregate model ABI")
 
-let solve_vir ?(controlled = Real) ?rlimit ?(requires = []) config obligation =
+let evaluated_model_value model_fault model (symbol : Vir.symbol) expression =
+  let evaluated =
+    match symbol.sort with
+    | Vir.Bit_vector _ -> evaluate_bv_model model_fault model expression
+    | Vir.Integer | Boolean | Aggregate _ | Parametric _ ->
+        Z3.Model.evaluate model expression true
+  in
+  match evaluated with
+  | Some value -> Some (model_value model_fault symbol.sort value)
+  | None -> (
+      match symbol.sort with
+      | Vir.Bit_vector width ->
+          [%log.error "mandatory direct VIR BV projection has no model value"
+            ~stage:(Delator.Field.string "vir-bv-model-decode")
+            ~symbol_id:(Delator.Field.int symbol.symbol_id)
+            ~width:(Delator.Field.int (Bv_width.to_int width))
+            ~decision:(Delator.Field.string "rejected")];
+          raise (Failure "BV model projection has no backend value")
+      | Vir.Integer | Boolean | Aggregate _ | Parametric _ -> None)
+
+let solve_vir_with_model_fault model_fault ?(controlled = Real) ?rlimit
+    ?(requires = []) config obligation =
   match resolve_policy ?rlimit config with
   | Error _ as error -> error
   | Ok policy -> (
@@ -1605,9 +2688,8 @@ let solve_vir ?(controlled = Real) ?rlimit ?(requires = []) config obligation =
                                 List.map
                                   (fun (symbol, expression) ->
                                     let value =
-                                      Z3.Model.evaluate model expression true
-                                      |> Option.map
-                                           (model_value symbol.Vir.sort)
+                                      evaluated_model_value model_fault model symbol
+                                        expression
                                     in
                                     { symbol; value })
                                   translated_logic.projected
@@ -1615,8 +2697,11 @@ let solve_vir ?(controlled = Real) ?rlimit ?(requires = []) config obligation =
                               Ok (Counterexample bindings))))))
 [@@delator.instrument] [@@delator.level trace]
 
-let solve_vir_with accounting ~controlled ~rlimit ?(requires = []) config
-    obligation =
+let solve_vir ?controlled ?rlimit ?requires config obligation =
+  solve_vir_with_model_fault None ?controlled ?rlimit ?requires config obligation
+
+let solve_vir_with accounting ~model_fault ~controlled ~rlimit ?(requires = [])
+    config obligation =
   match resolve_policy ~rlimit config with
   | Error _ as error -> error
   | Ok policy -> (
@@ -1668,8 +2753,8 @@ let solve_vir_with accounting ~controlled ~rlimit ?(requires = []) config
                             List.map
                               (fun (symbol, expression) ->
                                 let value =
-                                  Z3.Model.evaluate model expression true
-                                  |> Option.map (model_value symbol.Vir.sort)
+                                  evaluated_model_value model_fault model symbol
+                                    expression
                                 in
                                 { symbol; value })
                               translated_logic.projected
@@ -1677,13 +2762,19 @@ let solve_vir_with accounting ~controlled ~rlimit ?(requires = []) config
                           Ok (Counterexample bindings)))))
 [@@delator.instrument] [@@delator.level trace]
 
-let solve_vir_local ~controlled ~rlimit ?(requires = []) config obligation =
+let solve_vir_local_with_model_fault model_fault ~controlled ~rlimit
+    ?(requires = []) config obligation =
   let local = fresh_local_counters () in
   let result =
-    solve_vir_with (Local local) ~controlled ~rlimit ~requires config obligation
+    solve_vir_with (Local local) ~model_fault ~controlled ~rlimit ~requires
+      config obligation
   in
   { result; telemetry = local_snapshot local }
 [@@delator.instrument] [@@delator.level trace]
+
+let solve_vir_local ~controlled ~rlimit ?requires config obligation =
+  solve_vir_local_with_model_fault None ~controlled ~rlimit ?requires config
+    obligation
 
 let render_vir ?(requires = []) config obligation =
   match
@@ -1713,3 +2804,33 @@ let diagnostic_snapshot config query =
 
 let version () =
   (Z3.Version.major, Z3.Version.minor, Z3.Version.build, Z3.Version.full_version)
+
+module For_testing = struct
+  type defect = detached_preflight_defect =
+    | Mixed_bv_add_widths
+    | Omitted_bv_capability
+    | Wrong_int_to_bv_operand
+    | Bv_projection_width_mismatch
+
+  type model_fault = bv_model_fault =
+    | Missing_evaluation
+    | Wrong_sort
+    | Non_numeral
+    | Width_mismatch
+    | Residue_text of string
+
+  let malformed_detached_bv_query = malformed_detached_bv_query_for_testing
+
+  let solve_bv_query_with_model_fault ~fault ?controlled ?rlimit config query =
+    solve_bv_query_with_model_fault (Some fault) ?controlled ?rlimit config query
+
+  let solve_detached_query_local_with_model_fault ~fault ~controlled ~timeout_ms
+      ~rlimit ~model query =
+    solve_detached_query_local_with_model_fault (Some fault) ~controlled
+      ~timeout_ms ~rlimit ~model query
+
+  let solve_vir_local_with_model_fault ~fault ~controlled ~rlimit ?requires
+      config obligation =
+    solve_vir_local_with_model_fault (Some fault) ~controlled ~rlimit ?requires
+      config obligation
+end

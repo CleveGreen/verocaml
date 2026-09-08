@@ -40,6 +40,7 @@
 (executable
  (name outcome_cases)
  (modules outcome_cases integration_environment)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
  (libraries outcome_test_support verocaml_core unix))
 
 (rule

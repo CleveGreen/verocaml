@@ -10,6 +10,8 @@ type feature =
   | Models
   | Nonlinear_integer_arithmetic
   | Algebraic_datatypes
+  | Bit_vectors
+  | Int_bitvector_conversions
 
 module Feature_order = struct
   type t = feature
@@ -28,7 +30,7 @@ type named_sort = {
   named_sort_span : span;
 }
 
-type sort = Int | Bool | Named of named_sort
+type sort = Int | Bool | Bv of Bv_width.t | Named of named_sort
 
 type function_symbol = {
   function_owner : owner;
@@ -101,6 +103,14 @@ type term = {
   term_owner : owner option;
 }
 
+and bv_projection = {
+  bv_projection_owner : owner;
+  bv_projection_identity : string;
+  bv_projection_width : Bv_width.t;
+  bv_projection_term : term;
+  bv_projection_span : span;
+}
+
 and user_quantifier = {
   user_quantifier_binders : binder list;
   user_quantifier_body : term;
@@ -134,6 +144,26 @@ and term_node =
   | Forall_term of user_quantifier
   | Exists_term of user_quantifier
   | Ite of term * term * term
+  | Bv_literal of Bv_value.t
+  | Bv_eq of term * term
+  | Bv_distinct of term * term
+  | Bv_add_mod of term * term
+  | Bv_sub_mod of term * term
+  | Bv_not of term
+  | Bv_and of term * term
+  | Bv_or of term * term
+  | Bv_xor of term * term
+  | Bv_ult of term * term
+  | Bv_ule of term * term
+  | Bv_ugt of term * term
+  | Bv_uge of term * term
+  | Bv_slt of term * term
+  | Bv_sle of term * term
+  | Bv_sgt of term * term
+  | Bv_sge of term * term
+  | Bv_to_int_unsigned of term
+  | Bv_to_int_signed of term
+  | Int_to_bv_mod of Bv_width.t * term
 
 type axiom = {
   axiom_owner : owner;
@@ -155,6 +185,7 @@ type query = {
   query_datatypes : datatype list;
   query_axioms : axiom list;
   query_assertions : term list;
+  query_bv_projections : bv_projection list;
   query_requirements : feature list;
   query_span : span;
 }
@@ -209,19 +240,33 @@ let same_owner left right = left == right
 let sort_equal left right =
   match (left, right) with
   | Int, Int | Bool, Bool -> true
+  | Bv left, Bv right -> Bv_width.equal left right
   | Named left, Named right ->
       same_owner left.named_sort_owner right.named_sort_owner
       && Int.equal left.named_sort_index right.named_sort_index
-  | (Int | Bool | Named _), (Int | Bool | Named _) -> false
+  | (Int | Bool | Bv _ | Named _), (Int | Bool | Bv _ | Named _) -> false
 
 let sort_to_string = function
   | Int -> "Int"
   | Bool -> "Bool"
+  | Bv width -> Printf.sprintf "BV<%s>" (Bv_width.to_string width)
   | Named sort -> sort.named_sort_name
 
 let sort_belongs_to owner = function
-  | Int | Bool -> true
+  | Int | Bool | Bv _ -> true
   | Named sort -> same_owner owner sort.named_sort_owner
+
+let validate_sort ~span = function
+  | Int | Bool | Named _ -> Ok ()
+  | Bv width ->
+      Bv_width.authenticate_bound
+        (Bv_backend_capability_receipt_private.capability ())
+        width
+      |> Result.map_error (fun message -> { span; message })
+
+let sort_features = function
+  | Bv _ -> Feature_set.singleton Bit_vectors
+  | Int | Bool | Named _ -> Feature_set.empty
 
 let declare_sort builder ~name ~span =
   match validate_name ~kind:"sort" ~span name with
@@ -256,6 +301,16 @@ let declare_function builder ~name ~domain ~range ~span =
       then
         error span "function %S uses a named sort from another logic signature" name
       else
+        match
+          List.find_map
+            (fun sort ->
+              match validate_sort ~span sort with
+              | Ok () -> None
+              | Error error -> Some error)
+            (range :: domain)
+        with
+        | Some error -> Error error
+        | None ->
         let symbol =
           {
             function_owner = builder.owner;
@@ -318,7 +373,9 @@ let validate_datatype_specs builder ~datatype_id ~sort_name constructors ~span =
         (fun field ->
           match field.field_sort with
           | Recursive_self -> false
-          | Field_sort sort -> not (sort_belongs_to builder.owner sort))
+          | Field_sort sort ->
+              (not (sort_belongs_to builder.owner sort))
+              || Result.is_error (validate_sort ~span sort))
         (List.concat_map (fun constructor -> constructor.fields) constructors)
     with
     | Some _ -> error span "datatype %S uses a sort from another signature" datatype_id
@@ -451,7 +508,7 @@ let declare_rank_domain builder ~domain_id ~members ~span =
       (fun (_, sort) ->
         match sort with
         | Named _ -> not (sort_belongs_to builder.owner sort)
-        | Int | Bool -> true)
+        | Int | Bool | Bv _ -> true)
       members
   then
     error span
@@ -491,6 +548,9 @@ let bind builder ~name ~sort ~span =
       if not (sort_belongs_to builder.owner sort) then
         error span "binder %S uses a named sort from another logic signature" name
       else
+        match validate_sort ~span sort with
+        | Error _ as error -> error
+        | Ok () ->
         let binder =
           {
             binder_owner = builder.owner;
@@ -526,6 +586,12 @@ let merge_features terms =
   List.fold_left
     (fun combined term -> Feature_set.union combined term.term_features)
     Feature_set.empty terms
+
+let binder_sort_features binders =
+  List.fold_left
+    (fun features binder ->
+      Feature_set.union features (sort_features binder.binder_sort))
+    Feature_set.empty binders
 
 let make_term ~sort ~span ~node ~features terms =
   match owner_of_terms terms with
@@ -565,6 +631,20 @@ let bool ~span value =
     term_owner = None;
   }
 
+let bv_literal ~span value =
+  let width = value.Bv_value.width in
+  match validate_sort ~span (Bv width) with
+  | Error _ as error -> error
+  | Ok () ->
+      Ok
+        { term_sort = Bv width;
+          term_span = span;
+          term_node = Bv_literal value;
+          free_binders = Int_set.empty;
+          used_functions = Int_set.empty;
+          term_features = Feature_set.singleton Bit_vectors;
+          term_owner = None }
+
 let bound binder =
   {
     term_sort = binder.binder_sort;
@@ -575,6 +655,7 @@ let bound binder =
     term_features =
       (match binder.binder_sort with
       | Named _ -> Feature_set.singleton Named_sorts
+      | Bv _ -> Feature_set.singleton Bit_vectors
       | Int | Bool -> Feature_set.empty);
     term_owner = Some binder.binder_owner;
   }
@@ -601,16 +682,18 @@ let apply ~span function_ arguments =
           "function %S is applied to a term from another logic signature"
           function_.function_name
     | Ok _ ->
-        let named_feature =
-          if
-            List.exists
-              (function Named _ -> true | Int | Bool -> false)
-              (function_.function_range :: function_.function_domain)
-          then Feature_set.singleton Named_sorts
-          else Feature_set.empty
+        let sort_features =
+          List.fold_left
+            (fun features sort ->
+              let features = Feature_set.union features (sort_features sort) in
+              match sort with
+              | Named _ -> Feature_set.add Named_sorts features
+              | Int | Bool | Bv _ -> features)
+            Feature_set.empty
+            (function_.function_range :: function_.function_domain)
         in
         let features =
-          Feature_set.add Uninterpreted_functions named_feature
+          Feature_set.add Uninterpreted_functions sort_features
         in
         (match
            make_term ~sort:function_.function_range ~span
@@ -679,6 +762,147 @@ let binary_same ~span ~result ~node ~features left right =
       (sort_to_string left.term_sort) (sort_to_string right.term_sort)
   else make_term ~sort:result ~span ~node:(node left right) ~features [ left; right ]
 
+let expect_bv term =
+  match term.term_sort with
+  | Bv width -> Ok width
+  | Int | Bool | Named _ ->
+      error term.term_span "expected BV term, found %s"
+        (sort_to_string term.term_sort)
+
+let bv_binary ~operation ~span ~result ~node left right =
+  let result =
+    match (expect_bv left, expect_bv right) with
+    | Error _ as error, _ | _, (Error _ as error) -> error
+    | Ok left_width, Ok right_width ->
+        if not (Bv_width.equal left_width right_width) then
+          error span "%s BV operands have different authenticated widths %s and %s"
+            operation
+            (Bv_width.to_string left_width) (Bv_width.to_string right_width)
+        else
+          make_term ~sort:(result left_width) ~span ~node:(node left right)
+            ~features:(Feature_set.singleton Bit_vectors)
+            [ left; right ]
+  in
+  [%log.trace "constructed typed closed-kernel BV binary node"
+    ~stage:(Delator.Field.string "logic-ir-bv-construction")
+    ~operation:(Delator.Field.string operation)
+    ~accepted:(Delator.Field.bool (Result.is_ok result))
+    ~decision:
+      (Delator.Field.string (if Result.is_ok result then "accepted" else "rejected"))];
+  result
+
+let bv_unary ~span ~result ~node value =
+  match expect_bv value with
+  | Error _ as error -> error
+  | Ok width ->
+      make_term ~sort:(result width) ~span ~node:(node value)
+        ~features:(Feature_set.singleton Bit_vectors)
+        [ value ]
+
+let bv_eq ~span left right =
+  bv_binary ~operation:"eq" ~span ~result:(fun _ -> Bool)
+    ~node:(fun left right -> Bv_eq (left, right))
+    left right
+
+let bv_distinct ~span left right =
+  bv_binary ~operation:"distinct" ~span ~result:(fun _ -> Bool)
+    ~node:(fun left right -> Bv_distinct (left, right))
+    left right
+
+let bv_add_mod ~span left right =
+  bv_binary ~operation:"add-mod" ~span ~result:(fun width -> Bv width)
+    ~node:(fun left right -> Bv_add_mod (left, right))
+    left right
+
+let bv_sub_mod ~span left right =
+  bv_binary ~operation:"sub-mod" ~span ~result:(fun width -> Bv width)
+    ~node:(fun left right -> Bv_sub_mod (left, right))
+    left right
+
+let bv_not ~span value =
+  bv_unary ~span ~result:(fun width -> Bv width)
+    ~node:(fun value -> Bv_not value) value
+
+let bv_and ~span left right =
+  bv_binary ~operation:"and" ~span ~result:(fun width -> Bv width)
+    ~node:(fun left right -> Bv_and (left, right))
+    left right
+
+let bv_or ~span left right =
+  bv_binary ~operation:"or" ~span ~result:(fun width -> Bv width)
+    ~node:(fun left right -> Bv_or (left, right))
+    left right
+
+let bv_xor ~span left right =
+  bv_binary ~operation:"xor" ~span ~result:(fun width -> Bv width)
+    ~node:(fun left right -> Bv_xor (left, right))
+    left right
+
+let bv_ult ~span left right =
+  bv_binary ~operation:"unsigned-less-than" ~span ~result:(fun _ -> Bool)
+    ~node:(fun left right -> Bv_ult (left, right))
+    left right
+
+let bv_ule ~span left right =
+  bv_binary ~operation:"unsigned-less-or-equal" ~span ~result:(fun _ -> Bool)
+    ~node:(fun left right -> Bv_ule (left, right))
+    left right
+
+let bv_ugt ~span left right =
+  bv_binary ~operation:"unsigned-greater-than" ~span ~result:(fun _ -> Bool)
+    ~node:(fun left right -> Bv_ugt (left, right))
+    left right
+
+let bv_uge ~span left right =
+  bv_binary ~operation:"unsigned-greater-or-equal" ~span ~result:(fun _ -> Bool)
+    ~node:(fun left right -> Bv_uge (left, right))
+    left right
+
+let bv_slt ~span left right =
+  bv_binary ~operation:"signed-less-than" ~span ~result:(fun _ -> Bool)
+    ~node:(fun left right -> Bv_slt (left, right))
+    left right
+
+let bv_sle ~span left right =
+  bv_binary ~operation:"signed-less-or-equal" ~span ~result:(fun _ -> Bool)
+    ~node:(fun left right -> Bv_sle (left, right))
+    left right
+
+let bv_sgt ~span left right =
+  bv_binary ~operation:"signed-greater-than" ~span ~result:(fun _ -> Bool)
+    ~node:(fun left right -> Bv_sgt (left, right))
+    left right
+
+let bv_sge ~span left right =
+  bv_binary ~operation:"signed-greater-or-equal" ~span ~result:(fun _ -> Bool)
+    ~node:(fun left right -> Bv_sge (left, right))
+    left right
+
+let bv_to_int_unsigned ~span value =
+  bv_unary ~span ~result:(fun _ -> Int)
+    ~node:(fun value -> Bv_to_int_unsigned value) value
+  |> Result.map (fun term ->
+         { term with
+           term_features =
+             Feature_set.add Int_bitvector_conversions term.term_features })
+
+let bv_to_int_signed ~span value =
+  bv_unary ~span ~result:(fun _ -> Int)
+    ~node:(fun value -> Bv_to_int_signed value) value
+  |> Result.map (fun term ->
+         { term with
+           term_features =
+             Feature_set.add Int_bitvector_conversions term.term_features })
+
+let int_to_bv_mod ~span ~width value =
+  match (validate_sort ~span (Bv width), expect_sort Int value) with
+  | Error _ as error, _ | _, (Error _ as error) -> error
+  | Ok (), Ok () ->
+      make_term ~sort:(Bv width) ~span ~node:(Int_to_bv_mod (width, value))
+        ~features:
+          (Feature_set.of_list [ Bit_vectors; Int_bitvector_conversions ])
+        [ value ]
+
 let integer_binary ~span ~result ~node left right =
   match (expect_sort Int left, expect_sort Int right) with
   | Error _ as error, _ | _, (Error _ as error) -> error
@@ -737,12 +961,18 @@ let greater_or_equal ~span left right =
     left right
 
 let equal ~span left right =
-  binary_same ~span ~result:Bool ~node:(fun l r -> Equal (l, r))
-    ~features:Feature_set.empty left right
+  match (left.term_sort, right.term_sort) with
+  | Bv _, Bv _ -> bv_eq ~span left right
+  | _ ->
+      binary_same ~span ~result:Bool ~node:(fun l r -> Equal (l, r))
+        ~features:Feature_set.empty left right
 
 let distinct ~span left right =
-  binary_same ~span ~result:Bool ~node:(fun l r -> Distinct (l, r))
-    ~features:Feature_set.empty left right
+  match (left.term_sort, right.term_sort) with
+  | Bv _, Bv _ -> bv_distinct ~span left right
+  | _ ->
+      binary_same ~span ~result:Bool ~node:(fun l r -> Distinct (l, r))
+        ~features:Feature_set.empty left right
 
 let not_ ~span value =
   match expect_sort Bool value with
@@ -859,6 +1089,7 @@ let user_quantifier builder ~universal ~binders ~body ~trigger ~qid ~skid
                [ Quantifiers; Explicit_patterns; Quantifier_ids ]
              else [ Quantifiers; Quantifier_ids ])
           |> Feature_set.union (merge_features terms)
+          |> Feature_set.union (binder_sort_features binders)
         in
         Ok
           {
@@ -990,6 +1221,7 @@ let forall builder ~binders ~body ~patterns ~qid ~skid ~span =
                     [ Quantifiers; Explicit_patterns; Quantifier_ids ]
                   |> Feature_set.union body.term_features
                   |> Feature_set.union (merge_features pattern_terms)
+                  |> Feature_set.union (binder_sort_features binders)
                 in
                 Ok
                   {
@@ -1006,17 +1238,60 @@ let forall builder ~binders ~body ~patterns ~qid ~skid ~span =
 let declaration_features = function
   | Sort_declaration _ -> Feature_set.singleton Named_sorts
   | Function_declaration function_ ->
-      let features = Feature_set.singleton Uninterpreted_functions in
-      if
-        List.exists
-          (function Named _ -> true | Int | Bool -> false)
-          (function_.function_range :: function_.function_domain)
-      then Feature_set.add Named_sorts features
-      else features
+      List.fold_left
+        (fun features sort ->
+          let features = Feature_set.union features (sort_features sort) in
+          match sort with
+          | Named _ -> Feature_set.add Named_sorts features
+          | Int | Bool | Bv _ -> features)
+        (Feature_set.singleton Uninterpreted_functions)
+        (function_.function_range :: function_.function_domain)
 
-let query builder ~axioms ~assertions ~requires ~span =
+let project_bv builder ~identity term ~span =
+  match validate_name ~kind:"BV projection" ~span identity with
+  | Error _ as error -> error
+  | Ok () -> (
+      match expect_bv term with
+      | Error _ as error -> error
+      | Ok width -> (
+          match validate_sort ~span (Bv width) with
+          | Error _ as error -> error
+          | Ok () ->
+          if not (Int_set.is_empty term.free_binders) then
+            error span "BV projection %S contains an unbound binder" identity
+          else
+            match term.term_owner with
+            | Some owner when not (same_owner owner builder.owner) ->
+                error span "BV projection %S belongs to another logic signature"
+                  identity
+            | Some _ | None ->
+                Ok
+                  { bv_projection_owner = builder.owner;
+                    bv_projection_identity = identity;
+                    bv_projection_width = width;
+                    bv_projection_term = term;
+                    bv_projection_span = span }))
+
+let query ?(bv_projections = []) builder ~axioms ~assertions ~requires ~span =
   let declarations = List.rev builder.declarations_reversed in
   let datatypes = List.rev builder.datatypes_reversed in
+  let projection_identities =
+    List.map (fun projection -> projection.bv_projection_identity) bv_projections
+  in
+  match
+    List.find_opt
+      (fun projection ->
+        not (same_owner builder.owner projection.bv_projection_owner))
+      bv_projections
+  with
+  | Some projection ->
+      error projection.bv_projection_span
+        "query contains a BV projection from another logic signature"
+  | None when
+      List.length projection_identities
+      <> List.length (List.sort_uniq String.compare projection_identities) ->
+      error span "query contains duplicate BV projection identities"
+  | None ->
   match
     List.find_opt
       (fun axiom -> not (same_owner builder.owner axiom.axiom_owner))
@@ -1075,6 +1350,12 @@ let query builder ~axioms ~assertions ~requires ~span =
                           ids pattern)
                       ids axiom.axiom_patterns)
                   ids axioms
+                |> fun ids ->
+                List.fold_left
+                  (fun ids projection ->
+                    Int_set.union ids
+                      projection.bv_projection_term.used_functions)
+                  ids bv_projections
               in
               if not (Int_set.subset all_term_functions declaration_ids) then
                 error span "query references a function absent from its declaration order"
@@ -1100,6 +1381,15 @@ let query builder ~axioms ~assertions ~requires ~span =
                     (fun features assertion ->
                       Feature_set.union features assertion.term_features)
                     features assertions
+                  |> fun features ->
+                  List.fold_left
+                    (fun features projection ->
+                      Feature_set.union features
+                        projection.bv_projection_term.term_features)
+                    features bv_projections
+                  |> fun features ->
+                  if bv_projections = [] then features
+                  else Feature_set.add Models features
                 in
                 Ok
                   {
@@ -1107,6 +1397,7 @@ let query builder ~axioms ~assertions ~requires ~span =
                     query_datatypes = datatypes;
                     query_axioms = axioms;
                     query_assertions = assertions;
+                    query_bv_projections = bv_projections;
                     query_requirements = Feature_set.elements features;
                     query_span = span;
                   }))
@@ -1125,6 +1416,8 @@ let feature_to_string = function
   | Models -> "models"
   | Nonlinear_integer_arithmetic -> "nonlinear-integer-arithmetic"
   | Algebraic_datatypes -> "algebraic-datatypes"
+  | Bit_vectors -> "bit-vectors"
+  | Int_bitvector_conversions -> "int-bitvector-conversions"
 
 let error_to_string error = error.message
 
@@ -1157,12 +1450,37 @@ module View = struct
     | Forall_term of user_quantifier
     | Exists_term of user_quantifier
     | Ite of term * term * term
+    | Bv_literal of Bv_value.t
+    | Bv_eq of term * term
+    | Bv_distinct of term * term
+    | Bv_add_mod of term * term
+    | Bv_sub_mod of term * term
+    | Bv_not of term
+    | Bv_and of term * term
+    | Bv_or of term * term
+    | Bv_xor of term * term
+    | Bv_ult of term * term
+    | Bv_ule of term * term
+    | Bv_ugt of term * term
+    | Bv_uge of term * term
+    | Bv_slt of term * term
+    | Bv_sle of term * term
+    | Bv_sgt of term * term
+    | Bv_sge of term * term
+    | Bv_to_int_unsigned of term
+    | Bv_to_int_signed of term
+    | Int_to_bv_mod of Bv_width.t * term
 
   let declarations query = query.query_declarations
   let datatypes query = query.query_datatypes
   let axioms query = query.query_axioms
   let assertions query = query.query_assertions
+  let bv_projections query = query.query_bv_projections
   let query_span query = query.query_span
+  let bv_projection_identity projection = projection.bv_projection_identity
+  let bv_projection_width projection = projection.bv_projection_width
+  let bv_projection_term projection = projection.bv_projection_term
+  let bv_projection_span projection = projection.bv_projection_span
   let named_sort_index sort = sort.named_sort_index
   let named_sort_name sort = sort.named_sort_name
   let named_sort_span sort = sort.named_sort_span

@@ -69,7 +69,7 @@ let supported_binding_pattern (pattern : Sst.pattern) =
   in
   supported pattern
 let rec supported_conditional_type = function
-  | Sst.Unit | Sst.Bool | Sst.Aggregate _ | Sst.Parameter _
+  | Sst.Unit | Sst.Bool | Sst.Bit_vector _ | Sst.Aggregate _ | Sst.Parameter _
   | Sst.Application _ ->
       true
   | Sst.Tuple components ->
@@ -108,7 +108,9 @@ let rec aggregate_type_ids = function
   | Sst.Tuple components ->
       List.concat_map (fun (_, typ) -> aggregate_type_ids typ) components
   | Sst.Application (_, arguments) -> List.concat_map aggregate_type_ids arguments
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Parameter _ -> []
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
+  | Sst.Parameter _ ->
+      []
 
 let representation_type_reachable type_definitions ~root ~target =
   let rec visit visited type_id =
@@ -204,7 +206,8 @@ let total_match type_definitions scrutinee cases =
             unguarded case
             && case.case_pattern.pattern_desc = Sst.Unit_pattern)
           cases
-    | Sst.Int | Sst.Mathematical_int | Sst.Tuple _ | Sst.Parameter _
+    | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
+    | Sst.Parameter _
     | Sst.Application _ ->
         false
 
@@ -282,9 +285,18 @@ let rec eligible_expression builder current_model (expression : Sst.expression) 
   let recurse = eligible_expression builder current_model in
   match expression.expression_desc with
   | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
-  | Sst.Variable _ ->
+  | Sst.Bv_literal _
+  | Sst.Variable _ | Sst.Logical_constant_reference _ ->
       Ok ()
   | Sst.Lift_runtime_int operand -> recurse operand
+  | Sst.Bv_int_to_bv_mod { input; _ }
+  | Sst.Bv_to_int_unsigned input
+  | Sst.Bv_to_int_signed input
+  | Sst.Bv_not input ->
+      recurse input
+  | Sst.Bv_binary (_, left, right) | Sst.Bv_compare (_, left, right) ->
+      let* () = recurse left in
+      recurse right
   | Sst.Optional_present payload | Sst.Optional_forward payload ->
       let* () = add_option_descriptor builder expression.typ in
       recurse payload
@@ -386,7 +398,8 @@ and match_profile builder current_model expression scrutinee cases =
     let* () =
       match scrutinee.Sst.typ with
       | Sst.Aggregate type_id -> add_aggregate_descriptor builder type_id
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+      | Sst.Bit_vector _ | Sst.Tuple _
       | Sst.Parameter _
       | Sst.Application _ ->
           Ok ()
@@ -603,6 +616,15 @@ module For_testing = struct
     | Sst.Lift_runtime_int _ -> "lift-runtime-int"
     | Sst.Bool_constant _ -> "bool"
     | Sst.Unit_constant -> "unit"
+    | Sst.Bv_literal _ -> "bv-literal"
+    | Sst.Bv_int_to_bv_mod _ -> "bv-int-to-mod"
+    | Sst.Bv_to_int_unsigned _ -> "bv-to-unsigned"
+    | Sst.Bv_to_int_signed _ -> "bv-to-signed"
+    | Sst.Bv_not _ -> "bv-not"
+    | Sst.Bv_binary (operation, _, _) ->
+        "bv-" ^ Bv_operation_private.binary_name operation
+    | Sst.Bv_compare (comparison, _, _) ->
+        "bv-" ^ Bv_operation_private.comparison_name comparison
     | Sst.Variable _ -> "variable"
     | Sst.Tuple_value _ -> "tuple"
     | Sst.Record_value _ -> "record"
@@ -627,6 +649,7 @@ module For_testing = struct
     | Sst.Exists _ -> "exists"
     | Sst.Direct_call _ -> "direct-call"
     | Sst.Symbolic_application _ -> "symbolic-application"
+    | Sst.Logical_constant_reference _ -> "logical-constant-reference"
     | Sst.Callback_call _ -> "callback-call"
     | Sst.Callback_requires _ -> "callback-requires"
     | Sst.Callback_ensures _ -> "callback-ensures"

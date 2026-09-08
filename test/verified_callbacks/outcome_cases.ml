@@ -174,6 +174,326 @@ let parity_case ~name ~module_name ~fixture functions =
   in
   Suite.case ~name ~expectation (parity_runner module_name fixture)
 
+let bound_bv_width ?(physical_width = 32) text =
+  let profile_capability = Build_target_profile_private.capability () in
+  let profile =
+    Build_target_profile_private.authenticate_profile profile_capability
+    |> Result.get_ok
+  and targets =
+    Build_target_profile_private.authenticate_instances profile_capability
+    |> Result.get_ok
+  in
+  let target =
+    List.find
+      (fun target ->
+        target.Build_target_profile_private.target_claim.width = physical_width)
+      targets
+  in
+  let capability = Bv_backend_capability_receipt_private.capability () in
+  Result.bind (Bv_width.of_string ~profile capability text)
+    (Bv_width.for_instance capability target)
+  |> Result.get_ok
+
+let solve_detached_on_worker detached =
+  let result = Portable.Atomic_array.create ~len:1 None in
+  let scheduler =
+    Parallel_scheduler.create ~max_domains:(min 2 (Multicore.max_domains ())) ()
+  in
+  Fun.protect
+    ~finally:(fun () -> Parallel_scheduler.stop scheduler)
+    (fun () ->
+      Parallel_scheduler.parallel scheduler ~f:(fun parallel ->
+          Parallel_kernel.for_ parallel ~start:0 ~stop:1 ~f:(fun _ _ ->
+              Portable.Atomic_array.set result 0
+                (Some
+                   (Function_vc_worker_private.run
+                      { source_ordinal = 0;
+                        vcs =
+                          [ { canonical_index = 0;
+                              timeout_ms = 10_000;
+                              rlimit = Solver_policy_private.default_rlimit;
+                              route =
+                                Function_vc_worker_private.Ordinary detached } ]
+                      }))));
+      match Portable.Atomic_array.get result 0 with
+      | Some result -> result
+      | None -> failwith "callback BV worker did not return a result")
+
+let authenticated_bv_callback_shape_case =
+  Suite.case ~name:"authenticated-polymorphic-callback-instantiates-bv-schema"
+    ~expectation:
+      (verified_expectation "Polymorphic_bv_callback_shape" [ "apply" ])
+    (fun ~environment ~workspace ->
+      let* source =
+        Fixture.run ~environment ~workspace
+          (input "Polymorphic_bv_callback_shape" "polymorphic_apply.ml")
+      in
+      let root = Filename.concat workspace "project" in
+      let* cmt = discover_cmt root "Polymorphic_bv_callback_shape" in
+      let* implementation = load_implementation cmt in
+      let* program =
+        Typedtree_lowering.lower implementation
+        |> Result.map_error (fun diagnostic ->
+               Failure.make Failure.Expectation_mismatch
+                 diagnostic.Diagnostic.message)
+      in
+      let session = ref () in
+      let* () =
+        Sst_callback_private.authenticate_implementation ~implementation
+          ~session program
+        |> Result.map_error (fun message ->
+               Failure.make Failure.Expectation_mismatch message)
+      in
+      let apply =
+        List.find
+          (fun definition ->
+            String.equal definition.Sst.function_id.function_name "apply")
+          program.Sst.functions
+      in
+      let callback =
+        List.find_map
+          (function
+            | Sst.Callback_parameter formal -> Some formal.binding
+            | Sst.Value_parameter _ -> None)
+          apply.parameters
+        |> Option.get
+      in
+      let binder = List.hd apply.type_binders in
+      let width = bound_bv_width "8"
+      and width16 = bound_bv_width "16"
+      and other_target = bound_bv_width ~physical_width:64 "8" in
+      let profile =
+        Build_target_profile_private.authenticate_profile
+          (Build_target_profile_private.capability ())
+        |> Result.get_ok
+      in
+      let unbound =
+        Bv_width.of_string ~profile
+          (Bv_backend_capability_receipt_private.capability ()) "8"
+        |> Result.get_ok
+      in
+      let instantiate width =
+        Callback_shape_private.instantiate
+          [ (binder, Parametric_type.Bit_vector width) ]
+          callback.callback_shape
+      in
+      let valid = instantiate width in
+      let saturated shape arguments result =
+        Callback_shape_private.validate_saturated shape ~labels:[ None ]
+          ~arguments ~result
+      in
+      let container =
+        Parametric_type.
+          { constructor_path = "Internal.callback_container";
+            constructor_identity = "callback-container-v1" }
+      in
+      let nested width =
+        Parametric_type.application container [ Parametric_type.Bit_vector width ]
+        |> Result.get_ok
+      in
+      let nested_valid = nested width in
+      let nested_shape =
+        Callback_shape_private.instantiate [ (binder, nested_valid) ]
+          callback.callback_shape
+      in
+      let* () =
+        saturated valid [ Parametric_type.Bit_vector width ]
+          (Parametric_type.Bit_vector width)
+        |> Result.map_error (fun message ->
+               Failure.make Failure.Expectation_mismatch message)
+      in
+      let* () =
+        saturated nested_shape [ nested_valid ] nested_valid
+        |> Result.map_error (fun message ->
+               Failure.make Failure.Expectation_mismatch message)
+      in
+      let* () =
+        let nested_unbound = nested unbound in
+        let nested_unbound_rejected =
+          Result.is_error
+            (saturated
+               (Callback_shape_private.instantiate
+                  [ (binder, nested_unbound) ] callback.callback_shape)
+               [ nested_unbound ] nested_unbound)
+        in
+        if
+          Result.is_error
+            (saturated valid [ Parametric_type.Bit_vector width16 ]
+               (Parametric_type.Bit_vector width))
+          && Result.is_error
+               (saturated valid [ Parametric_type.Bit_vector width ]
+                  (Parametric_type.Bit_vector other_target))
+          && Result.is_error
+               (saturated (instantiate unbound)
+                  [ Parametric_type.Bit_vector unbound ]
+                  (Parametric_type.Bit_vector unbound))
+          && nested_unbound_rejected
+        then Ok ()
+        else mismatch "callback BV schema accepted an inexact or unbound width"
+      in
+      let* () =
+        match
+          ( Callback_certificate_private.authenticate_shape
+              callback.callback_certificate callback.callback_shape,
+            Callback_certificate_private.authenticate_shape
+              callback.callback_certificate valid )
+        with
+        | Ok (), Error _ -> Ok ()
+        | _ ->
+            mismatch
+              "structural BV callback instantiation changed runtime authority"
+      in
+      let span = Diagnostic.file_span "polymorphic-bv-callback-vector.ml" in
+      let symbol id name width role =
+        Vir.
+          { symbol_id = id;
+            source_name = name;
+            sort = Bit_vector width;
+            role;
+            span }
+      in
+      let x_symbol = symbol 880 "callback_bv_argument" width Vir.Local
+      and result_symbol = symbol 881 "callback_bv_result" width Vir.Result in
+      let x = Vir.bv_symbol x_symbol |> Result.get_ok
+      and callback_result_term =
+        Vir.bv_symbol result_symbol |> Result.get_ok
+      in
+      let zero width =
+        Bv_value.of_z ~width Z.zero |> Result.get_ok |> Vir.bv_literal
+      in
+      let plus_zero term width =
+        Vir.bv_binary Bv_operation_private.Bv_add_mod term (zero width)
+        |> Result.get_ok
+      in
+      let relation_argument term =
+        Call_contract_execution_private.relation_argument
+          (Logical_spec_evaluation_private.Bit_vector_value term)
+        |> Result.get_ok
+      in
+      let x_plus_zero = plus_zero x width
+      and result_plus_zero = plus_zero callback_result_term width in
+      let argument = relation_argument x
+      and equivalent_argument = relation_argument x_plus_zero
+      and result_argument = relation_argument callback_result_term
+      and equivalent_result = relation_argument result_plus_zero in
+      let* () =
+        match
+          Call_contract_execution_private.callback_result
+            (Logical_spec_evaluation_private.Bit_vector_value
+               callback_result_term)
+        with
+        | Ok (Vir.Bv_result result)
+          when result.symbol_id = result_symbol.symbol_id
+               && Bv_width.equal width
+                    (match result.sort with
+                    | Vir.Bit_vector width -> width
+                    | Integer | Boolean | Aggregate _ | Parametric _ ->
+                        assert false) ->
+            Ok ()
+        | Ok _ | Error _ -> mismatch "callback BV result lost its exact symbol"
+      in
+      let requires argument =
+        Call_contract_execution_private.requires callback [ argument ] span
+      and ensures argument result =
+        Call_contract_execution_private.ensures callback [ argument ] result span
+      in
+      let congruence =
+        Vir.Boolean_and
+          ( Vir.Boolean_equal
+              (requires argument, requires equivalent_argument),
+            Vir.Boolean_equal
+              ( ensures argument result_argument,
+                ensures equivalent_argument equivalent_result ) )
+      in
+      let obligation goal =
+        Vir.
+          { obligation_index = 0;
+            function_ref =
+              { function_index = 880;
+                function_name = "callback_bv_contract_vector" };
+            kind = Assertion { assertion_ordinal = 0 };
+            span;
+            assumptions = [];
+            required_preceding_safety = [];
+            path_condition = [];
+            goal;
+            projection_symbols = [];
+            logical_constant_instances = [];
+            logical_constant_equations = [] }
+      in
+      let require_direct label ~counterexample goal =
+        match
+          Z3_bridge.solve_vir ~requires:[]
+            { timeout_ms = 10_000; model = false }
+            (obligation goal)
+        with
+        | Ok (Z3_bridge.Counterexample _) when counterexample -> ()
+        | Ok Z3_bridge.Verified when not counterexample -> ()
+        | Ok _ -> failwith (label ^ " had the wrong direct outcome")
+        | Error error ->
+            failwith (label ^ ": " ^ Z3_bridge.error_to_string error)
+      in
+      let require_worker label ~counterexample goal =
+        let detached, projections =
+          Z3_bridge.detach_vir ~requires:[] (obligation goal)
+          |> Result.get_ok
+        in
+        if projections <> [] then
+          failwith (label ^ " unexpectedly projected a model");
+        match solve_detached_on_worker detached with
+        | { worker_exception = None;
+            vc_results =
+              [ { result_outcome = Ok (Z3_bridge.Detached_counterexample []);
+                  _ } ];
+            _ }
+          when counterexample ->
+            ()
+        | { worker_exception = None;
+            vc_results =
+              [ { result_outcome = Ok Z3_bridge.Detached_verified; _ } ];
+            _ }
+          when not counterexample ->
+            ()
+        | _ -> failwith (label ^ " had the wrong worker outcome")
+      in
+      require_direct "callback BV relation congruence" ~counterexample:false
+        congruence;
+      require_worker "callback BV relation congruence" ~counterexample:false
+        congruence;
+      let unconstrained = requires argument in
+      require_direct "unconstrained callback BV relation" ~counterexample:true
+        unconstrained;
+      require_worker "unconstrained callback BV relation" ~counterexample:true
+        unconstrained;
+      let incompatible width =
+        let term = zero width in
+        relation_argument term
+      in
+      let incompatible_goals =
+        [ Vir.Boolean_equal
+            (requires argument, requires (incompatible width16));
+          Vir.Boolean_equal
+            ( ensures argument result_argument,
+              ensures argument (incompatible other_target) ) ]
+      in
+      let before = (Z3_bridge.counters ()).contexts_created in
+      List.iter
+        (fun goal ->
+          (match
+             Z3_bridge.solve_vir ~requires:[]
+               { timeout_ms = 10_000; model = false }
+               (obligation goal)
+           with
+          | Error _ -> ()
+          | Ok _ -> failwith "incompatible callback BV vector translated");
+          match Z3_bridge.detach_vir ~requires:[] (obligation goal) with
+          | Error _ -> ()
+          | Ok _ -> failwith "incompatible detached callback BV vector translated")
+        incompatible_goals;
+      if (Z3_bridge.counters ()).contexts_created <> before then
+        failwith "incompatible callback BV vector created a solver context";
+      Ok source)
+
 let counterexample_case ~name ~module_name ~fixture ~function_name ~kind =
   Suite.case ~name
     ~expectation:
@@ -357,6 +677,7 @@ let () =
       verified_case ~name:"polymorphic-callbacks-verify"
         ~module_name:"Polymorphic_apply" ~fixture:"polymorphic_apply.ml"
         [ "apply"; "relay"; "identity"; "negate"; "use_int"; "use_bool" ];
+      authenticated_bv_callback_shape_case;
       verified_case ~name:"relational-result-verifies"
         ~module_name:"Relational_result" ~fixture:"relational_result.ml"
         [ "choose"; "apply"; "client" ];

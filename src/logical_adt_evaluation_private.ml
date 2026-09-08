@@ -2,6 +2,7 @@ type value = Spec_function_logic_private.value =
   | Unit_value
   | Integer_value of Vir.integer_term
   | Boolean_value of Vir.boolean_term
+  | Bit_vector_value of Vir.bit_vector_term
   | Tuple_value of value list
   | Aggregate_value of Vir.aggregate_term
   | Parametric_value of Vir.parametric_term
@@ -47,7 +48,8 @@ let vir_aggregate_type_of_sst descriptors = function
                 ^ String.concat "," (List.map Parametric_type.to_string arguments)
                 ^ ">";
               aggregate_type_arguments = arguments })
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
+  | Sst.Tuple _
   | Sst.Parameter _ ->
       None
 
@@ -97,7 +99,8 @@ let rec requires_parametric_selection = function
       List.exists
         (fun (_, component) -> requires_parametric_selection component)
         components
-  | Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Aggregate _ ->
+  | Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Bit_vector _
+  | Sst.Aggregate _ ->
       false
 
 let rec selected_value_without_state aggregate make_selector path = function
@@ -108,6 +111,11 @@ let rec selected_value_without_state aggregate make_selector path = function
   | Sst.Bool ->
       Boolean_value
         (Vir.Boolean_selector (make_selector path Vir.Boolean, aggregate))
+  | Sst.Bit_vector width ->
+      Bit_vector_value
+        (Result.get_ok
+           (Vir.bv_selector
+              (make_selector path (Vir.Bit_vector width)) aggregate))
   | Sst.Aggregate type_id ->
       let aggregate_type = vir_aggregate_type type_id in
       Aggregate_value
@@ -136,6 +144,11 @@ let rec selected_parametric_value_without_state ~aggregate_type aggregate
   | Sst.Bool ->
       Boolean_value
         (Vir.Boolean_selector (make_selector path Vir.Boolean, aggregate))
+  | Sst.Bit_vector width ->
+      Bit_vector_value
+        (Result.get_ok
+           (Vir.bv_selector
+              (make_selector path (Vir.Bit_vector width)) aggregate))
   | Sst.Parameter binder ->
       let parameter = Sst.Parameter binder in
       let actual =
@@ -189,9 +202,9 @@ let rec ranges_of_value typ value =
         (fun (_, typ) value -> ranges_of_value typ value)
         components values
       |> List.concat
-  | ( Sst.Unit | Sst.Bool | Sst.Aggregate _ | Sst.Parameter _
+  | ( Sst.Unit | Sst.Bool | Sst.Bit_vector _ | Sst.Aggregate _ | Sst.Parameter _
     | Sst.Application _ ),
-    ( Unit_value | Boolean_value _ | Aggregate_value _ | Parametric_value _
+    ( Unit_value | Boolean_value _ | Bit_vector_value _ | Aggregate_value _ | Parametric_value _
     | Function_value _ ) ->
       []
   | _, _ -> []
@@ -199,6 +212,7 @@ let rec ranges_of_value typ value =
 let value_of_recursive_argument = function
   | Vir.Recursive_integer_argument term -> Integer_value term
   | Vir.Recursive_boolean_argument term -> Boolean_value term
+  | Vir.Recursive_bv_argument term -> Bit_vector_value term
   | Vir.Recursive_aggregate_argument term -> Aggregate_value term
   | Vir.Recursive_parametric_argument term -> Parametric_value term
 
@@ -233,6 +247,8 @@ let rec equality left right =
       Some (Vir.Integer_compare (Vir.Equal, left, right))
   | Boolean_value left, Boolean_value right ->
       Some (Vir.Boolean_equal (left, right))
+  | Bit_vector_value left, Bit_vector_value right ->
+      Vir.bv_equal left right |> Result.to_option
   | Unit_value, Unit_value -> Some (Vir.Boolean_constant true)
   | Aggregate_value left, Aggregate_value right
     when left.aggregate_type = right.aggregate_type ->
@@ -290,6 +306,12 @@ and aggregate_application_equality left right =
           | Boolean_value _ ->
               Boolean_value
                 (Vir.Boolean_selector (selector Vir.Boolean, aggregate))
+          | Bit_vector_value term ->
+              Bit_vector_value
+                (Result.get_ok
+                   (Vir.bv_selector
+                      (selector (Vir.Bit_vector term.bit_vector_width))
+                      aggregate))
           | Aggregate_value selected ->
               Aggregate_value
                 { Vir.aggregate_type = selected.aggregate_type;
@@ -328,6 +350,12 @@ and aggregate_application_equality left right =
             | Boolean_value _ ->
                 Boolean_value
                   (Vir.Boolean_selector (selector Vir.Boolean, aggregate))
+            | Bit_vector_value term ->
+                Bit_vector_value
+                  (Result.get_ok
+                     (Vir.bv_selector
+                        (selector (Vir.Bit_vector term.bit_vector_width))
+                        aggregate))
             | Aggregate_value value ->
                 Aggregate_value
                   { Vir.aggregate_type = value.aggregate_type;
@@ -408,6 +436,7 @@ let scalar_variant_equality descriptors typ (left : Vir.aggregate_term)
               match kind with
               | Parametric_adt.Scalar_bool -> Vir.Boolean
               | Scalar_int -> Vir.Integer
+              | Scalar_bv width -> Vir.Bit_vector width
             in
             let selector aggregate =
               { (argument_selector constructor_id field.Parametric_adt.field_index
@@ -424,6 +453,19 @@ let scalar_variant_equality descriptors typ (left : Vir.aggregate_term)
                   ( Vir.Equal,
                     Vir.Integer_selector (selector left, left),
                     Vir.Integer_selector (selector right, right) )
+            | Scalar_bv width ->
+                Result.get_ok
+                  (Vir.bv_equal
+                     (Result.get_ok
+                        (Vir.bv_selector
+                           { (selector left) with
+                             selector_range = Vir.Bit_vector width }
+                           left))
+                     (Result.get_ok
+                        (Vir.bv_selector
+                           { (selector right) with
+                             selector_range = Vir.Bit_vector width }
+                           right)))
           in
           Vir.Boolean_or
             ( Vir.Boolean_not (tag left constructor.constructor_index),
@@ -432,7 +474,8 @@ let scalar_variant_equality descriptors typ (left : Vir.aggregate_term)
         Some (conjunction (tag_equality :: List.map constructor_law layout)))
     | None, _
     | Some _,
-      (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
+      | Sst.Tuple _
       | Sst.Aggregate _
       | Sst.Parameter _) ->
         None
@@ -441,7 +484,9 @@ let written_constructor (expression : Sst.expression) =
   match expression.expression_desc with
   | Sst.Constructor_value { constructor; _ } -> Some constructor
   | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
-  | Sst.Lift_runtime_int _
+  | Sst.Lift_runtime_int _ | Sst.Bv_literal _ | Sst.Bv_int_to_bv_mod _
+  | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+  | Sst.Bv_binary _ | Sst.Bv_compare _
   | Sst.Optional_absent | Sst.Optional_present _ | Sst.Optional_forward _
   | Sst.Variable _ | Sst.Tuple_value _ | Sst.Record_value _ | Sst.Field_read _
   | Sst.Field_write _ | Sst.Shared_scalar_field_write _
@@ -452,7 +497,8 @@ let written_constructor (expression : Sst.expression) =
   | Sst.Compare _ | Sst.Boolean_binary _ | Sst.Boolean_not _ | Sst.Old _
   | Sst.Local_assert _ | Sst.Proof_region _ | Sst.Reveal _
   | Sst.Reveal_with_fuel _ | Sst.Use_type_invariant _ | Sst.Forall _
-  | Sst.Exists _ | Sst.Symbolic_application _ ->
+  | Sst.Exists _ | Sst.Symbolic_application _
+  | Sst.Logical_constant_reference _ ->
       None
 
 let rec boolean_base polarity = function
@@ -465,6 +511,7 @@ let boolean_relation assumption =
     | Vir.Boolean_not term -> relation (not equal) term
     | Vir.Boolean_equal (left, right) -> Some (left, right, equal)
     | Vir.Boolean_not_equal (left, right) -> Some (left, right, not equal)
+    | Vir.Bv_equal _ | Vir.Bv_not_equal _ | Vir.Bv_compare _ -> None
     | Vir.Boolean_constant _ | Vir.Boolean_symbol _ | Vir.Boolean_and _
     | Vir.Boolean_or _ | Vir.Integer_compare _ | Vir.Boolean_selector _
     | Vir.Parametric_equal _ | Vir.Aggregate_equal _
@@ -516,6 +563,7 @@ let boolean_fact_evidence assumptions relations candidate =
         | Vir.Forall_term _ | Vir.Exists_term _ | Vir.Boolean_symbol _
         | Vir.Boolean_not _ | Vir.Boolean_and _ | Vir.Boolean_or _
         | Vir.Integer_compare _ | Vir.Boolean_equal _ | Vir.Boolean_not_equal _
+        | Vir.Bv_equal _ | Vir.Bv_not_equal _ | Vir.Bv_compare _
         | Vir.Boolean_selector _ | Vir.Parametric_equal _ | Vir.Aggregate_equal _
         | Vir.Boolean_invariant_application _ | Vir.Logical_adt_schema _
         | Vir.Boolean_recursive_spec_application _
@@ -633,7 +681,8 @@ let constructors_of_field type_definitions owner field =
   | Some
       {
         field_type =
-          (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+          (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+          | Sst.Bit_vector _ | Sst.Tuple _
           | Sst.Parameter _ | Sst.Application _);
         _;
       }
@@ -732,6 +781,7 @@ let owned_aggregate_at_path type_definitions assumptions root steps =
               {
                 field_type =
                   (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                  | Sst.Bit_vector _
                   | Sst.Tuple _ | Sst.Parameter _ | Sst.Application _);
                 _;
               }
@@ -792,7 +842,8 @@ let rec owned_scalar_integer_is_flat = function
       && owned_scalar_aggregate_root_is_flat root
   | Vir.Integer_rank_project _ | Vir.Aggregate_tag _ | Vir.Integer_conditional _
   | Vir.Integer_symbolic_application _
-  | Vir.Integer_recursive_spec_application _ ->
+  | Vir.Integer_recursive_spec_application _
+  | Vir.Integer_bv_to_int_unsigned _ | Vir.Integer_bv_to_int_signed _ ->
       false
 
 and owned_scalar_boolean_is_flat = function
@@ -807,6 +858,7 @@ and owned_scalar_boolean_is_flat = function
       owned_scalar_boolean_is_flat left && owned_scalar_boolean_is_flat right
   | Vir.Integer_compare (_, left, right) ->
       owned_scalar_integer_is_flat left && owned_scalar_integer_is_flat right
+  | Vir.Bv_equal _ | Vir.Bv_not_equal _ | Vir.Bv_compare _ -> false
   | Vir.Boolean_selector (selector, root) ->
       String.equal selector.selector_namespace "verocaml_owned_root_scalar_v1"
       && owned_scalar_aggregate_root_is_flat root

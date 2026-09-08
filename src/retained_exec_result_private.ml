@@ -108,7 +108,7 @@ let schema_for_application parametric_adts = function
                 schemas
           | Error _ -> None)
       | Some _ | None -> None)
-  | Sst.Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _
+  | Sst.Unit | Bool | Int | Mathematical_int | Bit_vector _ | Tuple _ | Aggregate _
   | Parameter _ ->
       None
 
@@ -165,7 +165,7 @@ let schema_supported ~types ~parametric_adts ~logical_required ~boundary typ =
   in
   let contains_mathematical_int = ref false in
   let rec visit aggregate_visiting application_visiting boundary = function
-    | Sst.Unit | Bool | Int | Parameter _ -> true
+    | Sst.Unit | Bool | Int | Bit_vector _ | Parameter _ -> true
     | Mathematical_int ->
         contains_mathematical_int := true;
         let permitted = boundary = Ghost_summary in
@@ -302,7 +302,7 @@ let aggregate_bearing typ =
   let rec contains = function
     | Sst.Aggregate _ | Application _ -> true
     | Tuple components -> List.exists (fun (_, typ) -> contains typ) components
-    | Unit | Bool | Int | Mathematical_int | Parameter _ -> false
+    | Unit | Bool | Int | Mathematical_int | Bit_vector _ | Parameter _ -> false
   in
   contains typ
 
@@ -316,7 +316,7 @@ let model_result_identity parametric_adts = function
               (Logical_adt_schema_private.descriptor schema);
             Logical_adt_schema_private.application_id schema ])
         (schema_for_application parametric_adts application)
-  | Sst.Unit | Bool | Int | Mathematical_int | Tuple _ | Parameter _ -> None
+  | Sst.Unit | Bool | Int | Mathematical_int | Bit_vector _ | Tuple _ | Parameter _ -> None
 
 let classify ~provider:(provider [@delator.skip])
     ~types:(types [@delator.skip])

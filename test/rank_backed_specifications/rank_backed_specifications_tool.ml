@@ -260,7 +260,7 @@ let rec observe_sst_expression observation (expression : Sst.expression) =
   match expression.expression_desc with
   | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
   | Sst.Optional_absent | Sst.Variable _ | Sst.Mutable_read _
-  | Sst.Owned_tree_rebase _ ->
+  | Sst.Owned_tree_rebase _ | Sst.Logical_constant_reference _ ->
       ()
   | Sst.Tuple_value fields ->
       List.iter (fun (_, field) -> observe field) fields

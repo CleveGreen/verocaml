@@ -5,11 +5,13 @@ type completion = {
   validated : Sst_validation.validated_program;
   program_snapshot : string;
   provider_completion : Verified_provider_completion_private.t;
+  proof_evidence : Verification_proof_evidence_private.t option;
   session_destroyed : bool;
 }
 
 type report = {
   status : Verification_pipeline.status;
+  original_obligations : Numeric_original_obligation_private.t list;
   semantic_sst : string Lazy.t;
   vir : Vir.program;
   functions : int;
@@ -17,6 +19,7 @@ type report = {
   results : Solver_backend.obligation_result list;
   counters : Verification_session.counters;
   validated : Sst_validation.validated_program;
+  prior_law_evidence : Numeric_prior_law_closure_private.coordinator option;
   completion : completion option;
 }
 
@@ -24,6 +27,7 @@ type error =
   | Frontend_error of Diagnostic.t
   | Validation_error of Sst_validation.error
   | Invariant_error of Type_invariant.error
+  | Provider_surface_error of string
   | Pipeline_error of Verification_pipeline.error
   | Internal_error of string
 
@@ -76,9 +80,16 @@ let uses_external_target_specification (vir : Vir.program) =
         execution.trusted_summary_uses)
     vir.functions
 
+let prepare_numeric_bv_source ~imports ~implementation ~validated = function
+  | None -> Ok None
+  | Some request ->
+      Numeric_bv_source_admission_private.create ~implementation ~validated
+        ~registration:imports request
+
 let run_with_policy ~solver_policy ~allow_imported_opens
-    ?(allow_public_parametric_signatures = false) ?external_specifications ?imported
-    implementation =
+    ?(allow_public_parametric_signatures = false) ?(capture_numeric_obligations = false)
+    ?numeric_native ?validate_provider_surface
+    ?external_specifications ?imported implementation =
   incr driver_entries;
   let lowered =
     match imported with
@@ -123,9 +134,26 @@ let run_with_policy ~solver_policy ~allow_imported_opens
       match validation with
       | Error error -> Error (Validation_error error)
       | Ok validated -> (
+          match
+            Option.fold ~none:(Ok ())
+              ~some:(fun validate -> validate validated)
+              validate_provider_surface
+          with
+          | Error message -> Error (Provider_surface_error message)
+          | Ok () -> (
           match Type_invariant.authenticate validated with
           | Error error -> Error (Invariant_error error)
-          | Ok invariants ->
+          | Ok invariants -> (
+              match
+                prepare_numeric_bv_source ~imports ~implementation ~validated
+                  numeric_native
+              with
+              | Error message -> Error (Provider_surface_error message)
+              | Ok numeric_bv_source ->
+              let prior_law_evidence =
+                Numeric_prior_law_closure_private.For_pipeline.create
+                  ~implementation ~program ~validated
+              in
               let semantic_sst =
                 lazy (render_semantic_sst program validated)
               in
@@ -150,6 +178,7 @@ let run_with_policy ~solver_policy ~allow_imported_opens
                           (Verification_solver_private.termination_obligations
                              prepared))
               in
+              let original_obligations = ref [] in
               let configure_solver () =
                 match !preflight with
                 | None ->
@@ -159,6 +188,13 @@ let run_with_policy ~solver_policy ~allow_imported_opens
                 | Some preflight ->
                     Verification_solver_private.configure ~solver_policy
                       preflight
+                    |> Result.map (fun solve (request : Verification_pipeline.solve_request) ->
+                      if capture_numeric_obligations then begin
+                        let captured = Numeric_original_obligation_private.For_pipeline.capture
+                          ~implementation ~imported ~program ~definition:request.definition request.execution in
+                        original_obligations := List.rev_append captured !original_obligations
+                      end;
+                      solve request)
               in
               let proof_entry_activations () =
                 match !preflight with
@@ -168,13 +204,26 @@ let run_with_policy ~solver_policy ~allow_imported_opens
                       preflight
               in
               let results = ref [] in
-              match
-                Verification_pipeline.run_validated ~imports ~implementation
+              let pipeline_result =
+                Verification_pipeline.run_validated ~imports ~numeric_bv_source
+                  ~implementation
                   ~program ~validated ~invariants ~preflight:run_preflight
                   ~proof_entry_activations
                   ~configure_solver
+                  ~on_function_commit:
+                    (fun definition execution results ->
+                      Numeric_prior_law_closure_private.For_pipeline.observe
+                        prior_law_evidence ~definition ~execution results;
+                      Option.iter
+                        (fun source ->
+                          Numeric_bv_source_admission_private.observe_prior_law
+                            source prior_law_evidence ~definition)
+                        numeric_bv_source)
                   ~on_result:(fun result -> results := result :: !results)
-              with
+              in
+              Numeric_prior_law_closure_private.For_pipeline.close
+                prior_law_evidence;
+              match pipeline_result with
               | Error message -> Error (Internal_error message)
               | Ok pipeline -> (
                   match pipeline.outcome with
@@ -189,6 +238,7 @@ let run_with_policy ~solver_policy ~allow_imported_opens
                               Ok
                                 {
                                   status = Verification_pipeline.Inconclusive;
+                                  original_obligations = List.rev !original_obligations;
                                   semantic_sst;
                                   vir =
                                     {
@@ -203,6 +253,7 @@ let run_with_policy ~solver_policy ~allow_imported_opens
                                   results = [ result ];
                                   counters = pipeline.counters;
                                   validated;
+                                  prior_law_evidence = Some prior_law_evidence;
                                   completion = None;
                                 }
                           | None -> Error (driver_error_of_pipeline_error error))
@@ -219,6 +270,7 @@ let run_with_policy ~solver_policy ~allow_imported_opens
                                 implementation;
                                 validated;
                                 program_snapshot = Sst.to_string program;
+                                proof_evidence = pipeline.proof_evidence;
                                 provider_completion =
                                   Verified_provider_completion_private.For_driver.issue
                                     ~implementation ~program;
@@ -231,6 +283,7 @@ let run_with_policy ~solver_policy ~allow_imported_opens
                       Ok
                         {
                           status = outcome.status;
+                          original_obligations = List.rev !original_obligations;
                           semantic_sst;
                           vir = outcome.vir;
                           functions = outcome.functions;
@@ -238,8 +291,9 @@ let run_with_policy ~solver_policy ~allow_imported_opens
                           results = List.rev !results;
                           counters = pipeline.counters;
                           validated;
+                          prior_law_evidence = Some prior_law_evidence;
                           completion;
-                        }))
+                        }))))
       in
       (match authority with
       | `Public _ -> execute ()
@@ -256,7 +310,8 @@ let run_with_policy ~solver_policy ~allow_imported_opens
 
 
 let run_with_policy_threaded ~threads ~solver_policy ~allow_imported_opens
-    ?(allow_public_parametric_signatures = false) ?external_specifications ?imported
+    ?(allow_public_parametric_signatures = false) ?(capture_numeric_obligations = false)
+    ?numeric_native ?external_specifications ?imported
     implementation =
   incr driver_entries;
   let lowered =
@@ -304,7 +359,17 @@ let run_with_policy_threaded ~threads ~solver_policy ~allow_imported_opens
       | Ok validated -> (
           match Type_invariant.authenticate validated with
           | Error error -> Error (Invariant_error error)
-          | Ok invariants ->
+          | Ok invariants -> (
+              match
+                prepare_numeric_bv_source ~imports ~implementation ~validated
+                  numeric_native
+              with
+              | Error message -> Error (Provider_surface_error message)
+              | Ok numeric_bv_source ->
+              let prior_law_evidence =
+                Numeric_prior_law_closure_private.For_pipeline.create
+                  ~implementation ~program ~validated
+              in
               let semantic_sst =
                 lazy (render_semantic_sst program validated)
               in
@@ -329,6 +394,7 @@ let run_with_policy_threaded ~threads ~solver_policy ~allow_imported_opens
                           (Verification_solver_private.termination_obligations
                              prepared))
               in
+              let original_obligations = ref [] in
               let configure_solver () =
                 match !preflight with
                 | None ->
@@ -342,8 +408,13 @@ let run_with_policy_threaded ~threads ~solver_policy ~allow_imported_opens
                            Verification_pipeline.Threaded_solve
                              {
                                prepare =
-                                 Verification_solver_private.prepare_function
-                                   threaded;
+                                 (fun ~source_ordinal (request : Verification_pipeline.solve_request) ->
+                                   if capture_numeric_obligations then begin
+                                     let captured = Numeric_original_obligation_private.For_pipeline.capture
+                                       ~implementation ~imported ~program ~definition:request.definition request.execution in
+                                     original_obligations := List.rev_append captured !original_obligations
+                                   end;
+                                   Verification_solver_private.prepare_function threaded ~source_ordinal request);
                                worker_request =
                                  Verification_solver_private.worker_request;
                                commit =
@@ -358,14 +429,27 @@ let run_with_policy_threaded ~threads ~solver_policy ~allow_imported_opens
                       preflight
               in
               let results = ref [] in
-              match
+              let pipeline_result =
                 Verification_pipeline.run_validated_with_threads ~threads ~imports
+                  ~numeric_bv_source
                   ~implementation
                   ~program ~validated ~invariants ~preflight:run_preflight
                   ~proof_entry_activations
                   ~configure_solver
+                  ~on_function_commit:
+                    (fun definition execution results ->
+                      Numeric_prior_law_closure_private.For_pipeline.observe
+                        prior_law_evidence ~definition ~execution results;
+                      Option.iter
+                        (fun source ->
+                          Numeric_bv_source_admission_private.observe_prior_law
+                            source prior_law_evidence ~definition)
+                        numeric_bv_source)
                   ~on_result:(fun result -> results := result :: !results)
-              with
+              in
+              Numeric_prior_law_closure_private.For_pipeline.close
+                prior_law_evidence;
+              match pipeline_result with
               | Error message -> Error (Internal_error message)
               | Ok pipeline -> (
                   match pipeline.outcome with
@@ -380,6 +464,7 @@ let run_with_policy_threaded ~threads ~solver_policy ~allow_imported_opens
                               Ok
                                 {
                                   status = Verification_pipeline.Inconclusive;
+                                  original_obligations = List.rev !original_obligations;
                                   semantic_sst;
                                   vir =
                                     {
@@ -394,6 +479,7 @@ let run_with_policy_threaded ~threads ~solver_policy ~allow_imported_opens
                                   results = [ result ];
                                   counters = pipeline.counters;
                                   validated;
+                                  prior_law_evidence = Some prior_law_evidence;
                                   completion = None;
                                 }
                           | None -> Error (driver_error_of_pipeline_error error))
@@ -410,6 +496,7 @@ let run_with_policy_threaded ~threads ~solver_policy ~allow_imported_opens
                                 implementation;
                                 validated;
                                 program_snapshot = Sst.to_string program;
+                                proof_evidence = pipeline.proof_evidence;
                                 provider_completion =
                                   Verified_provider_completion_private.For_driver.issue
                                     ~implementation ~program;
@@ -422,6 +509,7 @@ let run_with_policy_threaded ~threads ~solver_policy ~allow_imported_opens
                       Ok
                         {
                           status = outcome.status;
+                          original_obligations = List.rev !original_obligations;
                           semantic_sst;
                           vir = outcome.vir;
                           functions = outcome.functions;
@@ -429,8 +517,9 @@ let run_with_policy_threaded ~threads ~solver_policy ~allow_imported_opens
                           results = List.rev !results;
                           counters = pipeline.counters;
                           validated;
+                          prior_law_evidence = Some prior_law_evidence;
                           completion;
-                        }))
+                        })))
       in
       (match authority with
       | `Public _ -> execute ()
@@ -447,17 +536,20 @@ let run_with_policy_threaded ~threads ~solver_policy ~allow_imported_opens
 
 
 let run_with_policy_and_threads ~threads ~solver_policy ~allow_imported_opens
-    ?(allow_public_parametric_signatures = false) ?external_specifications ?imported
+    ?(allow_public_parametric_signatures = false) ?(capture_numeric_obligations = false)
+    ?numeric_native ?external_specifications ?imported
     implementation =
   if threads = 1 then
     run_with_policy ~solver_policy ~allow_imported_opens
-      ~allow_public_parametric_signatures ?external_specifications ?imported implementation
+      ~allow_public_parametric_signatures ~capture_numeric_obligations
+      ?numeric_native ?external_specifications ?imported implementation
   else
     match Physical_core_count_private.validate_threads threads with
     | Error message -> Error (Internal_error message)
     | Ok () ->
         run_with_policy_threaded ~threads ~solver_policy ~allow_imported_opens
-          ~allow_public_parametric_signatures ?external_specifications ?imported
+          ~allow_public_parametric_signatures ~capture_numeric_obligations ?external_specifications ?imported
+          ?numeric_native
           implementation
 [@@delator.instrument] [@@delator.level debug]
 
@@ -514,6 +606,8 @@ let obligations report = report.obligations
 let results report = report.results
 let counters report = report.counters
 let validated report = report.validated
+let original_obligations report = report.original_obligations
+let prior_law_evidence report = report.prior_law_evidence
 
 let verified_completion report =
   match report.completion with
@@ -555,6 +649,16 @@ let provider_completion completion =
          ~program:(Sst_validation.program completion.validated)
   then Some completion.provider_completion
   else None
+
+let proof_evidence completion =
+  if not (completion_matches completion ~implementation:completion.implementation
+            ~validated:completion.validated)
+  then None
+  else
+    Option.bind completion.proof_evidence (fun evidence ->
+        if Verification_proof_evidence_private.matches_program evidence
+          (Sst_validation.program completion.validated)
+        then Some evidence else None)
 
 module For_testing = struct
   let reset_driver_entries () = driver_entries := 0

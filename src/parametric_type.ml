@@ -8,6 +8,7 @@ type t =
   | Bool
   | Int
   | Mathematical_int
+  | Bit_vector of Bv_width.t
   | Tuple of (string option * t) list
   | Aggregate of type_id
   | Parameter of binder
@@ -63,7 +64,7 @@ let spec_function_view = function
       Option.map
         (fun label -> (label, domain, range))
         (spec_function_label constructor)
-  | Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _ | Parameter _
+  | Unit | Bool | Int | Mathematical_int | Bit_vector _ | Tuple _ | Aggregate _ | Parameter _
   | Application _ ->
       None
 
@@ -96,10 +97,11 @@ let rec compare left right =
     | Bool -> 1
     | Int -> 2
     | Mathematical_int -> 3
-    | Tuple _ -> 4
-    | Aggregate _ -> 5
-    | Parameter _ -> 6
-    | Application _ -> 7
+    | Bit_vector _ -> 4
+    | Tuple _ -> 5
+    | Aggregate _ -> 6
+    | Parameter _ -> 7
+    | Application _ -> 8
   in
   let by_rank = Int.compare (rank left) (rank right) in
   if by_rank <> 0 then by_rank
@@ -108,6 +110,7 @@ let rec compare left right =
     | Unit, Unit | Bool, Bool | Int, Int
     | Mathematical_int, Mathematical_int ->
         0
+    | Bit_vector left, Bit_vector right -> Bv_width.compare left right
     | Tuple left, Tuple right ->
         List.compare
           (fun (left_label, left_type) (right_label, right_type) ->
@@ -148,7 +151,7 @@ let rec compiler_erasure_compatible ~compiler ~semantic =
         (fun compiler semantic ->
           compiler_erasure_compatible ~compiler ~semantic)
         compiler_arguments semantic_arguments
-  | ( ( Unit | Bool | Mathematical_int | Aggregate _ | Parameter _
+  | ( ( Unit | Bool | Mathematical_int | Bit_vector _ | Aggregate _ | Parameter _
         | Application _ | Tuple _ ),
       _ )
   | Int, _ ->
@@ -179,6 +182,7 @@ let rec alpha_equal left right =
   | Unit, Unit | Bool, Bool | Int, Int
   | Mathematical_int, Mathematical_int ->
       true
+  | Bit_vector left, Bit_vector right -> Bv_width.equal left right
   | Aggregate left, Aggregate right -> compare_type_id left right = 0
   | Parameter left, Parameter right -> Int.equal left.ordinal right.ordinal
   | Tuple left, Tuple right when List.length left = List.length right ->
@@ -210,7 +214,7 @@ let rec substitute substitutions = function
            components)
   | Application (constructor, arguments) ->
       Application (constructor, List.map (substitute substitutions) arguments)
-  | (Unit | Bool | Int | Mathematical_int | Aggregate _) as closed -> closed
+  | (Unit | Bool | Int | Mathematical_int | Bit_vector _ | Aggregate _) as closed -> closed
 
 let instantiate binders arguments typ =
   if List.length binders <> List.length arguments then
@@ -223,7 +227,7 @@ let rec is_open = function
   | Parameter _ -> true
   | Tuple components -> List.exists (fun (_, typ) -> is_open typ) components
   | Application (_, arguments) -> List.exists is_open arguments
-  | Unit | Bool | Int | Mathematical_int | Aggregate _ -> false
+  | Unit | Bool | Int | Mathematical_int | Bit_vector _ | Aggregate _ -> false
 
 let parameters typ =
   let rec collect found = function
@@ -239,7 +243,7 @@ let parameters typ =
           (fun found (_, typ) -> collect found typ)
           found components
     | Application (_, arguments) -> List.fold_left collect found arguments
-    | Unit | Bool | Int | Mathematical_int | Aggregate _ -> found
+    | Unit | Bool | Int | Mathematical_int | Bit_vector _ | Aggregate _ -> found
   in
   collect [] typ |> List.sort compare_binder
 
@@ -254,6 +258,7 @@ let rec to_string = function
   | Bool -> "bool"
   | Int -> "int"
   | Mathematical_int -> "Int"
+  | Bit_vector width -> Printf.sprintf "BV<%s>" (Bv_width.to_string width)
   | Aggregate type_id ->
       Printf.sprintf "%s#%d" type_id.type_name type_id.type_index
   | Parameter binder -> binder_to_string binder
@@ -277,6 +282,8 @@ let rec structural_identity_material = function
   | Bool -> "b"
   | Int -> "i"
   | Mathematical_int -> "I"
+  | Bit_vector width ->
+      framed "B" [ Bv_width.structural_identity_material width ]
   | Aggregate type_id ->
       framed "g"
         [ string_of_int type_id.type_index; type_id.type_name ]
@@ -319,4 +326,11 @@ let rec contains_mathematical_int = function
   | Tuple components ->
       List.exists (fun (_, typ) -> contains_mathematical_int typ) components
   | Application (_, arguments) -> List.exists contains_mathematical_int arguments
-  | Unit | Bool | Int | Aggregate _ | Parameter _ -> false
+  | Unit | Bool | Int | Bit_vector _ | Aggregate _ | Parameter _ -> false
+
+let rec contains_bit_vector = function
+  | Bit_vector _ -> true
+  | Tuple components ->
+      List.exists (fun (_, typ) -> contains_bit_vector typ) components
+  | Application (_, arguments) -> List.exists contains_bit_vector arguments
+  | Unit | Bool | Int | Mathematical_int | Aggregate _ | Parameter _ -> false

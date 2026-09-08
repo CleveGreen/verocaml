@@ -2,7 +2,11 @@ module Raw = Smtml.Expr_raw
 
 type config = Solver_policy_private.t
 
-type model_value = Integer of Z.t | Boolean of bool | Aggregate_identity of Z.t
+type model_value =
+  | Integer of Z.t
+  | Boolean of bool
+  | Aggregate_identity of Z.t
+  | Bit_vector of Bv_value.t
 
 type model_binding = {
   symbol : Vir.symbol;
@@ -127,6 +131,8 @@ let symbol_name function_index (symbol : Vir.symbol) =
 let expected_type = function
   | Vir.Integer -> Smtml.Ty.Ty_int
   | Vir.Boolean -> Smtml.Ty.Ty_bool
+  | Vir.Bit_vector _ ->
+      fail_translation "SMTML backend cannot preserve native BV sorts"
   | Vir.Aggregate _ -> Smtml.Ty.Ty_int
   | Vir.Parametric _ ->
       invalid_arg "SMTML backend cannot preserve named parametric sorts"
@@ -142,6 +148,7 @@ let translate_symbol function_index expected_sort (symbol : Vir.symbol) =
       (match symbol.sort with
       | Vir.Integer -> "integer"
       | Vir.Boolean -> "Boolean"
+      | Vir.Bit_vector width -> "bit-vector " ^ Bv_width.to_string width
       | Vir.Aggregate aggregate ->
           Printf.sprintf "aggregate %s#%d" aggregate.aggregate_type_name
             aggregate.aggregate_type_index
@@ -150,6 +157,7 @@ let translate_symbol function_index expected_sort (symbol : Vir.symbol) =
       (match expected_sort with
       | Vir.Integer -> "an integer"
       | Vir.Boolean -> "a Boolean"
+      | Vir.Bit_vector width -> "bit-vector " ^ Bv_width.to_string width
       | Vir.Aggregate aggregate ->
           Printf.sprintf "aggregate %s#%d" aggregate.aggregate_type_name
             aggregate.aggregate_type_index
@@ -169,6 +177,8 @@ let selector_function_name (selector : Vir.selector) =
     match selector.selector_range with
     | Vir.Integer -> "int"
     | Vir.Boolean -> "bool"
+    | Vir.Bit_vector _ ->
+        fail_translation "SMTML aggregate selector cannot preserve BV sorts"
     | Vir.Aggregate aggregate ->
         Printf.sprintf "agg%d_%s" aggregate.aggregate_type_index
           aggregate.aggregate_type_name
@@ -200,6 +210,8 @@ let rec translate_aggregate function_index (term : Vir.aggregate_term) =
                 translate_integer function_index term
             | Vir.Recursive_boolean_argument term ->
                 translate_boolean function_index term
+            | Vir.Recursive_bv_argument _ ->
+                fail_translation "legacy backend cannot lower a native BV argument"
             | Vir.Recursive_aggregate_argument term ->
                 translate_aggregate function_index term
             | Vir.Recursive_parametric_argument _ ->
@@ -333,6 +345,9 @@ and translate_integer function_index = function
   | Vir.Integer_symbolic_application _ ->
       fail_translation
         "symbolic applications require direct Logic-IR/Z3 authority"
+  | Vir.Integer_bv_to_int_unsigned _ | Vir.Integer_bv_to_int_signed _ ->
+      fail_translation
+        "native BV projections require direct Logic-IR/Z3 authority"
 
 and translate_comparison function_index comparison left right =
   let left = translate_integer function_index left in
@@ -382,6 +397,8 @@ and translate_boolean function_index = function
       Raw.raw_relop Smtml.Ty.Ty_bool Smtml.Ty.Relop.Ne
         (translate_boolean function_index left)
         (translate_boolean function_index right)
+  | Vir.Bv_equal _ | Vir.Bv_not_equal _ | Vir.Bv_compare _ ->
+      fail_translation "SMTML backend cannot lower native BV equality"
   | Vir.Boolean_selector (selector, aggregate) ->
       translate_selector Smtml.Ty.Ty_bool function_index selector aggregate
   | Vir.Aggregate_equal (left, right) ->
@@ -434,6 +451,8 @@ and translate_recursive_argument function_index = function
       translate_integer function_index term
   | Vir.Recursive_boolean_argument term ->
       translate_boolean function_index term
+  | Vir.Recursive_bv_argument _ ->
+      fail_translation "SMTML backend cannot lower a native BV argument"
   | Vir.Recursive_aggregate_argument term ->
       translate_aggregate function_index term
   | Vir.Recursive_parametric_argument _ ->
@@ -515,7 +534,8 @@ let outcome_of_bridge config = function
                  (function
                    | Z3_bridge.Integer value -> Integer value
                    | Boolean value -> Boolean value
-                   | Aggregate_identity value -> Aggregate_identity value)
+                   | Aggregate_identity value -> Aggregate_identity value
+                   | Bit_vector value -> Bit_vector value)
                  binding.value
              in
              { symbol = binding.symbol; value })

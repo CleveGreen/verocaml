@@ -143,7 +143,8 @@ let map_expressions transform program =
           fail "callback rewrite is not implemented"
       | Sst.Lift_runtime_int operand -> Sst.Lift_runtime_int (recurse operand)
       | (Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
-        | Sst.Variable _ | Sst.Mutable_read _ | Sst.Owned_tree_rebase _) as leaf ->
+        | Sst.Variable _ | Sst.Mutable_read _ | Sst.Owned_tree_rebase _
+        | Sst.Logical_constant_reference _) as leaf ->
           leaf
     in
     transform { node with Sst.expression_desc }

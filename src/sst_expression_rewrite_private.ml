@@ -151,6 +151,14 @@ let map_children_with_policy ~rewrite_quantifier_triggers recurse
         let right' = recurse right in
         if left' == left && right' == right then original_desc
         else Sst.Compare (comparison, left', right')
+    | Sst.Bv_binary (operation, left, right) ->
+        let left' = recurse left and right' = recurse right in
+        if left' == left && right' == right then original_desc
+        else Sst.Bv_binary (operation, left', right')
+    | Sst.Bv_compare (operation, left, right) ->
+        let left' = recurse left and right' = recurse right in
+        if left' == left && right' == right then original_desc
+        else Sst.Bv_compare (operation, left', right')
     | Sst.Boolean_not operand ->
         let operand' = recurse operand in
         if operand' == operand then original_desc
@@ -258,9 +266,26 @@ let map_children_with_policy ~rewrite_quantifier_triggers recurse
         let operand' = recurse operand in
         if operand' == operand then original_desc
         else Sst.Lift_runtime_int operand'
+    | Sst.Bv_int_to_bv_mod conversion ->
+        let input = recurse conversion.input in
+        if input == conversion.input then original_desc
+        else Sst.Bv_int_to_bv_mod { conversion with input }
+    | Sst.Bv_to_int_unsigned operand ->
+        let operand' = recurse operand in
+        if operand' == operand then original_desc
+        else Sst.Bv_to_int_unsigned operand'
+    | Sst.Bv_to_int_signed operand ->
+        let operand' = recurse operand in
+        if operand' == operand then original_desc
+        else Sst.Bv_to_int_signed operand'
+    | Sst.Bv_not operand ->
+        let operand' = recurse operand in
+        if operand' == operand then original_desc else Sst.Bv_not operand'
     | ( Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
+      | Sst.Bv_literal _
       | Sst.Variable _ | Sst.Owned_tree_rebase _ | Sst.Mutable_read _
-      | Sst.Reveal _ | Sst.Reveal_with_fuel _ | Sst.Optional_absent ) ->
+      | Sst.Reveal _ | Sst.Reveal_with_fuel _ | Sst.Optional_absent
+      | Sst.Logical_constant_reference _ ) ->
         original_desc
   in
   let rewritten =

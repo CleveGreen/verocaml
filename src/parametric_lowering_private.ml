@@ -177,7 +177,7 @@ let reconcile_authenticated_result ~binders ~semantic ~compiler =
         Ok semantic
     | Parametric_type.Mathematical_int, _
     | ( Parametric_type.Unit | Parametric_type.Bool | Parametric_type.Int
-      | Parametric_type.Tuple _ | Parametric_type.Aggregate _
+      | Parametric_type.Bit_vector _ | Parametric_type.Tuple _ | Parametric_type.Aggregate _
       | Parametric_type.Parameter _ | Parametric_type.Application _ ), _ ->
         Error
           "compiler result type cannot satisfy the authenticated semantic result shape"

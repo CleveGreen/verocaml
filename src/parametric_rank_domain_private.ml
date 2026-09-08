@@ -51,8 +51,10 @@ type nominal_spec = {
   ground_witnesses : Issuance.rank_ground_witness list;
   actual_evidence : string list;
 }
-type error = { span : Diagnostic.span; detail : string }
+type error_kind = Invalid_authority | Unsupported_application_actual
+type error = { span : Diagnostic.span; detail : string; kind : error_kind }
 let ( let* ) result continuation = match result with Ok value -> continuation value | Error _ as error -> error
+let error ?(kind = Invalid_authority) span detail = { span; detail; kind }
 let issuer = ref ()
 let domain_version_value = "structural-height-v1"
 let schema_version = "parametric-schema-rank-v1"
@@ -175,7 +177,7 @@ let self_application descriptor typ =
       Parametric_type.compare_constructor constructor
         (Parametric_adt.type_constructor descriptor)
       = 0
-  | Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _ | Parameter _ ->
+  | Unit | Bool | Int | Mathematical_int | Bit_vector _ | Tuple _ | Aggregate _ | Parameter _ ->
       false
 let direct_self descriptor typ =
   match typ with
@@ -189,11 +191,11 @@ let direct_self descriptor typ =
              match argument with
              | Parametric_type.Parameter candidate ->
                  Parametric_type.compare_binder candidate binder = 0
-             | Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _
+             | Unit | Bool | Int | Mathematical_int | Bit_vector _ | Tuple _ | Aggregate _
              | Application _ ->
                  false)
            arguments (Parametric_adt.binders descriptor)
-  | Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _ | Parameter _ ->
+  | Unit | Bool | Int | Mathematical_int | Bit_vector _ | Tuple _ | Aggregate _ | Parameter _ ->
       false
 let supported_schema descriptor =
   match Parametric_adt.kind descriptor with
@@ -217,6 +219,7 @@ let supported_schema descriptor =
              &&
              match field.field_type with
              | Parametric_type.Unit | Bool | Int | Mathematical_int
+             | Bit_vector _
              | Parameter _ ->
                  true
              | Application _ as typ -> direct_self descriptor typ
@@ -231,7 +234,7 @@ let supported_schema descriptor =
 let seal_local_schemas ~implementation ~program =
   let span = Diagnostic.file_span implementation.Cmt_input.source_file in
   match artifact_identity implementation with
-  | Error detail -> Error { span; detail }
+  | Error detail -> Error (error span detail)
   | Ok artifact ->
       capabilities :=
         List.filter
@@ -375,7 +378,7 @@ let find_capability program constructor =
          = 0)
     !capabilities
 let rec actual_allowed program opaque_binders visiting = function
-  | Parametric_type.Unit | Bool | Int | Mathematical_int -> true
+  | Parametric_type.Unit | Bool | Int | Mathematical_int | Bit_vector _ -> true
   | Parameter binder ->
       List.exists
         (fun candidate -> Parametric_type.compare_binder candidate binder = 0)
@@ -430,7 +433,7 @@ let application_layout capability span arguments =
                                 Parametric_type.compare_binder parameter binder
                                 = 0)
                               (Parametric_type.parameters field.field_type))
-                    | Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _
+                    | Unit | Bool | Int | Mathematical_int | Bit_vector _ | Tuple _ | Aggregate _
                     | Application _ ->
                         not
                           (List.exists
@@ -440,7 +443,7 @@ let application_layout capability span arguments =
                              (Parametric_type.parameters typ))))
   in
   if List.length arguments <> List.length (Parametric_adt.binders descriptor)
-  then Error { span; detail = "schema-rank application arity mismatch" }
+  then Error (error span "schema-rank application arity mismatch")
   else if
     not
       (List.for_all2
@@ -451,20 +454,27 @@ let application_layout capability span arguments =
                  (fun candidate ->
                    Parametric_type.compare_binder candidate binder = 0)
                  opaque_binders
-           | Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _
+           | Unit | Bool | Int | Mathematical_int | Bit_vector _ | Tuple _ | Aggregate _
            | Application _ ->
                actual_allowed
                  (Option.get (live_program capability.program))
                  [] [] argument)
          (Parametric_adt.binders descriptor) arguments)
   then
-    Error
-      {
-        span;
-        detail =
-          "schema-rank application actual is outside the scalar, opaque \
-           binder, or independently validated nominal policy";
-      }
+    let detail =
+      "schema-rank application actual is outside the scalar, opaque binder, \
+       or independently validated nominal policy"
+    in
+    [%log.debug "rejected unsupported parametric rank application actual"
+      ~stage:(Delator.Field.string "parametric-rank-application")
+      ~application:
+        (Delator.Field.string
+           (Parametric_type.to_string
+              (Parametric_type.Application
+                 (Parametric_adt.type_constructor descriptor, arguments))))
+      ~decision:(Delator.Field.string "rejected")
+      ~reason_class:(Delator.Field.string "unsupported-application-actual")];
+    Error (error ~kind:Unsupported_application_actual span detail)
   else
     let component =
       [
@@ -528,12 +538,9 @@ let derive_application ~program ~span = function
       match find_capability program constructor with
       | None ->
           Error
-            {
-              span;
-              detail =
-                "parametric rank schema has no exact compiler/program \
-                 capability";
-            }
+            (error span
+               "parametric rank schema has no exact compiler/program \
+                capability")
       | Some capability ->
           (match application_layout capability span arguments with
           | Error _ as error -> error
@@ -544,8 +551,8 @@ let derive_application ~program ~span = function
               Ok
                 (make_domain ~capability ~application ~program ~component
                    ~positive_children ~ground_witnesses ~actual_evidence ())))
-  | Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _ | Parameter _ ->
-      Error { span; detail = "schema-rank view requires an exact application" }
+  | Unit | Bool | Int | Mathematical_int | Bit_vector _ | Tuple _ | Aggregate _ | Parameter _ ->
+      Error (error span "schema-rank view requires an exact application")
 let domain_id (domain : validated_rank_domain) = domain.domain_id
 let domain_version (domain : validated_rank_domain) = domain.domain_version
 let snapshot_digest (domain : validated_rank_domain) = domain.snapshot_digest
@@ -560,7 +567,7 @@ let actual_arguments domain =
   match application domain with
   | Some (Parametric_type.Application (_, arguments)) -> arguments
   | Some
-      (Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _ | Parameter _)
+      (Unit | Bool | Int | Mathematical_int | Bit_vector _ | Tuple _ | Aggregate _ | Parameter _)
   | None ->
       []
 let authenticate_profile ~structure profile =
@@ -617,25 +624,25 @@ let reauthenticate_claim ~implementation ~program ~descriptor claim =
       ]
   in
   if not (String.equal claim.claim_version schema_version) then
-    Error { span; detail = "retained schema-rank claim version mismatch" }
+    Error (error span "retained schema-rank claim version mismatch")
   else if not (String.equal claim.claim_digest (digest (claim_snapshot claim)))
-  then Error { span; detail = "retained schema-rank claim digest mismatch" }
+  then Error (error span "retained schema-rank claim digest mismatch")
   else if
     not
       (String.equal claim.schema_digest expected_schema
       && String.equal claim.compiler_uid (Parametric_adt.compiler_uid descriptor)
       && String.equal claim.profile_digest (descriptor_profile descriptor))
-  then Error { span; detail = "retained schema-rank claim schema mismatch" }
+  then Error (error span "retained schema-rank claim schema mismatch")
   else
     match claim.application with
     | None ->
-        Error { span; detail = "retained schema-rank claim has no application" }
+        Error (error span "retained schema-rank claim has no application")
     | Some application ->
         let program_snapshot = Sst.to_string program in
         let* artifact =
           match artifact_identity implementation with
           | Ok artifact -> Ok artifact
-          | Error detail -> Error { span; detail }
+          | Error detail -> Error (error span detail)
         in
         let capability =
           {

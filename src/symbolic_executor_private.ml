@@ -20,6 +20,7 @@ type value = Logical_spec_evaluation_private.value =
   | Unit_value
   | Integer_value of Vir.integer_term
   | Boolean_value of Vir.boolean_term
+  | Bit_vector_value of Vir.bit_vector_term
   | Tuple_value of value list
   | Aggregate_value of Vir.aggregate_term
   | Parametric_value of Vir.parametric_term
@@ -121,6 +122,9 @@ type state = {
   required_preceding_safety : Vir.boolean_term list;
   path_condition : Vir.boolean_term list;
   projection_symbols : Vir.symbol list;
+  logical_constant_symbols :
+    (Logical_constant_instance_private.t * Vir.symbol) list;
+  logical_constant_equations : Vir.logical_constant_equation list;
   trusted_summary_uses : Vir.trusted_summary_use list;
   next_symbol : int;
   next_obligation : int;
@@ -181,6 +185,7 @@ type owned_contents_scope = {
 type evaluation_context = {
   validated : Sst_validation.validated_program;
   imports : Imported_callable.registration option;
+  numeric_bv_source : Numeric_bv_source_admission_private.source option;
   function_ref : Vir.function_ref;
   execution_definition : Sst.function_definition;
   current_definition : Sst.function_definition;
@@ -479,7 +484,8 @@ let forget_consumed_fact_for_value state = function
               | _ -> true)
             state.closed_invariant_facts;
       }
-  | Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _
+  | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
+  | Tuple_value _
   | Parametric_value _ | Function_value _ ->
       state
 let forget_finite_receipt_for_value state = function
@@ -493,11 +499,23 @@ let forget_finite_receipt_for_value state = function
                 (Finite_value_registry.receipt_matches_value receipt aggregate))
             state.finite_receipts;
       }
-  | Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _
+  | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
+  | Tuple_value _
   | Parametric_value _ | Function_value _ ->
       state
 let effective_assumptions state =
   append state.assumptions state.local_invariant_assumptions
+let ordered_logical_constant_equations state =
+  List.sort
+    (fun left right ->
+      Logical_constant_instance_private.compare
+        left.Vir.logical_constant_instance
+        right.Vir.logical_constant_instance)
+    state.logical_constant_equations
+let ordered_logical_constant_instances state =
+  state.logical_constant_symbols
+  |> List.map fst
+  |> List.sort_uniq Logical_constant_instance_private.compare
 let with_path state term =
   { state with path_condition = append state.path_condition [ term ] }
 let vir_comparison = Logical_spec_evaluation_private.vir_comparison
@@ -535,6 +553,15 @@ let rec fresh_value state ~source_name ~role ~span ~project = function
         fresh_symbol state ~source_name ~sort:Boolean ~role ~span ~project
       in
       Ok (Boolean_value (Vir.Boolean_symbol symbol), state)
+  | Sst.Bit_vector width ->
+      let symbol, state =
+        fresh_symbol state ~source_name ~sort:(Vir.Bit_vector width) ~role
+          ~span ~project
+      in
+      Vir.bv_symbol symbol
+      |> Result.map (fun term -> (Bit_vector_value term, state))
+      |> Result.map_error (fun message ->
+             { function_name = source_name; span; unsupported = Malformed_sst message })
   | Sst.Tuple components ->
       let rec loop index state values = function
         | [] -> Ok (Tuple_value (List.rev values), state)
@@ -622,6 +649,10 @@ let fresh_quantifier_value state (binding : Sst.binding) =
             Some
               (make Vir.Boolean (fun symbol ->
                    Boolean_value (Vir.Boolean_symbol symbol)))
+        | Logic_quantifier_private.Bit_vector_binder width ->
+            Some
+              (make (Vir.Bit_vector width) (fun symbol ->
+                   Bit_vector_value (Result.get_ok (Vir.bv_symbol symbol))))
         | Logic_quantifier_private.Parameter_binder binder ->
             Some
               (make (Vir.Parametric binder) (fun symbol ->
@@ -845,6 +876,7 @@ let bind_scalar state (binding : Sst.binding) value =
     match binding.typ with
     | Sst.Int | Sst.Mathematical_int -> Some Vir.Integer
     | Sst.Bool -> Some Vir.Boolean
+    | Sst.Bit_vector width -> Some (Vir.Bit_vector width)
     | Sst.Parameter binder -> Some (Vir.Parametric binder)
     | Sst.Unit | Sst.Tuple _ | Sst.Aggregate _ | Sst.Application _ -> None
   in
@@ -866,7 +898,8 @@ let bind_scalar state (binding : Sst.binding) value =
               |> Option.value ~default:0
             in
             (binding.id, aggregate, version) :: owned_root_versions
-        | Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _
+        | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
+        | Tuple_value _
         | Parametric_value _ | Function_value _ ->
             owned_root_versions
       in
@@ -886,6 +919,8 @@ let bind_scalar state (binding : Sst.binding) value =
         match sort with
         | Vir.Integer -> Integer_value (Vir.Integer_symbol symbol)
         | Vir.Boolean -> Boolean_value (Vir.Boolean_symbol symbol)
+        | Vir.Bit_vector _ ->
+            Bit_vector_value (Result.get_ok (Vir.bv_symbol symbol))
         | Vir.Parametric _ ->
             Parametric_value
               (Result.get_ok (Parametric_logic_private.of_symbol symbol))
@@ -907,7 +942,9 @@ let bind_scalar state (binding : Sst.binding) value =
         | Integer_value term when binding.typ = Sst.Int ->
             equation :: Vir.integer_range term
         | Integer_value _ -> [ equation ]
-        | Boolean_value _ | Parametric_value _ | Function_value _ -> [ equation ]
+        | Boolean_value _ | Bit_vector_value _ | Parametric_value _
+        | Function_value _ ->
+            [ equation ]
         | Unit_value | Tuple_value _ | Aggregate_value _ -> assert false
       in
       Ok
@@ -1039,6 +1076,7 @@ let option_constructor instance constructor =
 let optional_argument function_name span = function
   | Integer_value term -> Ok (Vir.Recursive_integer_argument term)
   | Boolean_value term -> Ok (Vir.Recursive_boolean_argument term)
+  | Bit_vector_value term -> Ok (Vir.Recursive_bv_argument term)
   | Aggregate_value term -> Ok (Vir.Recursive_aggregate_argument term)
   | Parametric_value term -> Ok (Vir.Recursive_parametric_argument term)
   | Function_value _ ->
@@ -1182,7 +1220,7 @@ let rec fresh_parameter function_name state index (pattern : Sst.pattern) =
               owned_root_versions =
                 (binding.id, aggregate, 0) :: state.owned_root_versions;
             }
-        | Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _
+        | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _ | Tuple_value _
         | Parametric_value _ | Function_value _ ->
             {
               state with
@@ -1367,6 +1405,8 @@ let emit_checked function_ref span operation mathematical_result state =
       path_condition = state.path_condition;
       goal;
       projection_symbols = state.projection_symbols;
+      logical_constant_instances = ordered_logical_constant_instances state;
+      logical_constant_equations = ordered_logical_constant_equations state;
     }
   in
   let snapshot obligation =
@@ -1452,6 +1492,8 @@ let emit_goal function_ref kind span goal state =
       path_condition = state.path_condition;
       goal;
       projection_symbols = state.projection_symbols;
+      logical_constant_instances = ordered_logical_constant_instances state;
+      logical_constant_equations = ordered_logical_constant_equations state;
     }
   in
   let emitted =
@@ -1487,7 +1529,7 @@ let closed_invariant_application handle = function
              predicate = Type_invariant.predicate_callable handle;
              value;
            })
-  | Aggregate_value _ | Unit_value | Integer_value _ | Boolean_value _
+  | Aggregate_value _ | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
   | Tuple_value _ | Parametric_value _ | Function_value _ ->
       Error "invariant boundary value does not have the exact abstract type"
 let emit_closed_invariant_goal ?(verified_assumptions = []) context handle
@@ -1525,6 +1567,8 @@ let emit_closed_invariant_goal ?(verified_assumptions = []) context handle
           path_condition = state.path_condition;
           goal;
           projection_symbols = state.projection_symbols;
+          logical_constant_instances = ordered_logical_constant_instances state;
+          logical_constant_equations = ordered_logical_constant_equations state;
         }
       in
       let state =
@@ -1549,7 +1593,7 @@ let emit_closed_invariant_goal ?(verified_assumptions = []) context handle
       Ok (emitted, state)
 let invariant_for_typ environment = function
   | Sst.Aggregate type_id -> Type_invariant.find_for_type environment type_id
-  | Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Tuple _
+  | Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Bit_vector _ | Sst.Tuple _
   | Sst.Parameter _
   | Sst.Application _ ->
       None
@@ -1692,7 +1736,7 @@ let query_rank_domain ~parametric_adts ~rank_domains ~type_definitions typ =
                  (fun domain ->
                    List.mem aggregate (Vir.rank_domain_component domain))
                  rank_domains))
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Parameter _ ->
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Parameter _ ->
         Ok None
     | Sst.Tuple components ->
         List.fold_left
@@ -1793,7 +1837,7 @@ let rank_free_type context typ =
 let finite_result_rank context span typ =
   match typ with
   | Sst.Application _ | Sst.Aggregate _ -> rank_domain_for_type context span typ
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
   | Sst.Parameter _ ->
       Ok None
 let authenticated_logical_application validated typ =
@@ -2009,7 +2053,7 @@ let authorize_finite_formal_call context ~callee_definition ~arguments
                   let* aggregate =
                     match actual with
                     | Aggregate_value aggregate -> Ok aggregate
-                    | Unit_value | Integer_value _ | Boolean_value _
+                    | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
                     | Tuple_value _ | Parametric_value _ | Function_value _ ->
                         error function_name actual_expression.span
                           (Malformed_sst
@@ -2292,7 +2336,7 @@ module Direct_recursion_induction = struct
                   (Malformed_sst message))
         | ( (Some _ | None),
             (Some _ | None),
-            (Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _) )
+            (Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _ | Tuple_value _) )
           ->
             Ok state
         | _ ->
@@ -2433,9 +2477,9 @@ module Finite_result_integration = struct
               | Ok receipt -> Ok (with_finite_receipt state receipt)
               | Error message ->
                   error function_name definition.span (Malformed_sst message)))
-      | ( ( Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _
+      | ( ( Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _ | Tuple_value _
           | Aggregate_value _ | Parametric_value _ | Function_value _ ),
-          ( Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _
+          ( Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _ | Tuple_value _
           | Aggregate_value _ | Parametric_value _ | Function_value _ ) ) ->
           Ok state
 end
@@ -2457,7 +2501,7 @@ let authorize_frozen_formal_call context
           ( expression,
             match value with
             | Aggregate_value root -> Some root
-            | Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _
+            | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _ | Tuple_value _
             | Parametric_value _ | Function_value _ ->
                 None ))
         arguments actuals
@@ -2505,7 +2549,7 @@ module Immutable_fact_integration = struct
         |> List.concat
     | (Sst.Aggregate _ | Sst.Application _), Aggregate_value aggregate ->
         [ (typ, aggregate) ]
-    | (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Parameter _), _
+    | (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Parameter _), _
     | Sst.Tuple _, _
     | Sst.Aggregate _, _
     | Sst.Application _, _ ->
@@ -2668,7 +2712,7 @@ module Immutable_fact_integration = struct
             derive_finite_selected context span state ~parent ~mode ~typ value
               ~provenance)
           (Ok state) components values
-    | (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Parameter _), _
+    | (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Parameter _), _
     | Sst.Tuple _, _
     | Sst.Aggregate _, _
     | Sst.Application _, _ ->
@@ -2770,7 +2814,7 @@ module Immutable_fact_integration = struct
         error context.function_ref.function_name span
           (Malformed_sst "finite ephemeral tuple pattern arity mismatch")
     | _, _,
-      ( Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _
+      ( Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _ | Tuple_value _
       | Parametric_value _ | Function_value _ ) ->
         Ok state
 end
@@ -2817,6 +2861,7 @@ let demand_mentions_value demand value =
     (function
       | Vir.Recursive_aggregate_argument candidate -> candidate = value
       | Vir.Recursive_integer_argument _ | Vir.Recursive_boolean_argument _
+      | Vir.Recursive_bv_argument _
       | Vir.Recursive_parametric_argument _ ->
           false)
     (Recursive_spec_retry_demand_private.arguments demand)
@@ -2927,7 +2972,7 @@ let variant_tag_domain function_name span type_definitions parametric_adts
         |> Option.map Parametric_adt.type_id
         |> Option.value ~default:aggregate_type
     | Sst.Aggregate type_id -> type_id
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
     | Sst.Parameter _ ->
         aggregate_type
   in
@@ -3128,7 +3173,7 @@ let replace_owned_root state binding value version =
     match value with
     | Aggregate_value aggregate ->
         (binding.id, aggregate, version) :: owned_root_versions
-    | Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _
+    | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _ | Tuple_value _
     | Parametric_value _ | Function_value _ ->
         owned_root_versions
   in
@@ -3234,7 +3279,7 @@ let observe_formula_model_field context state (field : Sst.field_id) value =
   match value with
     | Aggregate_value aggregate ->
         Logical_adt_evaluation_private.constructors_of_field context.type_definitions field.field_owner field |> List.filter_map (fun (constructor : Sst.constructor_id) -> Option.map (fun observed -> Vir.Boolean_equal (observed, Vir.Integer_compare (Vir.Equal, Vir.Aggregate_tag (aggregate.aggregate_type, aggregate), Vir.Integer_constant (Z.of_int constructor.constructor_index)))) (owned_runtime_tag aggregate constructor)) |> with_assumptions state
-    | Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _ | Parametric_value _ | Function_value _ -> state
+    | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _ | Tuple_value _ | Parametric_value _ | Function_value _ -> state
 let rec pattern_has_owned_cursor (pattern : Sst.pattern) =
   match pattern.pattern_desc with
   | Sst.Owned_tree_cursor_pattern _ -> true
@@ -3307,6 +3352,7 @@ let normalize_owned_contents_aggregate assumptions fuel term =
                 | Vir.Recursive_aggregate_argument aggregate -> Some aggregate
                 | Vir.Recursive_integer_argument _
                 | Vir.Recursive_boolean_argument _
+                | Vir.Recursive_bv_argument _
                 | Vir.Recursive_parametric_argument _ ->
                     None
               in
@@ -3363,6 +3409,7 @@ let owned_contents_project_field assumptions field aggregate =
               | Vir.Recursive_aggregate_argument value -> value :: found
               | Vir.Recursive_integer_argument _
               | Vir.Recursive_boolean_argument _
+              | Vir.Recursive_bv_argument _
               | Vir.Recursive_parametric_argument _ ->
                   found
             else found)
@@ -3373,6 +3420,7 @@ let owned_contents_project_field assumptions field aggregate =
             | Vir.Recursive_aggregate_argument nested -> collect found nested
             | Vir.Recursive_integer_argument _
             | Vir.Recursive_boolean_argument _
+            | Vir.Recursive_bv_argument _
             | Vir.Recursive_parametric_argument _ ->
                 found)
           found arguments
@@ -3519,7 +3567,7 @@ let owned_contents_carrier_from_root context assumptions root fields =
                 if definition.field_id = field then
                   match definition.field_type with
                   | Sst.Aggregate type_id -> Some type_id
-                  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
                   | Sst.Tuple _
                   | Sst.Parameter _ | Sst.Application _ ->
                       None
@@ -3597,7 +3645,7 @@ let rec exact_owned_pattern_match assumptions (pattern : Sst.pattern) value =
   | ( ( Sst.Unit_pattern | Sst.Int_pattern _ | Sst.Bool_pattern _
       | Sst.Tuple_pattern _ | Sst.Record_pattern _ | Sst.Constructor_pattern _
         ),
-      ( Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _
+      ( Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _ | Tuple_value _
       | Aggregate_value _ | Parametric_value _ | Function_value _ ) ) ->
       None
 and exact_owned_pattern_matches assumptions patterns values =
@@ -3922,7 +3970,7 @@ let construction_selector descriptors parametric aggregate make_selector path ty
         List.exists
           (fun (_, component) -> needs_parametric_selector component)
           components
-    | Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Aggregate _ ->
+    | Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Bit_vector _ | Sst.Aggregate _ ->
         false
   in
   if parametric || needs_parametric_selector typ then
@@ -3978,8 +4026,8 @@ let logical_construction_assumptions context (expression : Sst.expression)
   | _ ->
       error context.function_ref.function_name expression.span
         (Malformed_sst "logical construction observer received a non-construction")
-let observe_logical_construction context state (expression : Sst.expression)
-    children aggregate =
+let observe_logical_construction ?(materialize_unranked = false) context state
+    (expression : Sst.expression) children aggregate =
   let classify () =
     match expression.expression_desc with
     | Sst.Record_value { record_type; fields } ->
@@ -4032,6 +4080,41 @@ let observe_logical_construction context state (expression : Sst.expression)
   | Some (immutable, shape) ->
       let* domain = rank_domain_for_type context expression.span expression.typ in
       (match domain with
+      | None when materialize_unranked ->
+          let* rooted, state =
+            fresh_value state ~source_name:"logical.constant.construction"
+              ~role:Vir.Local ~span:expression.span ~project:false expression.typ
+          in
+          let* rooted =
+            match rooted with
+            | Aggregate_value rooted -> Ok rooted
+            | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _ | Tuple_value _
+            | Parametric_value _ | Function_value _ ->
+                error context.function_ref.function_name expression.span
+                  (Malformed_sst
+                     "logical constant construction did not materialize an aggregate")
+          in
+          let* assumptions =
+            logical_construction_assumptions context expression rooted children
+          in
+          [%log.debug "materialized logical constant aggregate definition"
+            ~stage:(Delator.Field.string "logical-constant-construction")
+            ~shape:
+              (Delator.Field.string
+                 (match shape with
+                 | Finite_value_registry.Record_construction _ -> "record"
+                 | Finite_value_registry.Constructor_construction _ ->
+                     "constructor"))
+            ~result_type:
+              (Delator.Field.string
+                 (Parametric_type.to_string expression.typ))
+            ~child_count:(Delator.Field.int (List.length children))
+            ~shape_assumption_count:
+              (Delator.Field.int (List.length assumptions))
+            ~immutable:(Delator.Field.bool immutable)
+            ~decision:
+              (Delator.Field.string "materialize-with-ground-shape-facts")];
+          Ok (rooted, with_assumptions state assumptions)
       | None ->
           [%log.trace "observed unranked logical aggregate construction"
             ~stage:(Delator.Field.string "finite-logical-construction")
@@ -4054,7 +4137,7 @@ let observe_logical_construction context state (expression : Sst.expression)
           let* rooted =
             match rooted with
             | Aggregate_value rooted -> Ok rooted
-            | Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _
+            | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _ | Tuple_value _
             | Parametric_value _ | Function_value _ ->
                 error context.function_ref.function_name expression.span
                   (Malformed_sst
@@ -4086,7 +4169,8 @@ let observe_logical_construction context state (expression : Sst.expression)
               expression state rooted children immutable shape
           in
           Ok (rooted, state))
-let logical_evaluation_callbacks context ~aggregate_type ~option_instance ~evaluate_recursive ~error =
+let logical_evaluation_callbacks ?(materialize_unranked_constructions = false)
+    context ~aggregate_type ~option_instance ~evaluate_recursive ~error =
   Logical_spec_evaluation_private.
     {
       classify = logical_spec_call_target context;
@@ -4099,7 +4183,9 @@ let logical_evaluation_callbacks context ~aggregate_type ~option_instance ~evalu
         (fun context state expression field aggregate value ->
           derive_immutable_field_selection context expression state field
             aggregate value);
-      observe_construction = observe_logical_construction;
+      observe_construction =
+        observe_logical_construction
+          ~materialize_unranked:materialize_unranked_constructions;
       enter_definition =
         (fun context definition ->
           {
@@ -4110,6 +4196,28 @@ let logical_evaluation_callbacks context ~aggregate_type ~option_instance ~evalu
             old_environment = None;
             spec_call_stack = definition.function_id.function_index :: context.spec_call_stack;
           });
+      native_integer_projection =
+        (fun context expression ->
+          match context.numeric_bv_source with
+          | None -> Ok None
+          | Some source ->
+              Numeric_bv_source_admission_private.unsigned_modular_projection
+                source ~caller:context.execution_definition
+                ~occurrence:expression
+              |> Result.map
+                   (Option.map
+                      (fun
+                        (projection :
+                          Numeric_bv_source_admission_private.projection) ->
+                     { Logical_spec_evaluation_private.projection_width =
+                         projection.width;
+                       projection_input = projection.input;
+                       projection_authority = projection.authority }))
+              |> Result.map_error (fun message ->
+                     { function_name = context.function_ref.function_name;
+                       span = expression.span;
+                       unsupported = Malformed_sst message }));
+      evaluate_constant = evaluate_recursive;
       evaluate_recursive;
       error;
     }
@@ -4509,6 +4617,199 @@ let symbolic_trigger parametric_adts application =
     ~span:(Symbolic_application_private.span application)
     (symbolic_value parametric_adts application)
   |> Result.get_ok
+let logical_constant_symbol state instance sort =
+  match
+    List.find_opt
+      (fun (candidate, _) ->
+        Logical_constant_instance_private.equal candidate instance)
+      state.logical_constant_symbols
+  with
+  | Some (_, symbol) -> (symbol, state)
+  | None ->
+      let constant = Logical_constant_instance_private.constant_id instance in
+      let symbol =
+        {
+          Vir.symbol_id = state.next_symbol;
+          source_name = constant.constant_name;
+          sort;
+          role = Vir.Logical_constant instance;
+          span = Logical_constant_instance_private.span instance;
+        }
+      in
+      ( symbol,
+        {
+          state with
+          next_symbol = state.next_symbol + 1;
+          logical_constant_symbols =
+            (instance, symbol) :: state.logical_constant_symbols;
+        } )
+let logical_constant_value function_name state instance typ =
+  let* sort =
+    Spec_function_logic_private.sort_of_type
+      ~aggregate_type:(vir_aggregate_type_of_sst state.parametric_adts)
+      typ
+    |> Result.map_error (fun message ->
+           {
+             function_name;
+             span = Logical_constant_instance_private.span instance;
+             unsupported = Malformed_sst message;
+           })
+  in
+  let symbol, state = logical_constant_symbol state instance sort in
+  match sort with
+  | Vir.Integer -> Ok (Integer_value (Vir.Integer_symbol symbol), state)
+  | Vir.Boolean -> Ok (Boolean_value (Vir.Boolean_symbol symbol), state)
+  | Vir.Bit_vector _ ->
+      error function_name symbol.span
+        (Malformed_sst "source constant cannot acquire an internal BV sort")
+  | Vir.Aggregate aggregate_type ->
+      Ok
+        ( Aggregate_value
+            { Vir.aggregate_type; aggregate_desc = Vir.Aggregate_symbol symbol },
+          state )
+  | Vir.Parametric parametric_sort ->
+      Ok
+        ( Parametric_value
+            { Vir.parametric_sort; parametric_desc = Vir.Parametric_symbol symbol },
+          state )
+let evaluate_logical_constant evaluate context (expression : Sst.expression)
+    constant type_arguments state =
+  let function_name = context.function_ref.Vir.function_name in
+  let program = Sst_validation.program context.validated in
+  let* () =
+    Logical_constant_private.validate_reference ~program
+      ~logical:context.logical ~expression_type:expression.typ constant
+      ~type_arguments
+    |> Result.map_error (fun message ->
+           {
+             function_name;
+             span = expression.span;
+             unsupported = Malformed_sst message;
+           })
+  in
+  let* definition =
+    match Logical_constant_private.find_definition program constant with
+    | Some definition -> Ok definition
+    | None ->
+        error function_name expression.span
+          (Malformed_sst
+             "logical constant reference has no authenticated definition")
+  in
+  let* instance =
+    Logical_constant_instance_private.create ~definition ~type_arguments
+      ~result_type:expression.typ ~span:expression.span
+    |> Result.map_error (fun message ->
+           {
+             function_name;
+             span = expression.span;
+             unsupported = Malformed_sst message;
+           })
+  in
+  let* value, state =
+    logical_constant_value function_name state instance expression.typ
+  in
+  if
+    List.exists
+      (fun equation ->
+        Logical_constant_instance_private.equal instance
+          equation.Vir.logical_constant_instance)
+      state.logical_constant_equations
+  then (
+    [%log.trace "reused materialized logical constant equation"
+      ~stage:(Delator.Field.string "logical-constant-evaluation")
+      ~constant_name:(Delator.Field.string constant.constant_name)
+      ~instance:
+        (Delator.Field.string
+           (Logical_constant_instance_private.identity_digest instance))
+      ~decision:(Delator.Field.string "reused")];
+    Ok { obligations = []; paths = [ { value; state } ] })
+  else if Option.is_none definition.constant_equation then (
+    [%log.debug "retained stable equationless logical constant value"
+      ~stage:(Delator.Field.string "logical-constant-evaluation")
+      ~constant_name:(Delator.Field.string constant.constant_name)
+      ~instance:
+        (Delator.Field.string
+           (Logical_constant_instance_private.identity_digest instance))
+      ~decision:(Delator.Field.string "equation-omitted")];
+    Ok { obligations = []; paths = [ { value; state } ] })
+  else
+    let constant_equation = Option.get definition.constant_equation in
+    let substitutions =
+      List.combine definition.constant_type_binders type_arguments
+    in
+    let body =
+      Sst.map_expression_types
+        (Parametric_type.substitute substitutions)
+        constant_equation.constant_body.expression
+    in
+    let* permit =
+      match
+        Logical_spec_evaluation_private.authenticate_expression
+          ~classify:(logical_spec_call_target context) body
+      with
+      | Some permit -> Ok permit
+      | None ->
+          error function_name definition.constant_span
+            (Malformed_sst
+               "logical constant body lacks pure logical evaluation authority")
+    in
+    let evaluate_recursive context (expression : Sst.expression) state =
+      let* evaluated = evaluate context expression state in
+      match (evaluated.obligations, evaluated.paths) with
+      | [], [ evaluated ] -> Ok (evaluated.value, evaluated.state)
+      | [], [] | [], _ :: _ :: _ | _ :: _, _ ->
+          error function_name expression.span
+            (Malformed_sst
+               "logical constant dependency did not evaluate exactly once")
+    in
+    let callbacks =
+      logical_evaluation_callbacks ~materialize_unranked_constructions:true
+        context
+        ~aggregate_type:(vir_aggregate_type_of_sst state.parametric_adts)
+        ~option_instance:(Parametric_adt.option_instance state.parametric_adts)
+        ~evaluate_recursive
+        ~error:(fun span message ->
+          { function_name; span; unsupported = Malformed_sst message })
+    in
+    let outer_environment = state.environment in
+    let* rhs_value, state =
+      Logical_spec_evaluation_private.evaluate permit callbacks
+        { context with logical = true }
+        body { state with environment = [] }
+    in
+    let state = { state with environment = outer_environment } in
+    let* logical_constant_rhs =
+      Spec_function_logic_private.application_term
+        ~error:(fun span message ->
+          { function_name; span; unsupported = Malformed_sst message })
+        ~span:definition.constant_span rhs_value
+    in
+    let equation =
+      {
+        Vir.logical_constant_instance = instance;
+        logical_constant_rhs;
+        logical_constant_span = definition.constant_span;
+      }
+    in
+    [%log.debug "materialized logical constant equation"
+      ~stage:(Delator.Field.string "logical-constant-evaluation")
+      ~constant_name:(Delator.Field.string constant.constant_name)
+      ~instance:
+        (Delator.Field.string
+           (Logical_constant_instance_private.identity_digest instance))
+      ~dependency_equation_count:
+        (Delator.Field.int (List.length state.logical_constant_equations))
+      ~result_type:
+        (Delator.Field.string (Parametric_type.to_string expression.typ))
+      ~decision:(Delator.Field.string "materialized")];
+    let state =
+      {
+        state with
+        logical_constant_equations =
+          equation :: state.logical_constant_equations;
+      }
+    in
+    Ok { obligations = []; paths = [ { value; state } ] }
 let evaluate_explicit_trigger evaluate context (expression : Sst.expression) state =
   Quantifier_validation_private.explicit_trigger
     {
@@ -4707,6 +5008,7 @@ let evaluate_quantifier evaluate context (expression : Sst.expression) kind
             | Parametric_type.Int | Parametric_type.Mathematical_int ->
                 Ok Vir.Integer
             | Bool -> Ok Vir.Boolean
+            | Bit_vector width -> Ok (Vir.Bit_vector width)
             | Parameter binder -> Ok (Vir.Parametric binder)
             | Application _ as typ
               when Parametric_type.is_spec_function typ ->
@@ -4755,6 +5057,9 @@ let logical_expression evaluate context (expression : Sst.expression) state =
       callback_expression evaluate context expression state
   | Sst.Lift_runtime_int _
   | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
+  | Sst.Bv_literal _ | Sst.Bv_int_to_bv_mod _
+  | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+  | Sst.Bv_binary _ | Sst.Bv_compare _
   | Sst.Variable _ | Sst.Tuple_value _ | Sst.Record_value _
   | Sst.Constructor_value _ | Sst.Field_read _ | Sst.Field_write _
   | Sst.Shared_scalar_field_write _ | Sst.Owned_tree_nested_write _
@@ -4767,6 +5072,8 @@ let logical_expression evaluate context (expression : Sst.expression) state =
   | Sst.Proof_region _ | Sst.Old _ ->
       assert false
   | Sst.Symbolic_application _ ->
+      assert false
+  | Sst.Logical_constant_reference _ ->
       assert false
 let rec evaluate context expression state =
   let context =
@@ -4787,6 +5094,73 @@ let rec evaluate context expression state =
   in
   let function_ref = context.function_ref in
   let function_name = function_ref.Vir.function_name in
+  let native_projection =
+    match context.numeric_bv_source with
+    | None -> Ok None
+    | Some source ->
+        Numeric_bv_source_admission_private.unsigned_modular_projection source
+          ~caller:context.execution_definition ~occurrence:expression
+  in
+  match native_projection with
+  | Error message ->
+      error function_name expression.span (Malformed_sst message)
+  | Ok (Some projection) ->
+      let fragment =
+        Logical_spec_evaluation_private.native_unsigned_projection_fragment
+          ~span:expression.span
+          { projection_width = projection.width;
+            projection_input = projection.input;
+            projection_authority = projection.authority }
+      in
+      [%log.debug
+        "elaborating admitted source projection as an internal BV SST fragment"
+          ~stage:(Delator.Field.string "native-bv-source-elaboration")
+          ~operation:(Delator.Field.string "unsigned-intmod-view")
+          ~width:(Delator.Field.int (Bv_width.to_int projection.width))
+          ~decision:(Delator.Field.string "lower-internal-fragment")];
+      evaluate context fragment state
+  | Ok None ->
+  let expect_bv span = function
+    | Bit_vector_value term -> Ok term
+    | Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _
+    | Aggregate_value _ | Parametric_value _ | Function_value _ ->
+        error function_name span
+          (Malformed_sst "expected an exact bit-vector value")
+  in
+  let unary source construct =
+    let* evaluated = evaluate context source state in
+    let* paths =
+      List.fold_left
+        (fun result path ->
+          let* paths = result in
+          let* value = construct path.value in
+          Ok ({ path with value } :: paths))
+        (Ok []) evaluated.paths
+    in
+    Ok { evaluated with paths = List.rev paths }
+  in
+  let binary left_source right_source construct =
+    let* left = evaluate context left_source state in
+    let* paired =
+      evaluate_contexts
+        (fun left_path ->
+          let* right = evaluate context right_source left_path.state in
+          let* paths =
+            List.fold_left
+              (fun result right_path ->
+                let* paths = result in
+                let* value = construct left_path.value right_path.value in
+                Ok ({ right_path with value } :: paths))
+              (Ok []) right.paths
+          in
+          Ok { right with paths = List.rev paths })
+        left.paths
+    in
+    Ok
+      { obligations = append left.obligations paired.obligations;
+        paths = paired.paths }
+  in
+  (
   match expression.Sst.expression_desc with
   | Sst.Int_constant value ->
       Ok
@@ -4807,7 +5181,7 @@ let rec evaluate context expression state =
               let* paths = result in
               match path.value with
               | Integer_value _ -> Ok (path :: paths)
-              | Unit_value | Boolean_value _ | Tuple_value _
+              | Unit_value | Boolean_value _ | Bit_vector_value _ | Tuple_value _
               | Aggregate_value _ | Parametric_value _ | Function_value _ ->
                   error function_name expression.span
                     (Malformed_sst
@@ -4822,6 +5196,51 @@ let rec evaluate context expression state =
           paths =
             [ { value = Boolean_value (Vir.Boolean_constant value); state } ];
         }
+  | Sst.Bv_literal value ->
+      Ok
+        { obligations = [];
+          paths = [ { value = Bit_vector_value (Vir.bv_literal value); state } ] }
+  | Sst.Bv_int_to_bv_mod { width; input; source_authority } ->
+      unary input (function
+        | Integer_value input ->
+            Ok
+              (Bit_vector_value
+                 (Vir.bv_int_to_bv_mod ~width ~input ~source_authority))
+        | Unit_value | Boolean_value _ | Bit_vector_value _ | Tuple_value _
+        | Aggregate_value _ | Parametric_value _ | Function_value _ ->
+            error function_name expression.span
+              (Malformed_sst "Int-to-BV operand is not mathematical Int"))
+  | Sst.Bv_to_int_unsigned source | Sst.Bv_to_int_signed source ->
+      unary source (fun value ->
+        let* value = expect_bv expression.span value in
+        Ok
+          (Integer_value
+             (match expression.expression_desc with
+             | Sst.Bv_to_int_unsigned _ -> Vir.bv_to_int_unsigned value
+             | Sst.Bv_to_int_signed _ -> Vir.bv_to_int_signed value
+             | _ -> assert false)))
+  | Sst.Bv_not source ->
+      unary source (fun value ->
+        let* value = expect_bv expression.span value in
+        Ok (Bit_vector_value (Vir.bv_not value)))
+  | Sst.Bv_binary (operation, left, right) ->
+      binary left right (fun left right ->
+        let* left = expect_bv expression.span left in
+        let* right = expect_bv expression.span right in
+        Vir.bv_binary operation left right
+        |> Result.map (fun term -> Bit_vector_value term)
+        |> Result.map_error (fun message ->
+               { function_name; span = expression.span;
+                 unsupported = Malformed_sst message }))
+  | Sst.Bv_compare (comparison, left, right) ->
+      binary left right (fun left right ->
+        let* left = expect_bv expression.span left in
+        let* right = expect_bv expression.span right in
+        Vir.bv_compare comparison left right
+        |> Result.map (fun term -> Boolean_value term)
+        |> Result.map_error (fun message ->
+               { function_name; span = expression.span;
+                 unsupported = Malformed_sst message }))
   | Sst.Unit_constant ->
       Ok { obligations = []; paths = [ { value = Unit_value; state } ] }
   | Sst.Symbolic_application application ->
@@ -4886,6 +5305,9 @@ let rec evaluate context expression state =
         in
         evaluate_arguments [] [ (state, []) ]
           (Symbolic_application_private.arguments application)
+  | Sst.Logical_constant_reference { constant; type_arguments } ->
+      evaluate_logical_constant evaluate context expression constant
+        type_arguments state
   | Sst.Optional_absent | Sst.Optional_present _ | Sst.Optional_forward _ ->
       evaluate_optional evaluate context expression state
   | Sst.Reveal target ->
@@ -5034,6 +5456,7 @@ let rec evaluate context expression state =
                 match value with
                 | Integer_value term -> Ok (Vir.Recursive_integer_argument term)
                 | Boolean_value term -> Ok (Vir.Recursive_boolean_argument term)
+                | Bit_vector_value term -> Ok (Vir.Recursive_bv_argument term)
                 | Aggregate_value term ->
                     Ok (Vir.Recursive_aggregate_argument term)
                 | Unit_value ->
@@ -5214,6 +5637,7 @@ let rec evaluate context expression state =
                 match value with
                 | Integer_value term -> Ok (Vir.Recursive_integer_argument term)
                 | Boolean_value term -> Ok (Vir.Recursive_boolean_argument term)
+                | Bit_vector_value term -> Ok (Vir.Recursive_bv_argument term)
                 | Aggregate_value term ->
                     Ok (Vir.Recursive_aggregate_argument term)
                 | Unit_value ->
@@ -5722,7 +6146,7 @@ let rec evaluate context expression state =
           let* written =
             match evaluated.value with
             | Integer_value term -> Ok term
-            | Unit_value | Boolean_value _ | Tuple_value _ | Aggregate_value _
+            | Unit_value | Boolean_value _ | Bit_vector_value _ | Tuple_value _ | Aggregate_value _
             | Parametric_value _ | Function_value _ ->
                 error function_name expression.span
                   (Malformed_sst
@@ -5980,7 +6404,7 @@ let rec evaluate context expression state =
                       replace_owned_contents_origin state successor_root origin
                   | Error _ -> state)
               | (Some _ | None), (Some _ | None) -> state)
-          | Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _ ->
+          | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _ | Tuple_value _ ->
               state
           | Parametric_value _ | Function_value _ -> state
         in
@@ -6098,7 +6522,7 @@ let rec evaluate context expression state =
                               Immutable_fact_integration.derive_finite_pattern
                                 context pattern.span state ~parent:aggregate
                                 ~mode pattern value
-                          | Unit_value | Integer_value _ | Boolean_value _
+                          | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
                           | Tuple_value _ | Parametric_value _ | Function_value _ ->
                               Ok state
                         in
@@ -6315,7 +6739,7 @@ let rec evaluate context expression state =
                                 case.Sst.case_pattern scrutinee_value
                             in
                             Ok (condition, bindings, ranges, state))
-                    | Unit_value | Integer_value _ | Boolean_value _
+                    | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
                     | Tuple_value _ | Parametric_value _ | Function_value _ ->
                         error function_name case.case_span
                           (Malformed_sst
@@ -6392,7 +6816,7 @@ let rec evaluate context expression state =
                           | Error message ->
                               error function_name case.case_span
                                 (Malformed_sst message))
-                      | Unit_value | Integer_value _ | Boolean_value _
+                      | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
                       | Tuple_value _ | Parametric_value _ | Function_value _ ->
                           Ok matched
                   in
@@ -6415,6 +6839,7 @@ let rec evaluate context expression state =
                           matched scrutinee_expression case.case_pattern
                           scrutinee_value
                     | Unit_value | Integer_value _ | Boolean_value _
+                    | Bit_vector_value _
                     | Parametric_value _ | Function_value _ ->
                         Ok matched
                   in
@@ -6887,7 +7312,7 @@ let rec evaluate context expression state =
                            |> List.map (fun field -> Sst.Owned_tree_field field)
                            ))
                   | Some
-                      ( Unit_value | Integer_value _ | Boolean_value _
+                      ( Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
                       | Tuple_value _ | Parametric_value _ | Function_value _ )
                   | None ->
                       raw_aggregate
@@ -7107,7 +7532,7 @@ let rec evaluate context expression state =
                         })
                       expanded.paths;
                 }
-          | Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _
+          | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _ | Tuple_value _
           | Parametric_value _ | Function_value _ ->
               error function_name expression.span
                 (Malformed_sst
@@ -7370,6 +7795,10 @@ let rec evaluate context expression state =
                                   Ok
                                     (Vir.Recursive_boolean_argument term
                                     :: arguments)
+                              | Bit_vector_value term ->
+                                  Ok
+                                    (Vir.Recursive_bv_argument term
+                                    :: arguments)
                               | Aggregate_value term ->
                                   Ok
                                     (Vir.Recursive_aggregate_argument term
@@ -7449,7 +7878,7 @@ let rec evaluate context expression state =
                           }
                         in
                         Ok (Aggregate_value application, state)
-                    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
                     | Sst.Tuple _ ->
                         fresh_value state
                           ~source_name:
@@ -7601,6 +8030,10 @@ let rec evaluate context expression state =
                       | Boolean_value term ->
                           Ok
                             (`Argument (Vir.Recursive_boolean_argument term)
+                           :: arguments)
+                      | Bit_vector_value term ->
+                          Ok
+                            (`Argument (Vir.Recursive_bv_argument term)
                            :: arguments)
                       | Aggregate_value aggregate -> (
                           match
@@ -7827,6 +8260,7 @@ let rec evaluate context expression state =
                           aggregate_contains_recursive_specification aggregate
                       | Vir.Recursive_integer_argument _
                       | Vir.Recursive_boolean_argument _
+                      | Vir.Recursive_bv_argument _
                       | Vir.Recursive_parametric_argument _ ->
                           false)
                     arguments
@@ -7865,7 +8299,8 @@ let rec evaluate context expression state =
                        incr aggregate_recursive_rank_route_observations
                    | Sst.Bool ->
                        incr aggregate_recursive_argument_route_observations
-                   | Sst.Int | Sst.Mathematical_int | Sst.Unit | Sst.Tuple _
+                   | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
+                   | Sst.Unit | Sst.Tuple _
                    | Sst.Aggregate _
                    | Sst.Parameter _ | Sst.Application _ ->
                        ());
@@ -7882,6 +8317,13 @@ let rec evaluate context expression state =
                         ( Boolean_value
                             (recursive_boolean_application callee type_arguments
                                arguments expression.span),
+                          caller_state )
+                  | Sst.Bit_vector width ->
+                      Ok
+                        ( Bit_vector_value
+                            (Vir.bv_recursive_spec_application ~width ~callee
+                               ~type_arguments ~arguments
+                               ~span:expression.span),
                           caller_state )
                   | (Sst.Aggregate _ | Sst.Application _) as result_type -> (
                       let* () =
@@ -7946,7 +8388,7 @@ let rec evaluate context expression state =
                                           error function_name expression.span
                                             (Malformed_sst message))
                                   | Some _ | None -> Ok entry)
-                              | Unit_value | Boolean_value _ | Tuple_value _
+                              | Unit_value | Boolean_value _ | Bit_vector_value _ | Tuple_value _
                               | Aggregate_value _ | Parametric_value _ | Function_value _ ->
                                   error function_name expression.span
                                     (Malformed_sst
@@ -7978,7 +8420,7 @@ let rec evaluate context expression state =
                                    [] (Sst.Aggregate frozen.frozen_link)
                                with
                                 | Aggregate_value edge -> edge
-                                | Unit_value | Integer_value _ | Boolean_value _
+                                | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
                                 | Tuple_value _ | Parametric_value _ | Function_value _ ->
                                     assert false)
                               |> normalize 32
@@ -7991,7 +8433,7 @@ let rec evaluate context expression state =
                                    [] (Sst.Aggregate frozen.frozen_root)
                                with
                                 | Aggregate_value child -> child
-                                | Unit_value | Integer_value _ | Boolean_value _
+                                | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
                                 | Tuple_value _ | Parametric_value _ | Function_value _ ->
                                     assert false)
                               |> normalize 32
@@ -8003,7 +8445,7 @@ let rec evaluate context expression state =
                                    [] (Sst.Aggregate frozen.frozen_link)
                                with
                                 | Aggregate_value child_edge -> child_edge
-                                | Unit_value | Integer_value _ | Boolean_value _
+                                | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
                                 | Tuple_value _ | Parametric_value _ | Function_value _ ->
                                     assert false)
                               |> normalize 32
@@ -8273,7 +8715,7 @@ let rec evaluate context expression state =
                               Immutable_fact_integration.derive_finite_pattern
                                 context parameter.pattern.span state
                                 ~parent:aggregate ~mode parameter.pattern actual
-                          | Unit_value | Integer_value _ | Boolean_value _
+                          | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
                           | Tuple_value _ | Parametric_value _ | Function_value _ ->
                               Ok state
                         in
@@ -8889,7 +9331,7 @@ let rec evaluate context expression state =
                           with
                           | Some (Aggregate_value parent) -> Ok parent
                           | Some
-                              ( Unit_value | Integer_value _ | Boolean_value _
+                              ( Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
                               | Tuple_value _ | Parametric_value _ | Function_value _ )
                           | None ->
                               error function_name expression.span
@@ -9809,7 +10251,7 @@ let rec evaluate context expression state =
                                                     handle) ->
                                           Some location
                                       | Unit_value | Integer_value _
-                                      | Boolean_value _ | Tuple_value _
+                                      | Boolean_value _ | Bit_vector_value _ | Tuple_value _
                                       | Aggregate_value _ | Parametric_value _
                                       | Function_value _ ->
                                           None)
@@ -9902,7 +10344,7 @@ let rec evaluate context expression state =
                   | ( Sst.Exec_call,
                       Some _,
                       (Some _ | None),
-                      ( Unit_value | Integer_value _ | Boolean_value _
+                      ( Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
                       | Tuple_value _ | Parametric_value _ | Function_value _ ) ) ->
                       error function_name expression.span
                         (Malformed_sst
@@ -9916,7 +10358,7 @@ let rec evaluate context expression state =
                   | ( (Sst.Exec_call | Sst.Proof_call),
                       (Some _ | None),
                       (Some _ | None),
-                      ( Unit_value | Integer_value _ | Boolean_value _
+                      ( Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
                       | Tuple_value _ | Aggregate_value _ | Parametric_value _
                       | Function_value _
                         ) ) ->
@@ -10021,7 +10463,7 @@ let rec evaluate context expression state =
                               Ok
                                 ( [ obligation ],
                                   with_consumed_receipt_fact state consumed )
-                          | Unit_value | Integer_value _ | Boolean_value _
+                          | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
                           | Tuple_value _ | Parametric_value _ | Function_value _ ->
                               error function_name expression.span
                                 (Malformed_sst
@@ -10087,7 +10529,7 @@ let rec evaluate context expression state =
                       | None -> Ok state)
                   | ( (None | Some _),
                       (None | Some _),
-                      ( Unit_value | Integer_value _ | Boolean_value _
+                      ( Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
                       | Tuple_value _ | Aggregate_value _ | Parametric_value _
                       | Function_value _
                         ),
@@ -10278,7 +10720,7 @@ let rec evaluate context expression state =
                     (Malformed_sst
                        "use_type_invariant has no authenticated exact-type \
                         handle"))
-          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
           | Sst.Parameter _
           | Sst.Application _ ->
               error function_name expression.span
@@ -10327,7 +10769,7 @@ let rec evaluate context expression state =
               in
               let* paths = instantiate [] predicate.paths in
               Ok { obligations = predicate.obligations; paths }
-          | Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _
+          | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _ | Tuple_value _
           | Parametric_value _ | Function_value _ ->
               error function_name expression.span
                 (Malformed_sst
@@ -10466,7 +10908,7 @@ let rec evaluate context expression state =
       logical_expression evaluate context expression state
   | Sst.Old _ ->
       error function_name expression.span
-        (Malformed_sst "old reached a runtime expression")
+        (Malformed_sst "old reached a runtime expression"))
 and evaluate_local_assertion context expression assertion_ordinal predicate
     state =
   let function_name = context.function_ref.Vir.function_name in
@@ -10600,6 +11042,15 @@ and evaluate_permitted_formula context identity state formula_root permit =
   let callbacks =
     {
       callbacks with
+      Logical_spec_evaluation_private.evaluate_constant =
+        (fun context (expression : Sst.expression) state ->
+          let* evaluated = evaluate context expression state in
+          match (evaluated.obligations, evaluated.paths) with
+          | [], [ evaluated ] -> Ok (evaluated.value, evaluated.state)
+          | [], [] | [], _ :: _ :: _ | _ :: _, _ ->
+              error function_name expression.span
+                (Malformed_sst
+                   "logical constant did not evaluate exactly once"));
       Logical_spec_evaluation_private.observe_field_read =
         (fun context state _expression field _ value ->
           Ok (observe_formula_model_field context state field value));
@@ -10746,7 +11197,7 @@ and prove_invariant_validity context handle boundary operation span value state
                 ~root_value:
                   (match predecessor_value with
                   | Aggregate_value aggregate -> aggregate
-                  | Unit_value | Integer_value _ | Boolean_value _
+                  | Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
                   | Tuple_value _ | Parametric_value _ | Function_value _ ->
                       assert false)
                 ~mode ~typ:formal.typ ~owned_version:pre_version
@@ -10869,6 +11320,23 @@ let rec materialize_result ?(project = false) state span name value =
           [ Vir.Boolean_equal (Vir.Boolean_symbol symbol, value) ]
       in
       Ok (Vir.Boolean_result symbol, state)
+  | Bit_vector_value value ->
+      let width = value.Vir.bit_vector_width in
+      let symbol, state =
+        fresh_symbol state ~source_name:name ~sort:(Vir.Bit_vector width)
+          ~role:Vir.Result ~span ~project
+      in
+      let* term =
+        Vir.bv_symbol symbol
+        |> Result.map_error (fun message ->
+               { function_name = name; span; unsupported = Malformed_sst message })
+      in
+      let* equation =
+        Vir.bv_equal term value
+        |> Result.map_error (fun message ->
+               { function_name = name; span; unsupported = Malformed_sst message })
+      in
+      Ok (Vir.Bv_result symbol, with_assumptions state [ equation ])
   | Tuple_value values ->
       let rec loop index state results = function
         | [] -> Ok (Vir.Tuple_result (List.rev results), state)
@@ -10922,6 +11390,8 @@ let rec value_of_result = function
   | Vir.Unit_result -> Unit_value
   | Vir.Integer_result symbol -> Integer_value (Vir.Integer_symbol symbol)
   | Vir.Boolean_result symbol -> Boolean_value (Vir.Boolean_symbol symbol)
+  | Vir.Bv_result symbol ->
+      Bit_vector_value (Result.get_ok (Vir.bv_symbol symbol))
   | Vir.Tuple_result components ->
       Tuple_value (List.map value_of_result components)
   | Vir.Parametric_result symbol -> (
@@ -10932,7 +11402,8 @@ let rec value_of_result = function
       let aggregate_type =
         match symbol.Vir.sort with
         | Vir.Aggregate aggregate_type -> aggregate_type
-        | Vir.Integer | Vir.Boolean | Vir.Parametric _ -> assert false
+        | Vir.Integer | Vir.Boolean | Vir.Bit_vector _ | Vir.Parametric _ ->
+            assert false
       in
       Aggregate_value
         { Vir.aggregate_type; aggregate_desc = Vir.Aggregate_symbol symbol }
@@ -10997,7 +11468,7 @@ let termination_clause termination summary =
             binder = Sst_validation.contract_clause_binder clause;
             payload = Sst_validation.contract_clause_expression clause;
           } )
-let lower_summary ?imports ?verification_session
+let lower_summary ?imports ?numeric_bv_source ?verification_session
     ?(finite_result_eligible = false) ?(finite_result_candidate = false)
     ?(finite_result_demand_sites = [])
     ?(formula_registry = [])
@@ -11129,6 +11600,7 @@ let lower_summary ?imports ?verification_session
     {
       validated;
       imports;
+      numeric_bv_source;
       function_ref;
       execution_definition = definition;
       current_definition = definition;
@@ -11190,6 +11662,8 @@ let lower_summary ?imports ?verification_session
       required_preceding_safety = [];
       path_condition = [];
       projection_symbols = [];
+      logical_constant_symbols = [];
+      logical_constant_equations = [];
       trusted_summary_uses = [];
       next_symbol = 0;
       next_obligation = 0;
@@ -11347,7 +11821,7 @@ let lower_summary ?imports ?verification_session
                         (Malformed_sst message))
               | ( _,
                   _,
-                  ( Unit_value | Integer_value _ | Boolean_value _
+                  ( Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _
                   | Tuple_value _ | Aggregate_value _ | Parametric_value _ | Function_value _ ) )
                 ->
                   error function_ref.function_name parameter.pattern.span
@@ -11819,9 +12293,9 @@ let lower_summary ?imports ?verification_session
           | Some origin ->
               replace_owned_contents_origin state materialized origin
           | None -> state)
-      | ( ( Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _
+      | ( ( Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _ | Tuple_value _
           | Aggregate_value _ | Parametric_value _ | Function_value _ ),
-          ( Unit_value | Integer_value _ | Boolean_value _ | Tuple_value _
+          ( Unit_value | Integer_value _ | Boolean_value _ | Bit_vector_value _ | Tuple_value _
           | Aggregate_value _ | Parametric_value _ | Function_value _ ) ) ->
           state
     in
@@ -11925,6 +12399,7 @@ let lower_summary ?imports ?verification_session
         (vir_aggregate_type_of_sst initial.parametric_adts)
       ~integer_value:(fun term -> Integer_value term)
       ~boolean_value:(fun term -> Boolean_value term)
+      ~bit_vector_value:(fun term -> Bit_vector_value term)
       ~parametric_value:(fun term -> Parametric_value term)
       ~spec_function_value:(fun function_arrow function_term ->
         Function_value
@@ -12263,6 +12738,7 @@ let lower_function (definition : Sst.function_definition) =
       Sst.policy = definition.policy;
       parametric_adts = [];
       types = [];
+      logical_constants = [];
       functions = [ definition ];
     }
   in
@@ -12428,6 +12904,9 @@ let invariant_cell_transition_prerequisites invariants
               prerequisites)
       | Sst.Callback_call _ | Sst.Callback_requires _ | Sst.Callback_ensures _
       | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
+      | Sst.Bv_literal _ | Sst.Bv_int_to_bv_mod _
+      | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+      | Sst.Bv_binary _ | Sst.Bv_compare _
       | Sst.Variable _ | Sst.Tuple_value _ | Sst.Record_value _
       | Sst.Constructor_value _ | Sst.Field_read _ | Sst.Field_write _
       | Sst.Shared_scalar_field_write _ | Sst.Lift_runtime_int _
@@ -12439,12 +12918,15 @@ let invariant_cell_transition_prerequisites invariants
       | Sst.Reveal_with_fuel _ | Sst.Local_assert _ | Sst.Proof_region _
       | Sst.Old _ | Sst.Optional_absent | Sst.Optional_present _
       | Sst.Optional_forward _ | Sst.Forall _ | Sst.Exists _
-      | Sst.Symbolic_application _ ->
+      | Sst.Symbolic_application _ | Sst.Logical_constant_reference _ ->
           prerequisites
     in
     match expression.expression_desc with
     | Sst.Forall _ | Sst.Exists _ -> prerequisites
     | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
+    | Sst.Bv_literal _ | Sst.Bv_int_to_bv_mod _
+    | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+    | Sst.Bv_binary _ | Sst.Bv_compare _
     | Sst.Variable _ | Sst.Tuple_value _ | Sst.Record_value _
     | Sst.Constructor_value _ | Sst.Field_read _ | Sst.Field_write _
     | Sst.Shared_scalar_field_write _ | Sst.Owned_tree_nested_write _
@@ -12457,7 +12939,7 @@ let invariant_cell_transition_prerequisites invariants
     | Sst.Optional_absent | Sst.Optional_present _ | Sst.Optional_forward _
     | Sst.Reveal _ | Sst.Reveal_with_fuel _ | Sst.Use_type_invariant _
     | Sst.Local_assert _ | Sst.Proof_region _ | Sst.Old _
-    | Sst.Symbolic_application _ ->
+    | Sst.Symbolic_application _ | Sst.Logical_constant_reference _ ->
         List.fold_left collect prerequisites
           (invariant_cell_expression_children expression)
   in
@@ -12522,6 +13004,7 @@ type scheduled_function = {
 type prepared_program = {
   session : Verification_session.t;
   imports : Imported_callable.registration option;
+  numeric_bv_source : Numeric_bv_source_admission_private.source option;
   program : Sst.program;
   validated : Sst_validation.validated_program;
   termination : Termination.plan;
@@ -12561,7 +13044,7 @@ let finite_result_eligible validated rank_domains type_definitions descriptor =
       | Sst.Recursive_spec_definition _ | Sst.Proof_body _
       | Sst.External_specification _ | Sst.Trusted_external_spec_target _
       | Sst.Trusted_external_body _ | Sst.Symbolic_declaration _ ),
-      ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
       | Sst.Aggregate _
       | Sst.Parameter _ | Sst.Application _ ),
       (Sst.Exec_instance | Sst.Tracked_instance | Sst.Ghost_instance) ) ->
@@ -12729,6 +13212,15 @@ let rec finite_authority_use context visited environment
   in
   match expression.expression_desc with
   | Sst.Lift_runtime_int operand -> visit operand
+  | Sst.Bv_literal _ -> (false, false)
+  | Sst.Bv_int_to_bv_mod { input; _ }
+  | Sst.Bv_to_int_unsigned input
+  | Sst.Bv_to_int_signed input
+  | Sst.Bv_not input ->
+      (false, snd (visit input))
+  | Sst.Bv_binary (_, left, right) | Sst.Bv_compare (_, left, right) ->
+      let _, demand = combine [ left; right ] in
+      (false, demand)
   | Sst.Variable { binding; _ } ->
       ( Option.value ~default:false (List.assoc_opt binding.id environment),
         false )
@@ -12841,7 +13333,8 @@ let rec finite_authority_use context visited environment
   | Sst.Forall _ | Sst.Exists _
   | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
   | Sst.Optional_absent | Sst.Mutable_read _ | Sst.Owned_tree_rebase _
-  | Sst.Reveal _ | Sst.Reveal_with_fuel _ ->
+  | Sst.Reveal _ | Sst.Reveal_with_fuel _
+  | Sst.Logical_constant_reference _ ->
       (false, false)
 let finite_ensures_require_result context descriptor =
   let definition = Sst_validation.callable_definition descriptor in
@@ -12919,6 +13412,16 @@ let rec finite_demand_analyze context caller environment
   in
   match expression.expression_desc with
   | Sst.Lift_runtime_int operand -> visit operand
+  | Sst.Bv_literal _ -> ([], [], [])
+  | Sst.Bv_int_to_bv_mod { input; _ }
+  | Sst.Bv_to_int_unsigned input
+  | Sst.Bv_to_int_signed input
+  | Sst.Bv_not input ->
+      let _, _, demands = visit input in
+      ([], [], demands)
+  | Sst.Bv_binary (_, left, right) | Sst.Bv_compare (_, left, right) ->
+      let _, _, demands = combine [ left; right ] in
+      ([], [], demands)
   | Sst.Variable { binding; _ } ->
       let origins, reconstructed =
         Option.value ~default:([], []) (List.assoc_opt binding.id environment)
@@ -13044,7 +13547,8 @@ let rec finite_demand_analyze context caller environment
   | Sst.Forall _ | Sst.Exists _
   | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
   | Sst.Optional_absent | Sst.Mutable_read _ | Sst.Owned_tree_rebase _
-  | Sst.Reveal _ | Sst.Reveal_with_fuel _ | Sst.Field_read _ ->
+  | Sst.Reveal _ | Sst.Reveal_with_fuel _ | Sst.Field_read _
+  | Sst.Logical_constant_reference _ ->
       ([], [], [])
 let finite_demand_rows context =
   List.filter_map
@@ -13169,7 +13673,7 @@ let transition_predecessor_analysis ~validated ~invariants descriptors =
             | Sst.Recursive_spec_definition _ | Sst.Proof_body _
             | Sst.External_specification _ | Sst.Trusted_external_spec_target _
             | Sst.Trusted_external_body _ | Sst.Symbolic_declaration _ ),
-            ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+            ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
             | Sst.Aggregate _
             | Sst.Parameter _ | Sst.Application _ ),
             (Sst.Exec_instance | Sst.Tracked_instance | Sst.Ghost_instance) ) ->
@@ -13326,6 +13830,44 @@ let transition_predecessor_analysis ~validated ~invariants descriptors =
     | Sst.Lift_runtime_int operand ->
         analyze caller (path @ [ "lift-runtime-int" ]) branch_depth
           environment operand
+    | Sst.Bv_literal _ -> Ok (None, environment, [])
+    | Sst.Bv_int_to_bv_mod { input; _ } ->
+        let* _, environment, sites =
+          analyze caller (path @ [ "bv:int-to-mod" ]) branch_depth environment
+            input
+        in
+        Ok (None, environment, sites)
+    | Sst.Bv_to_int_unsigned input ->
+        let* _, environment, sites =
+          analyze caller (path @ [ "bv:to-unsigned" ]) branch_depth environment
+            input
+        in
+        Ok (None, environment, sites)
+    | Sst.Bv_to_int_signed input ->
+        let* _, environment, sites =
+          analyze caller (path @ [ "bv:to-signed" ]) branch_depth environment
+            input
+        in
+        Ok (None, environment, sites)
+    | Sst.Bv_not input ->
+        let* _, environment, sites =
+          analyze caller (path @ [ "bv:not" ]) branch_depth environment input
+        in
+        Ok (None, environment, sites)
+    | Sst.Bv_binary (operation, left, right) ->
+        let* environment, sites =
+          analyze_list
+            (path @ [ "bv:" ^ Bv_operation_private.binary_name operation ])
+            environment [ left; right ]
+        in
+        Ok (None, environment, sites)
+    | Sst.Bv_compare (operation, left, right) ->
+        let* environment, sites =
+          analyze_list
+            (path @ [ "bv:" ^ Bv_operation_private.comparison_name operation ])
+            environment [ left; right ]
+        in
+        Ok (None, environment, sites)
     | Sst.Variable _ -> Ok (None, environment, [])
     | Sst.Direct_call
         { call_form = Sst.Exec_call; callee; arguments; recursive = false; _ }
@@ -13628,7 +14170,7 @@ let transition_predecessor_analysis ~validated ~invariants descriptors =
     | Sst.Forall _ | Sst.Exists _
     | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
     | Sst.Optional_absent | Sst.Mutable_read _ | Sst.Reveal _
-    | Sst.Reveal_with_fuel _ ->
+    | Sst.Reveal_with_fuel _ | Sst.Logical_constant_reference _ ->
         Ok (None, environment, [])
     | Sst.Symbolic_application application ->
         let* environment, sites =
@@ -13671,7 +14213,7 @@ let transition_predecessor_analysis ~validated ~invariants descriptors =
                sites;
          })
        base_requirements)
-let prepare_program ~imports ~session ~validated ~invariants
+let prepare_program ~imports ?numeric_bv_source ~session ~validated ~invariants
     ?(proof_entry_activations = fun (_ : Sst.function_id) -> [])
     (program : Sst.program) =
   if Sst_validation.program validated != program then
@@ -13771,7 +14313,7 @@ let prepare_program ~imports ~session ~validated ~invariants
               when Option.is_some
                      (Type_invariant.find_for_type invariants type_id) ->
                 Some edge
-            | ( ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+            | ( ( Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
                 | Sst.Tuple _ | Sst.Aggregate _
                 | Sst.Parameter _ | Sst.Application _ ),
                 (Sst.Exec_instance | Sst.Tracked_instance | Sst.Ghost_instance)
@@ -14327,6 +14869,7 @@ let prepare_program ~imports ~session ~validated ~invariants
       {
         session;
         imports;
+        numeric_bv_source;
         program;
         validated;
         termination;
@@ -14454,7 +14997,9 @@ let lower_scheduled prepared scheduled =
         error definition.function_id.function_name definition.span
           (Malformed_sst "validated callable is absent from private scheduler")
   in
-  let* lowered = lower_summary ~verification_session:prepared.session ?imports:prepared.imports ~formula_registry:prepared.formula_registry
+  let* lowered = lower_summary ~verification_session:prepared.session
+    ?imports:prepared.imports ?numeric_bv_source:prepared.numeric_bv_source
+    ~formula_registry:prepared.formula_registry
     ~proof_entry_activations:prepared.proof_entry_activations ~finite_result_eligible:scheduled.finite_result_eligible ~finite_result_candidate:scheduled.finite_result_source
     ~finite_result_demand_sites:scheduled.finite_result_demand_sites prepared.validated prepared.rank_domains prepared.invariants
     prepared.type_definitions prepared.definitions prepared.summaries prepared.termination summary in

@@ -20,6 +20,7 @@ type error_kind = Sst_validation_private.Public.error_kind =
   | Invalid_target_link of string
   | Forged_abstract_evidence of string
   | Forged_rank_domain of string
+  | Unsupported_rank_application_actual of string
   | Invalid_instance_mode of string
   | Invalid_finite_requirement of string
   | Unbound_binding of Sst.binding

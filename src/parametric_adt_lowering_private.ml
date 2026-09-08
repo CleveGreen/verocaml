@@ -448,7 +448,7 @@ let application_type_id lowered typ =
       Option.map (fun item -> Parametric_adt.type_id item.descriptor)
         (find_by_constructor lowered constructor)
   | Sst.Aggregate type_id -> Some type_id
-  | Unit | Bool | Int | Mathematical_int | Tuple _ | Parameter _ -> None
+  | Unit | Bool | Int | Mathematical_int | Bit_vector _ | Tuple _ | Parameter _ -> None
 
 let instantiate_field_type lowered ~application field =
   match application with
@@ -482,6 +482,14 @@ let instantiate_field_type lowered ~application field =
 
 let expression_children (expression : Sst.expression) =
   match expression.expression_desc with
+  | Sst.Bv_literal _ -> []
+  | Sst.Bv_int_to_bv_mod { input; _ }
+  | Sst.Bv_to_int_unsigned input
+  | Sst.Bv_to_int_signed input
+  | Sst.Bv_not input ->
+      [ input ]
+  | Sst.Bv_binary (_, left, right) | Sst.Bv_compare (_, left, right) ->
+      [ left; right ]
   | Sst.Lift_runtime_int operand -> [ operand ]
   | Sst.Tuple_value values -> List.map snd values
   | Sst.Record_value { fields; _ } -> List.map snd fields
@@ -530,7 +538,8 @@ let expression_children (expression : Sst.expression) =
       Symbolic_application_private.arguments application
   | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
   | Sst.Variable _ | Sst.Mutable_read _ | Sst.Optional_absent
-  | Sst.Owned_tree_rebase _ | Sst.Reveal _ | Sst.Reveal_with_fuel _ ->
+  | Sst.Owned_tree_rebase _ | Sst.Reveal _ | Sst.Reveal_with_fuel _
+  | Sst.Logical_constant_reference _ ->
       []
 
 let authenticate_direct_recursion ~descriptor

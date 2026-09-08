@@ -33,7 +33,7 @@ type t = {
   recursive_fields : (int option * field) list;
 }
 
-type scalar_kind = Scalar_bool | Scalar_int
+type scalar_kind = Scalar_bool | Scalar_int | Scalar_bv of Bv_width.t
 
 type option_instance = {
   option_descriptor : t;
@@ -233,7 +233,7 @@ let option_instance descriptors = function
                   option_present = present }
           | Error _ -> None)
       | Some _ | None -> None)
-  | Parametric_type.Unit | Bool | Int | Mathematical_int | Tuple _
+  | Parametric_type.Unit | Bool | Int | Mathematical_int | Bit_vector _ | Tuple _
   | Aggregate _ | Parameter _ ->
       None
 
@@ -249,7 +249,7 @@ let authenticate_optional_carrier descriptors ~carrier ~payload =
             when Parametric_type.equal instance.option_payload_type payload ->
               Ok instance
           | Some _ -> Error Optional_payload_mismatch))
-  | Parametric_type.Unit | Bool | Int | Mathematical_int | Tuple _
+  | Parametric_type.Unit | Bool | Int | Mathematical_int | Bit_vector _ | Tuple _
   | Aggregate _ | Parameter _ ->
       Error Missing_optional_descriptor
 
@@ -313,6 +313,7 @@ let deeply_immutable_instance descriptors typ =
     | Parametric_type.Bool | Parametric_type.Int
     | Parametric_type.Mathematical_int ->
         true
+    | Parametric_type.Bit_vector _ -> true
     | Parametric_type.Unit -> true
     | Parametric_type.Parameter _ -> true
     | Parametric_type.Tuple components -> List.for_all (fun (_, typ) -> immutable visiting typ) components
@@ -338,6 +339,7 @@ let deeply_immutable_instance descriptors typ =
 let scalar_kind = function
   | Parametric_type.Bool -> Some Scalar_bool
   | Parametric_type.Int -> Some Scalar_int
+  | Parametric_type.Bit_vector width -> Some (Scalar_bv width)
   | Parametric_type.Mathematical_int | Parametric_type.Unit | Tuple _
   | Aggregate _ | Parameter _ | Application _ ->
       None
@@ -375,7 +377,7 @@ let exec_scalar_layout descriptors typ =
               else None
           | (false, _ | true, Record _) -> None)
       | Some _ | None -> None)
-  | Parametric_type.Unit | Bool | Int | Mathematical_int | Tuple _
+  | Parametric_type.Unit | Bool | Int | Mathematical_int | Bit_vector _ | Tuple _
   | Aggregate _ | Parameter _ ->
       None
 

@@ -1619,6 +1619,7 @@ let frozen_execution_result (execution : Vir.function_execution) =
          match exit.Vir.result with
          | Vir.Aggregate_result symbol -> Some symbol
          | Vir.Unit_result | Vir.Integer_result _ | Vir.Boolean_result _
+         | Vir.Bv_result _
          | Vir.Parametric_result _ | Vir.Tuple_result _ ->
              None)
   |> List.sort_uniq compare
@@ -1629,7 +1630,8 @@ let frozen_execution_result (execution : Vir.function_execution) =
           Vir.aggregate_type =
             (match symbol.Vir.sort with
             | Vir.Aggregate aggregate_type -> aggregate_type
-            | Vir.Integer | Vir.Boolean | Vir.Parametric _ -> assert false);
+            | Vir.Integer | Vir.Boolean | Vir.Bit_vector _
+            | Vir.Parametric _ -> assert false);
           aggregate_desc = Vir.Aggregate_symbol symbol;
         }
   | [] | _ :: _ :: _ -> None
@@ -1930,7 +1932,8 @@ let register_frozen_formal_scope (session : t)
           | Some _ | None ->
               Error
                 "frozen-spine conditional formal has no exact same-CMT descriptor")
-      | Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Tuple _
+      | Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Bool
+      | Sst.Bit_vector _ | Sst.Tuple _
       | Sst.Parameter _
       | Sst.Application _ ->
           Error
@@ -3790,6 +3793,9 @@ let transition_of_owned_contents_origin_expression expression =
       Some transition
   | Sst.Field_write { transition = None; _ }
   | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
+  | Sst.Bv_literal _ | Sst.Bv_int_to_bv_mod _
+  | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+  | Sst.Bv_binary _ | Sst.Bv_compare _
   | Sst.Optional_absent | Sst.Optional_present _ | Sst.Optional_forward _
   | Sst.Variable _ | Sst.Tuple_value _ | Sst.Record_value _
   | Sst.Constructor_value _ | Sst.Field_read _
@@ -3801,7 +3807,8 @@ let transition_of_owned_contents_origin_expression expression =
   | Sst.Lift_runtime_int _ | Sst.Callback_ensures _ | Sst.Reveal _
   | Sst.Reveal_with_fuel _
   | Sst.Use_type_invariant _ | Sst.Local_assert _ | Sst.Proof_region _
-  | Sst.Forall _ | Sst.Exists _ | Sst.Symbolic_application _ ->
+  | Sst.Forall _ | Sst.Exists _ | Sst.Symbolic_application _
+  | Sst.Logical_constant_reference _ ->
       None
 
 let issue_successor_owned_contents_origin (session : t) ~validated ~caller
@@ -5863,7 +5870,7 @@ let callee_snapshot session ~validated ~invariants
     | Sst.Checked_exec
         { provenance = Sst.Authenticated_typedtree _ as body_provenance; _ } -> (
         match definition.result_type with
-        | (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+        | (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
           | Sst.Parameter _
           | Sst.Application _) ->
             Error "callee result is not an invariant-bearing aggregate"
@@ -5949,7 +5956,7 @@ let finite_result_snapshot session ~validated
     | Sst.Checked_exec
         { provenance = Sst.Authenticated_typedtree _ as body_provenance; _ } -> (
         match definition.result_type with
-        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
         | Sst.Parameter _ ->
             Error "finite result is not an aggregate"
         | Sst.Aggregate _ | Sst.Application _ ->
@@ -8209,7 +8216,7 @@ let consume_transition_predecessors (session : t) ~validated ~invariants ~callee
         | Sst.Aggregate type_id ->
             aggregate_type.aggregate_type_index = type_id.type_index
             && String.equal aggregate_type.aggregate_type_name type_id.type_name
-        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
         | Sst.Parameter _ | Sst.Application _ ->
             false)
     | _ -> false
@@ -10510,6 +10517,8 @@ module For_testing = struct
       path_condition = [ Vir.Boolean_constant path ];
       goal = Vir.Boolean_constant goal;
       projection_symbols = [];
+      logical_constant_instances = [];
+      logical_constant_equations = [];
     }
 
   let proof_test_execution obligations =
@@ -10797,6 +10806,8 @@ module For_testing = struct
         path_condition = [];
         goal = Vir.Boolean_constant true;
         projection_symbols = [];
+        logical_constant_instances = [];
+        logical_constant_equations = [];
       };
       {
         Vir.obligation_index = 1;
@@ -10833,6 +10844,8 @@ module For_testing = struct
         path_condition = [];
         goal = return_goal;
         projection_symbols = [ test_symbol ];
+        logical_constant_instances = [];
+        logical_constant_equations = [];
       };
     ]
 

@@ -79,6 +79,22 @@ type provider_external_specification = {
   target_link : Sst.target_link;
 }
 
+type provider_logical_constant =
+  | Provider_symbolic_logical_value of {
+      constant_symbolic : provider_callable;
+      constant_interface_receipt :
+        Retained_interface_authority_private.logical_value;
+    }
+  | Provider_defined_logical_value of {
+      constant_path : string;
+      constant_uid : string;
+      constant_definition : Sst.logical_constant_definition;
+      constant_dependency_closure : string;
+      constant_trust_dependencies : string list;
+      constant_interface_receipt :
+        Retained_interface_authority_private.logical_value;
+    }
+
 type provider_description = {
   unit_name : string;
   interface_digest : string;
@@ -90,6 +106,7 @@ type provider_description = {
   broadcast_groups : provider_broadcast_group list;
   types : provider_type list;
   logical_sorts : Logical_sort_private.t list;
+  logical_constants : provider_logical_constant list;
   external_specifications : provider_external_specification list;
 }
 
@@ -126,6 +143,32 @@ type type_snapshot = {
   definition : Sst.type_definition;
   parametric_descriptor : Parametric_adt.t option;
 }
+
+type logical_constant_route = {
+  logical_constant_path : string;
+  logical_constant_uid : string;
+}
+
+type logical_constant_snapshot =
+  | Imported_symbolic_logical_value of {
+      symbolic : callable_snapshot;
+      routes : logical_constant_route list;
+      provenance : Retained_interface_authority_private.logical_value;
+      source_definition : Sst.function_definition;
+      source_signature : Parametric_signature_private.t;
+    }
+  | Imported_defined_logical_value of {
+      routes : logical_constant_route list;
+      definition : Sst.logical_constant_definition;
+      semantic_authority : Sst.logical_constant_definition;
+      dependency_closure : string;
+      trust_dependencies : string list;
+      provider_unit : string;
+      provider_interface : string;
+      provider_source : string;
+      provider_family : string;
+      provider_import : string;
+    }
 
 type external_specification_snapshot = {
   definition : Sst.function_definition;
@@ -168,6 +211,7 @@ type environment = {
   broadcast_groups : broadcast_group_snapshot list;
   types : type_snapshot list;
   logical_sorts : Logical_sort_private.t list;
+  logical_constants : logical_constant_snapshot list;
   external_specifications : external_specification_snapshot list;
   snapshot : string;
 }
@@ -234,6 +278,16 @@ let stable_index namespace name =
 let simple_binding = function
   | { Sst.pattern_desc = Sst.Bind binding; _ } -> Some binding
   | _ -> None
+
+let symbolic_logical_callables (description : provider_description) =
+  description.logical_constants
+  |> List.filter_map (function
+       | Provider_symbolic_logical_value { constant_symbolic; _ } ->
+           Some constant_symbolic
+       | Provider_defined_logical_value _ -> None)
+
+let all_provider_callables (description : provider_description) =
+  description.callables @ symbolic_logical_callables description
 
 let validate_callable (callable : provider_callable) =
   let definition = callable.definition in
@@ -460,6 +514,16 @@ let fresh_function_id (provider : provider_description)
     function_name = resolved_path;
   }
 
+let fresh_constant_id (provider : provider_description)
+    (definition : Sst.logical_constant_definition) =
+  let source = definition.constant_id in
+  { source with
+    Sst.constant_index =
+      stable_index provider.unit_name
+        ("logical-value:" ^ source.constant_origin.origin_digest);
+    constant_name =
+      provider.unit_name ^ "." ^ source.constant_name }
+
 let same_provider_identity left right =
   String.equal left.description.unit_name right.description.unit_name
   && String.equal left.description.interface_digest
@@ -490,7 +554,16 @@ let dependency_closure provider =
               collect (dependency :: collected)
                 (dependency.direct_dependencies @ rest)
   in
-  collect [] provider.direct_dependencies
+  Result.map
+    (List.sort (fun left right ->
+         compare
+           ( left.description.unit_name,
+             left.description.interface_digest,
+             left.snapshot )
+           ( right.description.unit_name,
+             right.description.interface_digest,
+             right.snapshot )))
+    (collect [] provider.direct_dependencies)
 
 let normalize_id_map ~kind ~name entries =
   let rec collect normalized = function
@@ -557,7 +630,7 @@ let function_map provider =
   let local_definitions =
     List.map
       (fun (callable : provider_callable) -> callable.definition)
-      description.callables
+      (all_provider_callables description)
     @ List.map
         (fun (specification : provider_external_specification) ->
           specification.definition)
@@ -579,12 +652,43 @@ let function_map provider =
               fresh_function_id dependency.description callable.definition
             in
             (identity, identity))
-          dependency.description.callables)
+          (all_provider_callables dependency.description))
       dependencies
   in
   normalize_id_map ~kind:"function"
     ~name:(fun id ->
       Printf.sprintf "%s#%d" id.Sst.function_name id.function_index)
+    (local @ inherited)
+
+let constant_map provider =
+  let local =
+    List.filter_map
+      (function
+        | Provider_defined_logical_value constant ->
+            Some
+              (constant.constant_definition.Sst.constant_id,
+               fresh_constant_id provider.description
+                 constant.constant_definition)
+        | Provider_symbolic_logical_value _ -> None)
+      provider.description.logical_constants
+  in
+  let* dependencies = dependency_closure provider in
+  let inherited =
+    dependencies
+    |> List.concat_map (fun dependency ->
+           List.filter_map
+             (function
+               | Provider_defined_logical_value constant ->
+                   let identity =
+                     fresh_constant_id dependency.description
+                       constant.constant_definition
+                   in
+                   Some (identity, identity)
+               | Provider_symbolic_logical_value _ -> None)
+             dependency.description.logical_constants)
+  in
+  normalize_id_map ~kind:"logical constant"
+    ~name:(fun id -> id.Sst.constant_origin.origin_digest)
     (local @ inherited)
 
 let mapped_type_id (type_ids : (Sst.type_id * Sst.type_id) list)
@@ -608,11 +712,20 @@ let mapped_function_id
            "provider closure references unmapped private function %s#%d"
            id.Sst.function_name id.function_index)
 
+let mapped_constant_id constant_ids id =
+  match List.assoc_opt id constant_ids with
+  | Some mapped -> mapped
+  | None ->
+      mapping_error
+        ("provider closure references unmapped logical constant "
+        ^ id.Sst.constant_origin.origin_digest)
+
 let rec map_typ type_ids = function
   | Sst.Unit -> Sst.Unit
   | Sst.Bool -> Sst.Bool
   | Sst.Int -> Sst.Int
   | Sst.Mathematical_int -> Sst.Mathematical_int
+  | Sst.Bit_vector width -> Sst.Bit_vector width
   | Sst.Tuple components ->
       Sst.Tuple
         (List.map
@@ -692,7 +805,8 @@ let symbolic_declaration_map provider type_ids function_ids =
           type_ids function_ids rest
   in
   let* mapped =
-    local [] type_ids function_ids provider.description.callables
+    local [] type_ids function_ids
+      (all_provider_callables provider.description)
   in
   let* dependencies = dependency_closure provider in
   let rec inherited mapped = function
@@ -702,7 +816,7 @@ let symbolic_declaration_map provider type_ids function_ids =
         let* dependency_functions = function_map dependency in
         let* declarations =
           local [] dependency_types dependency_functions
-            dependency.description.callables
+            (all_provider_callables dependency.description)
         in
         let identities =
           List.map (fun (_, declaration) -> (declaration, declaration)) declarations
@@ -876,16 +990,17 @@ let map_shared_transition type_ids function_ids offset
     shared_target_field = map_field_id type_ids transition.shared_target_field;
   }
 
-let rec map_expression type_ids function_ids symbolic_declarations offset
+let rec map_expression type_ids function_ids constant_ids symbolic_declarations offset
     expression =
   let recurse =
-    map_expression type_ids function_ids symbolic_declarations offset
+    map_expression type_ids function_ids constant_ids symbolic_declarations offset
   in
   let expression_desc =
     match expression.Sst.expression_desc with
     | Sst.Int_constant value -> Sst.Int_constant value
     | Sst.Bool_constant value -> Sst.Bool_constant value
     | Sst.Unit_constant -> Sst.Unit_constant
+    | Sst.Bv_literal value -> Sst.Bv_literal value
     | Sst.Variable { binding; use_uniqueness } ->
         Sst.Variable
           { binding = map_binding type_ids offset binding; use_uniqueness }
@@ -972,6 +1087,15 @@ let rec map_expression type_ids function_ids symbolic_declarations offset
                 })
               cases )
     | Sst.Lift_runtime_int operand -> Sst.Lift_runtime_int (recurse operand)
+    | Sst.Bv_int_to_bv_mod conversion ->
+        Sst.Bv_int_to_bv_mod { conversion with input = recurse conversion.input }
+    | Sst.Bv_to_int_unsigned operand -> Sst.Bv_to_int_unsigned (recurse operand)
+    | Sst.Bv_to_int_signed operand -> Sst.Bv_to_int_signed (recurse operand)
+    | Sst.Bv_not operand -> Sst.Bv_not (recurse operand)
+    | Sst.Bv_binary (operation, left, right) ->
+        Sst.Bv_binary (operation, recurse left, recurse right)
+    | Sst.Bv_compare (operation, left, right) ->
+        Sst.Bv_compare (operation, recurse left, recurse right)
     | Sst.Checked_arithmetic (operation, operands) ->
         Sst.Checked_arithmetic (operation, List.map recurse operands)
     | Sst.Compare (operation, left, right) ->
@@ -996,6 +1120,9 @@ let rec map_expression type_ids function_ids symbolic_declarations offset
         | Sst.Forall _ -> Sst.Forall quantifier
         | Sst.Exists _ -> Sst.Exists quantifier
         | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
+        | Sst.Bv_literal _ | Sst.Bv_int_to_bv_mod _
+        | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+        | Sst.Bv_binary _ | Sst.Bv_compare _
         | Sst.Variable _ | Sst.Tuple_value _ | Sst.Record_value _
         | Sst.Constructor_value _ | Sst.Field_read _ | Sst.Field_write _
         | Sst.Shared_scalar_field_write _ | Sst.Owned_tree_nested_write _
@@ -1007,6 +1134,7 @@ let rec map_expression type_ids function_ids symbolic_declarations offset
         | Sst.Callback_call _ | Sst.Callback_requires _
         | Sst.Callback_ensures _ | Sst.Optional_absent
         | Sst.Symbolic_application _
+        | Sst.Logical_constant_reference _
         | Sst.Optional_present _ | Sst.Optional_forward _ | Sst.Reveal _
         | Sst.Reveal_with_fuel _ | Sst.Use_type_invariant _
         | Sst.Local_assert _ | Sst.Proof_region _ | Sst.Old _ ->
@@ -1078,6 +1206,12 @@ let rec map_expression type_ids function_ids symbolic_declarations offset
           | Error message ->
               mapping_error
                 ("invalid imported symbolic application: " ^ message))
+    | Sst.Logical_constant_reference reference ->
+        Sst.Logical_constant_reference
+          {
+            constant = mapped_constant_id constant_ids reference.constant;
+            type_arguments = List.map (map_typ type_ids) reference.type_arguments;
+          }
     | Sst.Reveal id -> Sst.Reveal (mapped_function_id function_ids id)
     | Sst.Reveal_with_fuel { function_id; literal_depth } ->
         Sst.Reveal_with_fuel
@@ -1097,22 +1231,22 @@ let rec map_expression type_ids function_ids symbolic_declarations offset
   in
   { expression with Sst.expression_desc; typ = map_typ type_ids expression.typ }
 
-let map_staged type_ids function_ids symbolic_declarations offset
+let map_staged type_ids function_ids constant_ids symbolic_declarations offset
     (staged : Sst.staged_expression) =
   {
     staged with
     Sst.expression =
-      map_expression type_ids function_ids symbolic_declarations offset
+      map_expression type_ids function_ids constant_ids symbolic_declarations offset
         staged.expression;
   }
 
-let map_contracts type_ids function_ids symbolic_declarations offset
+let map_contracts type_ids function_ids constant_ids symbolic_declarations offset
     (contracts : Sst.contracts) =
   let predicate (clause : Sst.predicate_clause) =
     {
       clause with
       Sst.predicate =
-        map_staged type_ids function_ids symbolic_declarations offset
+        map_staged type_ids function_ids constant_ids symbolic_declarations offset
           clause.predicate;
     }
   in
@@ -1121,7 +1255,7 @@ let map_contracts type_ids function_ids symbolic_declarations offset
       clause with
       Sst.binder = Option.map (map_pattern type_ids offset) clause.binder;
       predicate =
-        map_staged type_ids function_ids symbolic_declarations offset
+        map_staged type_ids function_ids constant_ids symbolic_declarations offset
           clause.predicate;
     }
   in
@@ -1164,7 +1298,7 @@ let map_type_definition type_ids (definition : Sst.type_definition) =
     representation = Sst.Revealed;
   }
 
-let transform_callable type_ids function_ids symbolic_declarations
+let transform_callable type_ids function_ids constant_ids symbolic_declarations
     (provider : provider_description) (callable : provider_callable) =
   [%log.trace "transform imported callable broadcast metadata"
     ~provider:(Delator.Field.string provider.unit_name)
@@ -1190,7 +1324,7 @@ let transform_callable type_ids function_ids symbolic_declarations
                         Sst.optional_pattern =
                           map_pattern type_ids offset default.optional_pattern;
                         optional_expression =
-                          map_expression type_ids function_ids
+                          map_expression type_ids function_ids constant_ids
                             symbolic_declarations offset
                             default.optional_expression;
                       })
@@ -1208,7 +1342,7 @@ let transform_callable type_ids function_ids symbolic_declarations
     | Sst.Spec_definition body when Option.is_none callable.model ->
         Ok
           (Sst.Spec_definition
-             (map_staged type_ids function_ids symbolic_declarations offset
+             (map_staged type_ids function_ids constant_ids symbolic_declarations offset
                 body))
     | (Sst.Spec_definition _ as body) -> Ok body
     | (Sst.Checked_exec _ | Sst.Proof_body _
@@ -1226,7 +1360,7 @@ let transform_callable type_ids function_ids symbolic_declarations
       recursive = source.recursive;
       parameters;
       contracts =
-        map_contracts type_ids function_ids symbolic_declarations offset
+        map_contracts type_ids function_ids constant_ids symbolic_declarations offset
           source.contracts;
       body;
       result_type = map_typ type_ids source.result_type;
@@ -1291,6 +1425,7 @@ let transform_callable type_ids function_ids symbolic_declarations
            Sst.policy = definition.policy;
            parametric_adts = [];
            types = [];
+           logical_constants = [];
            functions = [ definition ];
          }
       ^ callable.binding_uid ^ provider.interface_digest
@@ -1333,7 +1468,7 @@ let transform_callable type_ids function_ids symbolic_declarations
       model;
     }
 
-let transform_external_specification type_ids function_ids
+let transform_external_specification type_ids function_ids constant_ids
     symbolic_declarations (provider : provider_description)
     (specification : provider_external_specification) =
   let source = specification.definition in
@@ -1355,7 +1490,7 @@ let transform_external_specification type_ids function_ids
                         Sst.optional_pattern =
                           map_pattern type_ids offset default.optional_pattern;
                         optional_expression =
-                          map_expression type_ids function_ids
+                          map_expression type_ids function_ids constant_ids
                             symbolic_declarations offset
                             default.optional_expression;
                       })
@@ -1369,7 +1504,7 @@ let transform_external_specification type_ids function_ids
       Sst.function_id;
       parameters;
       contracts =
-        map_contracts type_ids function_ids symbolic_declarations offset
+        map_contracts type_ids function_ids constant_ids symbolic_declarations offset
           source.contracts;
       result_type = map_typ type_ids source.result_type;
       returns_unique_parameter = None;
@@ -1389,6 +1524,93 @@ let transform_external_specification type_ids function_ids
       provider_unit = provider.unit_name;
       provider_interface = provider.interface_digest;
     }
+
+let transform_logical_constant type_ids function_ids constant_ids
+    symbolic_declarations (provider : provider_description)
+    (constant : provider_logical_constant) =
+  match constant with
+  | Provider_symbolic_logical_value
+      { constant_symbolic; constant_interface_receipt } ->
+      let* callable =
+        transform_callable type_ids function_ids constant_ids
+          symbolic_declarations provider constant_symbolic
+      in
+      Ok
+        (Imported_symbolic_logical_value
+           { symbolic = callable;
+             routes =
+               [ { logical_constant_path = callable.path;
+                   logical_constant_uid = callable.binding_uid } ];
+             provenance = constant_interface_receipt;
+             source_definition = constant_symbolic.definition;
+             source_signature = constant_symbolic.signature })
+  | Provider_defined_logical_value constant ->
+      let source = constant.constant_definition in
+      let constant_id = mapped_constant_id constant_ids source.constant_id in
+      let owner =
+        Parametric_type.owner ~index:constant_id.Sst.constant_index
+          ~name:constant_id.Sst.constant_name
+      in
+      let type_binders =
+        Parametric_type.binders owner (List.length source.constant_type_binders)
+      in
+      let substitutions =
+        List.map2
+          (fun old replacement ->
+            (old, Parametric_type.Parameter replacement))
+          source.constant_type_binders type_binders
+      in
+      let substitute typ = Parametric_type.substitute substitutions typ in
+      let map_type typ = map_typ type_ids (substitute typ) in
+      let offset = binding_offset provider.unit_name in
+      let map_expression expression =
+        expression
+        |> Sst.map_expression_types substitute
+        |> map_expression type_ids function_ids constant_ids
+             symbolic_declarations offset
+      in
+      let* semantic_authority =
+        Logical_constant_private.remap_authenticated ~definition:source
+          ~constant_id ~type_binders
+          ~trust_dependencies:constant.constant_trust_dependencies ~map_type
+          ~map_expression
+      in
+      let equation_available =
+        Option.is_some semantic_authority.Sst.constant_equation
+      in
+      let definition =
+        if equation_available then
+          { semantic_authority with
+            Sst.constant_provenance = Sst.Opaque_defined_identity;
+            constant_equation = None }
+        else semantic_authority
+      in
+      [%log.debug "transported logical value equation availability without activation"
+        ~provider:(Delator.Field.string provider.unit_name)
+        ~route:(Delator.Field.string constant.constant_path)
+        ~stage:(Delator.Field.string "logical-value-import")
+        ~equation_available:(Delator.Field.bool equation_available)
+        ~activation_policy:(Delator.Field.string "deferred-to-reveal-capability")
+        ~dependency_closure:
+          (Delator.Field.string constant.constant_dependency_closure)
+        ~trust_dependency_count:
+          (Delator.Field.int
+             (List.length constant.constant_trust_dependencies))
+        ~decision:(Delator.Field.string "transported-inactive")];
+      Ok
+        (Imported_defined_logical_value
+           { routes =
+               [ { logical_constant_path = constant.constant_path;
+                   logical_constant_uid = constant.constant_uid } ];
+             definition;
+             semantic_authority;
+             dependency_closure = constant.constant_dependency_closure;
+             trust_dependencies = constant.constant_trust_dependencies;
+             provider_unit = provider.unit_name;
+             provider_interface = provider.interface_digest;
+             provider_source = provider.source_digest;
+             provider_family = provider.family_digest;
+             provider_import = provider.import_digest })
 
 let provider_snapshot implementation program description direct_dependencies =
   String.concat "|"
@@ -1412,14 +1634,16 @@ let provider_snapshot implementation program description direct_dependencies =
                  marker.symbolic_type_digest;
                  marker.symbolic_typed_abi;
                ])
-           implementation.Cmt_input.interface_symbolic_declarations);
+           implementation.Cmt_input.interface_symbolic_declarations
+        |> List.sort String.compare);
       String.concat ","
         (List.map
            (fun (callable : provider_callable) ->
              callable.resolved_path ^ "#" ^ callable.binding_uid ^ "#"
              ^ Parametric_signature_private.semantic_fingerprint
                  callable.signature)
-           description.callables);
+           description.callables
+        |> List.sort String.compare);
       String.concat ","
         (List.map
            (fun (specification : provider_external_specification) ->
@@ -1440,7 +1664,8 @@ let provider_snapshot implementation program description direct_dependencies =
              Parametric_signature_private.semantic_fingerprint
                specification.signature
              ^ "#" ^ target)
-           description.external_specifications);
+           description.external_specifications
+        |> List.sort String.compare);
       String.concat ","
         (List.map
            (fun declaration ->
@@ -1449,7 +1674,8 @@ let provider_snapshot implementation program description direct_dependencies =
              ^ "#"
              ^ Parametric_signature_private.semantic_fingerprint
                  declaration.broadcast_signature)
-           description.broadcast_declarations);
+           description.broadcast_declarations
+        |> List.sort String.compare);
       String.concat ","
         (List.map
            (fun group ->
@@ -1469,17 +1695,37 @@ let provider_snapshot implementation program description direct_dependencies =
                       ^ Option.value ~default:"local"
                           source.broadcast_source_authority_index)
                     group.broadcast_sources))
-           description.broadcast_groups);
+           description.broadcast_groups
+        |> List.sort String.compare);
       String.concat ","
         (List.map Logical_sort_private.canonical_material
            (List.sort Logical_sort_private.compare description.logical_sorts));
+      String.concat ","
+        (description.logical_constants
+        |> List.map (function
+             | Provider_symbolic_logical_value
+                 { constant_symbolic; constant_interface_receipt } ->
+                 constant_symbolic.resolved_path ^ "#"
+                 ^ constant_symbolic.binding_uid ^ "#symbolic#"
+                 ^ constant_interface_receipt.logical_value_descriptor_receipt
+             | Provider_defined_logical_value constant ->
+                 constant.constant_path ^ "#" ^ constant.constant_uid ^ "#"
+                 ^ constant.constant_definition.Sst.constant_descriptor_digest
+                 ^ "#"
+                 ^ constant.constant_dependency_closure
+                 ^ "#"
+                 ^ String.concat "," constant.constant_trust_dependencies
+                 ^ "#"
+                 ^ constant.constant_interface_receipt.logical_value_descriptor_receipt)
+        |> List.sort String.compare);
       String.concat ","
         (List.map
            (fun dependency ->
              require_provider dependency;
              dependency.description.unit_name ^ ":"
              ^ dependency.description.interface_digest)
-           direct_dependencies);
+           direct_dependencies
+        |> List.sort String.compare);
     ]
 
 let validate_provider_external_specification
@@ -1525,10 +1771,17 @@ let validate_description (description : provider_description) =
     List.exists
       (fun (callable : provider_callable) ->
         String.equal callable.binding_uid "")
-      description.callables
+      (all_provider_callables description)
     || List.exists
          (fun (typ : provider_type) -> String.equal typ.binding_uid "")
          description.types
+    || List.exists
+         (function
+           | Provider_symbolic_logical_value { constant_symbolic; _ } ->
+               String.equal constant_symbolic.binding_uid ""
+           | Provider_defined_logical_value constant ->
+               String.equal constant.constant_uid "")
+         description.logical_constants
   then Error "[VERO_DEPENDENCY] retained provider compiler UID is incomplete"
   else
     let duplicate values =
@@ -1555,11 +1808,11 @@ let validate_description (description : provider_description) =
       duplicate
         (List.map
            (fun (callable : provider_callable) -> callable.resolved_path)
-           description.callables)
+           (all_provider_callables description))
       || duplicate
            (List.map
               (fun (callable : provider_callable) -> callable.binding_uid)
-              description.callables)
+              (all_provider_callables description))
     then
       Error
         "[VERO_DEPENDENCY] retained provider has conflicting callable identities"
@@ -1746,7 +1999,7 @@ let symbolic_interface_authority ~program
         | Sst.External_specification _ | Sst.Trusted_external_spec_target _
         | Sst.Trusted_external_body _ ->
             false)
-      description.callables
+      (all_provider_callables description)
   in
   let markers = implementation.interface_symbolic_declarations in
   let[@log_value.debug] _correlation =
@@ -1777,7 +2030,7 @@ let symbolic_interface_authority ~program
         Error "symbolic completed descriptor has an invalid formal label vector"
   in
   let rec canonical_abi_type = function
-    | (Parametric_type.Unit | Bool | Int | Mathematical_int | Parameter _) as typ ->
+    | (Parametric_type.Unit | Bool | Int | Mathematical_int | Bit_vector _ | Parameter _) as typ ->
         Ok typ
     | Tuple components ->
         List.fold_left
@@ -2028,7 +2281,34 @@ let description_matches_program program (description : provider_description) =
       (fun definition -> definition = specification.definition)
       program.Sst.functions
   in
+  let constant_matches = function
+    | Provider_symbolic_logical_value { constant_symbolic; _ } ->
+        callable_matches constant_symbolic
+    | Provider_defined_logical_value constant ->
+        let definition = constant.constant_definition in
+        (match definition.Sst.constant_provenance with
+        | Sst.Opaque_defined_identity ->
+            List.exists
+              (fun source ->
+                Result.is_ok
+                  (Logical_constant_private.authenticate_definition source)
+                &&
+                { source with
+                  Sst.constant_provenance = Opaque_defined_identity;
+                  constant_equation = None }
+                = definition)
+              program.Sst.logical_constants
+        | Sst.Verified_definitional_equation ->
+            List.exists
+              (fun source ->
+                Result.is_ok
+                  (Logical_constant_private.authenticate_definition source)
+                && source = definition)
+              program.Sst.logical_constants
+        | Sst.Uninterpreted_symbolic -> false)
+  in
   List.for_all callable_matches description.callables
+  && List.for_all constant_matches description.logical_constants
   && List.for_all external_matches description.external_specifications
 
 let symbolic_provider implementation (description : provider_description) =
@@ -2042,7 +2322,7 @@ let symbolic_provider implementation (description : provider_description) =
          | Sst.External_specification _ | Sst.Trusted_external_spec_target _
          | Sst.Trusted_external_body _ ->
              false)
-       description.callables
+       (all_provider_callables description)
 
 let broadcast_provider implementation (description : provider_description) =
   implementation.Cmt_input.interface_broadcasts <> []
@@ -2283,6 +2563,43 @@ let logical_sort_interface_authority (implementation [@delator.skip])
 [@@delator.level debug]
 [@@delator.no_exn_log]
 
+let logical_value_interface_authority (implementation [@delator.skip])
+    ((description : provider_description) [@delator.skip]) =
+  let described =
+    description.logical_constants
+    |> List.map (function
+         | Provider_symbolic_logical_value { constant_interface_receipt; _ }
+         | Provider_defined_logical_value { constant_interface_receipt; _ } ->
+             constant_interface_receipt)
+    |> List.sort compare
+  and interface =
+    List.sort compare implementation.Cmt_input.interface_logical_values
+  and retained =
+    implementation.Cmt_input.retained_authority
+    |> Option.fold ~none:[]
+         ~some:Retained_interface_authority_private.logical_values
+    |> List.sort compare
+  in
+  let accepted = described = interface && interface = retained in
+  (if accepted then
+     [%log.info "validated retained logical-value provider envelope"
+       ~provider:(Delator.Field.string description.unit_name)
+       ~stage:(Delator.Field.string "logical-value-provider-seal")
+       ~descriptor_count:(Delator.Field.int (List.length described))
+       ~decision:(Delator.Field.string "accepted")]
+   else
+     [%log.warn "rejected retained logical-value provider envelope"
+       ~provider:(Delator.Field.string description.unit_name)
+       ~stage:(Delator.Field.string "logical-value-provider-seal")
+       ~description_count:(Delator.Field.int (List.length described))
+       ~interface_count:(Delator.Field.int (List.length interface))
+       ~authority_count:(Delator.Field.int (List.length retained))
+       ~decision:(Delator.Field.string "rejected")
+       ~reason_class:(Delator.Field.string "exact-set-mismatch")]);
+  if accepted then Ok ()
+  else Error "[VERO_DEPENDENCY] provider logical-value authority differs"
+[@@delator.instrument] [@@delator.level debug] [@@delator.no_exn_log]
+
 let seal_error ~implementation ~description ~cause_class:_cause_class
     ~failure_class message =
   let correlation = symbolic_provider_correlation implementation description in
@@ -2425,6 +2742,15 @@ let seal_provider_with_diagnostic
                (Artifact_seal_failure Diagnostic.Mismatched_provider_artifact)
              "provider logical-sort artifacts do not match this build")
     | Ok () -> (
+    match logical_value_interface_authority implementation provider with
+    | Error _message ->
+        Error
+          (seal_error ~implementation ~description:provider
+             ~cause_class:"logical-value-interface-set-mismatch"
+             ~failure_class:
+               (Artifact_seal_failure Diagnostic.Mismatched_provider_artifact)
+             "provider logical-value artifacts do not match this build")
+    | Ok () -> (
     match symbolic_interface_authority ~program implementation provider with
     | Error _message ->
         Error
@@ -2492,7 +2818,7 @@ let seal_provider_with_diagnostic
                 provider_completion;
                 description = provider;
                 snapshot;
-              }))))
+              })))))
 [@@delator.instrument]
 [@@delator.level debug]
 [@@delator.no_exn_log]
@@ -2529,10 +2855,21 @@ let descriptions providers =
       provider.description)
     providers
 
+let compare_provider left right =
+  compare
+    ( left.description.unit_name,
+      left.description.interface_digest,
+      left.snapshot )
+    ( right.description.unit_name,
+      right.description.interface_digest,
+      right.snapshot )
+
 type provider_mapping = {
   mapping_description : provider_description;
   mapping_type_ids : (Sst.type_id * Sst.type_id) list;
   mapping_function_ids : (Sst.function_id * Sst.function_id) list;
+  mapping_constant_ids :
+    (Sst.logical_constant_id * Sst.logical_constant_id) list;
   mapping_symbolic_declarations :
     (Symbolic_application_private.declaration
     * Symbolic_application_private.declaration)
@@ -2542,6 +2879,7 @@ type provider_mapping = {
 let mapping_for_provider provider =
   let* mapping_type_ids = type_map provider in
   let* mapping_function_ids = function_map provider in
+  let* mapping_constant_ids = constant_map provider in
   let* mapping_symbolic_declarations =
     symbolic_declaration_map provider mapping_type_ids mapping_function_ids
   in
@@ -2550,6 +2888,7 @@ let mapping_for_provider provider =
       mapping_description = provider.description;
       mapping_type_ids;
       mapping_function_ids;
+      mapping_constant_ids;
       mapping_symbolic_declarations;
     }
 
@@ -2576,12 +2915,15 @@ let provider_closure providers =
     | None ->
         List.fold_left add (provider :: collected) provider.direct_dependencies
   in
-  List.fold_left add [] providers |> List.rev
+  List.fold_left add [] providers |> List.sort compare_provider
 
 let create_unchecked providers =
+  let providers = List.sort compare_provider providers in
+  let closure_providers = provider_closure providers in
+  let closure_descriptions = descriptions closure_providers in
   let descriptions = descriptions providers in
   let logical_sorts =
-    descriptions
+    closure_descriptions
     |> List.concat_map (fun (description : provider_description) ->
            description.logical_sorts)
     |> List.sort Logical_sort_private.compare
@@ -2623,7 +2965,7 @@ let create_unchecked providers =
                     Some (provider.unit_name, descriptor)
                 | Parametric_adt.Local _ -> None))
           provider.types)
-      descriptions
+      closure_descriptions
   in
   let rec overlapping = function
     | [] -> None
@@ -2665,7 +3007,7 @@ let create_unchecked providers =
         let* mapping = mapping_for_provider provider in
         mappings (mapping :: mapped) rest
   in
-  let* mappings = mappings [] providers in
+  let* mappings = mappings [] closure_providers in
   let importable_type (_provider : provider_description)
       (_typ : provider_type) =
     true
@@ -2713,6 +3055,7 @@ let create_unchecked providers =
               match
                 transform_callable scope.mapping_type_ids
                   scope.mapping_function_ids
+                  scope.mapping_constant_ids
                   scope.mapping_symbolic_declarations provider callable
               with
               | Error _ as error -> error
@@ -2730,25 +3073,202 @@ let create_unchecked providers =
               let* specification =
                 transform_external_specification scope.mapping_type_ids
                   scope.mapping_function_ids
+                  scope.mapping_constant_ids
                   scope.mapping_symbolic_declarations provider specification
               in
               one (specification :: mapped) tail
         in
         one mapped provider.external_specifications
   in
+  let rec map_logical_constants mapped = function
+    | [] -> Ok (List.rev mapped)
+    | scope :: rest ->
+        let provider = scope.mapping_description in
+        let rec one mapped = function
+          | [] -> map_logical_constants mapped rest
+          | constant :: tail ->
+              let* constant =
+                transform_logical_constant scope.mapping_type_ids
+                  scope.mapping_function_ids scope.mapping_constant_ids
+                  scope.mapping_symbolic_declarations provider constant
+              in
+              one (constant :: mapped) tail
+        in
+        one mapped provider.logical_constants
+  in
   let* mapped_types = map_types [] mappings in
   let* mapped_callables = map_callables [] mappings in
   let* mapped_external_specifications =
     map_external_specifications [] mappings
   in
-  let closure_providers = provider_closure providers in
-  let rec map_closure mapped = function
-    | [] -> Ok (List.rev mapped)
-    | provider :: rest ->
-        let* mapping = mapping_for_provider provider in
-        map_closure (mapping :: mapped) rest
+  let closure_mappings = mappings in
+  let* mapped_logical_constants =
+    map_logical_constants [] closure_mappings
   in
-  let* closure_mappings = map_closure [] closure_providers in
+  let origin_key = function
+    | Imported_defined_logical_value constant ->
+        constant.semantic_authority.Sst.constant_id.constant_origin.origin_digest
+    | Imported_symbolic_logical_value { source_definition; _ } -> (
+        match source_definition.Sst.body with
+        | Sst.Symbolic_declaration declaration ->
+            Symbolic_application_private.declaration_identity_material
+              declaration
+        | Sst.Checked_exec _ | Sst.Spec_definition _
+        | Sst.Recursive_spec_definition _ | Sst.Proof_body _
+        | Sst.External_specification _ | Sst.Trusted_external_spec_target _
+        | Sst.Trusted_external_body _ ->
+            invalid_arg
+              "authenticated symbolic logical value lost its declaration")
+  in
+  let route_key route =
+    route.logical_constant_path ^ "#" ^ route.logical_constant_uid
+  in
+  let routes = function
+    | Imported_defined_logical_value constant -> constant.routes
+    | Imported_symbolic_logical_value constant -> constant.routes
+  in
+  let semantic_authority_equal left right =
+    match (left, right) with
+    | ( Imported_defined_logical_value left,
+        Imported_defined_logical_value right ) ->
+        left.definition = right.definition
+        && left.semantic_authority = right.semantic_authority
+        && String.equal left.dependency_closure right.dependency_closure
+        && left.trust_dependencies = right.trust_dependencies
+        && String.equal left.provider_unit right.provider_unit
+        && String.equal left.provider_interface right.provider_interface
+        && String.equal left.provider_source right.provider_source
+        && String.equal left.provider_family right.provider_family
+        && String.equal left.provider_import right.provider_import
+    | ( Imported_symbolic_logical_value left,
+        Imported_symbolic_logical_value right ) ->
+        left.source_definition = right.source_definition
+        && left.source_signature = right.source_signature
+        && left.provenance = right.provenance
+        && { left.symbolic with path = ""; binding_uid = "" }
+           = { right.symbolic with path = ""; binding_uid = "" }
+    | Imported_defined_logical_value _, Imported_symbolic_logical_value _
+    | Imported_symbolic_logical_value _, Imported_defined_logical_value _ ->
+        false
+  in
+  (* The structural comparison covers every route, semantic, provenance, and
+     receipt field. Collision policy below deliberately uses narrower keys. *)
+  let mapped_logical_constants =
+    List.sort Stdlib.compare mapped_logical_constants
+  in
+  let with_routes constant routes =
+    let routes =
+      List.sort_uniq
+        (fun left right -> String.compare (route_key left) (route_key right))
+        routes
+    in
+    match constant with
+    | Imported_defined_logical_value value ->
+        Imported_defined_logical_value { value with routes }
+    | Imported_symbolic_logical_value value ->
+        Imported_symbolic_logical_value { value with routes }
+  in
+  let rec coalesce_constants
+      (accepted : logical_constant_snapshot list) = function
+    | [] -> Ok (List.rev accepted)
+    | (constant : logical_constant_snapshot) :: rest ->
+        let origin = origin_key constant in
+        let same_origin (candidate : logical_constant_snapshot) =
+          String.equal origin (origin_key candidate)
+        in
+        let incoming_routes = routes constant in
+        let route_conflict =
+          List.find_map
+            (fun route ->
+              List.find_map
+                (fun candidate ->
+                  if
+                    List.exists
+                      (fun candidate_route ->
+                        String.equal (route_key route)
+                          (route_key candidate_route))
+                      (routes candidate)
+                    &&
+                    (not (same_origin candidate)
+                    || not (semantic_authority_equal constant candidate))
+                  then Some route
+                  else None)
+                accepted)
+            incoming_routes
+        in
+        match route_conflict with
+        | Some (route [@log_value.warn]) ->
+            [%log.warn "rejected conflicting logical-value import route"
+              ~stage:(Delator.Field.string "logical-value-import-snapshot")
+              ~route:
+                (Delator.Field.string
+                   (route_key (route [@log_value.warn])))
+              ~decision:(Delator.Field.string "rejected")
+              ~reason_class:
+                (Delator.Field.string "origin-or-route-receipt-conflict")];
+            Error
+              "[VERO_DEPENDENCY] retained logical-value route has conflicting receipts"
+        | None -> (
+            match List.find_opt same_origin accepted with
+            | Some existing
+              when not (semantic_authority_equal constant existing) ->
+                [%log.warn "rejected conflicting logical-value origin authority"
+                  ~stage:
+                    (Delator.Field.string "logical-value-import-snapshot")
+                  ~origin:(Delator.Field.string origin)
+                  ~decision:(Delator.Field.string "rejected")
+                  ~reason_class:
+                    (Delator.Field.string "origin-semantic-conflict")];
+                Error
+                  "[VERO_DEPENDENCY] retained logical-value origin has conflicting semantic authority"
+            | Some existing ->
+                let merged = with_routes existing (routes existing @ incoming_routes) in
+                let accepted =
+                  List.map
+                    (fun candidate -> if candidate == existing then merged else candidate)
+                    accepted
+                in
+                [%log.trace "coalesced logical-value routes by authenticated origin"
+                  ~stage:
+                    (Delator.Field.string "logical-value-import-snapshot")
+                  ~origin:(Delator.Field.string origin)
+                  ~route_count:
+                    (Delator.Field.int (List.length (routes merged)))
+                  ~decision:(Delator.Field.string "coalesced")];
+                coalesce_constants accepted rest
+            | None ->
+                coalesce_constants (constant :: accepted) rest)
+  in
+  let* mapped_logical_constants =
+    coalesce_constants [] mapped_logical_constants
+  in
+  let mapped_logical_constants =
+    List.sort
+      (fun left right -> String.compare (origin_key left) (origin_key right))
+      mapped_logical_constants
+  in
+  let constant_ids =
+    List.filter_map
+      (function
+        | Imported_defined_logical_value constant ->
+            Some constant.definition.Sst.constant_id
+        | Imported_symbolic_logical_value _ -> None)
+      mapped_logical_constants
+  in
+  let numeric_constant_collision identities =
+    let identities = List.sort_uniq compare identities in
+    let indices = List.map (fun id -> id.Sst.constant_index) identities in
+    List.length indices <> List.length (List.sort_uniq Int.compare indices)
+  in
+  let* () =
+    if numeric_constant_collision constant_ids then (
+      [%log.warn "rejected logical-value synthetic identity collision"
+        ~stage:(Delator.Field.string "logical-value-import-snapshot")
+        ~decision:(Delator.Field.string "rejected")
+        ~reason_class:(Delator.Field.string "synthetic-index-collision")];
+      Error "[VERO_DEPENDENCY] retained logical-value synthetic identity collision")
+    else Ok ()
+  in
   let rec map_broadcast_declarations mapped = function
     | [] -> Ok (List.rev mapped)
     | scope :: rest ->
@@ -2772,6 +3292,7 @@ let create_unchecked providers =
               let* summary =
                 transform_callable scope.mapping_type_ids
                   scope.mapping_function_ids
+                  scope.mapping_constant_ids
                   scope.mapping_symbolic_declarations provider callable
               in
               one
@@ -2883,10 +3404,22 @@ let create_unchecked providers =
       (fun (declaration : broadcast_declaration_snapshot) ->
         selected declaration.identity)
       all_broadcast_declarations
+    |> List.sort
+         (fun (left : broadcast_declaration_snapshot)
+              (right : broadcast_declaration_snapshot) ->
+           String.compare
+             (Retained_broadcast_private.identity_key left.identity)
+             (Retained_broadcast_private.identity_key right.identity))
   and mapped_broadcast_groups =
     List.filter
       (fun (group : broadcast_group_snapshot) -> selected group.identity)
       all_broadcast_groups
+    |> List.sort
+         (fun (left : broadcast_group_snapshot)
+              (right : broadcast_group_snapshot) ->
+           String.compare
+             (Retained_broadcast_private.identity_key left.identity)
+             (Retained_broadcast_private.identity_key right.identity))
   in
   let numeric_collision identities index =
     let identities = List.sort_uniq compare identities in
@@ -2940,6 +3473,20 @@ let create_unchecked providers =
       ~reason_class:(Delator.Field.string "synthetic-identity-collision")];
     Error "[VERO_DEPENDENCY] retained callable synthetic identity collision")
   else
+    let mapped_types =
+      List.sort
+        (fun (left : type_snapshot) right ->
+          compare (left.path, left.binding_uid)
+            (right.path, right.binding_uid))
+        mapped_types
+    and mapped_callables =
+      List.sort
+        (fun (left : callable_snapshot) right ->
+          compare
+            (left.path, left.binding_uid, left.summary_digest)
+            (right.path, right.binding_uid, right.summary_digest))
+        mapped_callables
+    in
     let external_target_material
         (specification : external_specification_snapshot) =
       let target =
@@ -2966,6 +3513,13 @@ let create_unchecked providers =
           target;
         ]
     in
+    let mapped_external_specifications =
+      List.sort
+        (fun left right ->
+          String.compare (external_target_material left)
+            (external_target_material right))
+        mapped_external_specifications
+    in
     let snapshot =
       String.concat "|"
         (List.map
@@ -2990,6 +3544,20 @@ let create_unchecked providers =
              mapped_broadcast_groups)
       ^ String.concat "|"
           (List.map Logical_sort_private.canonical_material logical_sorts)
+      ^ String.concat "|"
+          (List.map
+             (function
+               | Imported_symbolic_logical_value
+                   { routes; provenance; _ } ->
+                   String.concat "," (List.map route_key routes)
+                   ^ "#symbolic#"
+                   ^ provenance.logical_value_descriptor_receipt
+               | Imported_defined_logical_value constant ->
+                   String.concat "," (List.map route_key constant.routes) ^ "#"
+                   ^ constant.definition.Sst.constant_descriptor_digest ^ "#"
+                   ^ constant.dependency_closure ^ "#"
+                   ^ String.concat "," constant.trust_dependencies)
+             mapped_logical_constants)
         in
         [%log.trace "sealed authenticated broadcast import snapshot"
           ~route:(Delator.Field.string "provider-environment")
@@ -3008,6 +3576,7 @@ let create_unchecked providers =
             broadcast_groups = mapped_broadcast_groups;
             types = mapped_types;
             logical_sorts;
+            logical_constants = mapped_logical_constants;
             external_specifications = mapped_external_specifications;
             snapshot;
           }
@@ -3053,6 +3622,7 @@ let empty =
     broadcast_groups = [];
     types = [];
     logical_sorts = [];
+    logical_constants = [];
     external_specifications = [];
     snapshot = "empty";
   }
@@ -3065,6 +3635,26 @@ let require (environment : environment) =
 let callables environment =
   require environment;
   environment.callables
+
+let artifact_full_key (implementation : Cmt_input.implementation) =
+  Numeric_receipt_private.encode ~schema:"verocaml.numeric-import-artifact.v1"
+    [implementation.unit_name; implementation.raw_artifact_receipt;
+     Option.fold ~none:"" ~some:Retained_interface_authority_private.encode implementation.retained_authority]
+
+let artifacts environment =
+  require environment;
+  provider_closure environment.providers |> List.map (fun (provider : provider) -> provider.implementation)
+
+let artifact_inventory (environment [@delator.skip]) =
+  require environment;
+  let inventory = artifacts environment
+    |> List.map artifact_full_key
+    |> List.sort_uniq String.compare in
+  [%log.debug "captured exact imported artifact inventory"
+    ~provider_count:(Delator.Field.int (List.length inventory))
+    ~identity_basis:(Delator.Field.string "full-artifact-records")];
+  inventory
+[@@delator.instrument] [@@delator.level debug]
 
 let broadcast_declarations environment =
   require environment;
@@ -3081,6 +3671,10 @@ let types environment =
 let logical_sorts environment =
   require environment;
   environment.logical_sorts
+
+let logical_constants environment =
+  require environment;
+  environment.logical_constants
 
 let external_specifications environment =
   require environment;
@@ -3140,7 +3734,7 @@ let summary_is_aggregate_model (summary : callable_snapshot) =
     -> (
       match summary.definition.result_type with
       | Sst.Aggregate _ | Sst.Application _ -> true
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
       | Sst.Parameter _ ->
           false)
   | Some _ | None -> false
@@ -3234,7 +3828,7 @@ let seal_calls environment ~implementation ~program =
       | Sst.Callback_call _ | Sst.Callback_requires _
       | Sst.Callback_ensures _ ->
           validate_children false (expression_children expression)
-      | Sst.Symbolic_application _ ->
+      | Sst.Symbolic_application _ | Sst.Logical_constant_reference _ ->
           validate_children false (expression_children expression)
       | Sst.Forall quantifier | Sst.Exists quantifier ->
           validate_children false
@@ -3251,13 +3845,17 @@ let seal_calls environment ~implementation ~program =
                  or fueled"
           | Some _ | None -> Ok ())
       | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
+      | Sst.Bv_literal _
       | Sst.Variable _ | Sst.Mutable_read _ | Sst.Owned_tree_rebase _ ->
           Ok ()
       | Sst.Tuple_value _ | Sst.Record_value _ | Sst.Constructor_value _
       | Sst.Field_read _ | Sst.Field_write _ | Sst.Shared_scalar_field_write _
       | Sst.Owned_tree_nested_write _ | Sst.Let_mutable _ | Sst.Mutable_write _
       | Sst.Let _ | Sst.Sequence _ | Sst.If _ | Sst.Match _
-      | Sst.Lift_runtime_int _ | Sst.Checked_arithmetic _ | Sst.Compare _
+      | Sst.Lift_runtime_int _ | Sst.Bv_int_to_bv_mod _
+      | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+      | Sst.Bv_binary _ | Sst.Bv_compare _ | Sst.Checked_arithmetic _
+      | Sst.Compare _
       | Sst.Boolean_not _
       | Sst.Boolean_binary _ | Sst.Proof_region _ | Sst.Old _
       | Sst.Use_type_invariant _ | Sst.Local_assert _ | Sst.Optional_absent
@@ -4127,6 +4725,7 @@ module For_testing = struct
         broadcast_groups = [];
         types;
         logical_sorts = [];
+        logical_constants = [];
         external_specifications = [];
       }
     in
@@ -4229,6 +4828,7 @@ module For_testing = struct
           broadcast_groups = [];
           types = [ typ ];
           logical_sorts = [];
+          logical_constants = [];
           external_specifications = [];
         }
       in

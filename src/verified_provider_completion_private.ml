@@ -15,6 +15,7 @@ let definition_snapshot (definition : Sst.function_definition) =
        { Sst.policy = definition.policy;
          parametric_adts = [];
          types = [];
+         logical_constants = [];
          functions = [ definition ] })
   |> Digest.to_hex
 

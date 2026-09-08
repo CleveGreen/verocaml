@@ -77,6 +77,20 @@ let lower_internal ?(allow_public_parametric_signatures = false) ?external_speci
               (right : Imported_callable.formal_requirement) ->
            String.compare left.rank_domain_digest right.rank_domain_digest)
   in
+  let imported_logical_values = Imported_callable.logical_constants imported in
+  let imported_symbolic_values =
+    imported_logical_values
+    |> List.concat_map (function
+         | Imported_callable.Imported_symbolic_logical_value
+             { symbolic; routes; _ } ->
+             List.map
+               (fun (route : Imported_callable.logical_constant_route) ->
+                 { symbolic with
+                   path = route.logical_constant_path;
+                   binding_uid = route.logical_constant_uid })
+               routes
+         | Imported_callable.Imported_defined_logical_value _ -> [])
+  in
   let imported_environment :
       Typedtree_adapter_private.Public.imported_environment =
     {
@@ -92,7 +106,7 @@ let lower_internal ?(allow_public_parametric_signatures = false) ?external_speci
               imported_broadcast_trigger_span =
                 callable.broadcast_trigger_span;
             })
-          (Imported_callable.callables imported);
+          (Imported_callable.callables imported @ imported_symbolic_values);
       imported_broadcast_declarations =
         List.map
           (fun (declaration : Imported_callable.broadcast_declaration_snapshot) ->
@@ -145,6 +159,19 @@ let lower_internal ?(allow_public_parametric_signatures = false) ?external_speci
               imported_parametric_descriptor = typ.parametric_descriptor;
             })
           imported_types;
+      imported_logical_constants =
+        imported_logical_values
+        |> List.concat_map (function
+             | Imported_callable.Imported_symbolic_logical_value _ -> []
+             | Imported_callable.Imported_defined_logical_value
+                 { routes; definition; _ } ->
+                 List.map
+                   (fun (route : Imported_callable.logical_constant_route) ->
+                   { Typedtree_adapter_private.Public.imported_constant_path =
+                       route.logical_constant_path;
+                     imported_constant_uid = route.logical_constant_uid;
+                     imported_constant_definition = definition })
+                   routes);
       imported_logical_sorts = Imported_callable.logical_sorts imported;
       imported_rank_domains =
         List.map
@@ -223,6 +250,7 @@ let lower_internal ?(allow_public_parametric_signatures = false) ?external_speci
       ~explicit_interface:implementation.explicit_interface
       ~interface_value_paths:
         (List.map fst implementation.interface_mode_signatures)
+      ~interface_logical_values:implementation.interface_logical_values
       ~source_file:implementation.source_file ~imports:implementation.imports
       implementation.structure
   with

@@ -1,6 +1,10 @@
 type config
 
-type model_value = Integer of Z.t | Boolean of bool | Aggregate_identity of Z.t
+type model_value =
+  | Integer of Z.t
+  | Boolean of bool
+  | Aggregate_identity of Z.t
+  | Bit_vector of Bv_value.t
 
 type model_binding = {
   symbol : Vir.symbol;

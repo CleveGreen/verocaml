@@ -13,7 +13,13 @@ type nominal_spec = {
   actual_evidence : string list;
 }
 
-type error = { span : Diagnostic.span; detail : string }
+type error_kind = Invalid_authority | Unsupported_application_actual
+
+type error = {
+  span : Diagnostic.span;
+  detail : string;
+  kind : error_kind;
+}
 
 val seal_local_schemas :
   implementation:Cmt_input.implementation ->

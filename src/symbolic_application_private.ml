@@ -36,6 +36,11 @@ let rec abi_type_material = function
   | Bool -> Ok "b"
   | Int -> Ok "i"
   | Mathematical_int -> Ok "I"
+  | Bit_vector width ->
+      Ok
+        (framed "B"
+           [ Parametric_type.structural_identity_material
+               (Parametric_type.Bit_vector width) ])
   | Parameter binder ->
       Ok (framed "p" [ string_of_int binder.Parametric_type.ordinal ])
   | Application (constructor, arguments) ->
@@ -117,16 +122,81 @@ let declaration_abi_material ~canonical_path ~value_uid ~type_binders
                   ])
               (abi_type_material result_type))
 
-let supported_type typ =
+let validate_declaration_type typ =
   let rec supported = function
-    | Parametric_type.Unit | Int | Mathematical_int | Bool | Parameter _ -> true
+    | Parametric_type.Unit | Int | Mathematical_int | Bool | Parameter _ ->
+        Ok ()
+    | Bit_vector width ->
+        Bv_width.authenticate_bound
+          (Bv_backend_capability_receipt_private.capability ())
+          width
+        |> Result.map_error (fun message ->
+               "symbolic declaration bit-vector width is not authenticated: "
+               ^ message)
     | Application (constructor, arguments) ->
-        constructor.constructor_path <> ""
-        && constructor.constructor_identity <> ""
-        && List.for_all supported arguments
-    | Tuple _ | Aggregate _ -> false
+        if
+          constructor.constructor_path = ""
+          || constructor.constructor_identity = ""
+        then Error "symbolic declaration type constructor identity is empty"
+        else
+          List.fold_left
+            (fun result argument -> Result.bind result (fun () -> supported argument))
+            (Ok ()) arguments
+    | Tuple _ | Aggregate _ ->
+        Error "symbolic declaration contains an unsupported aggregate type"
   in
   supported typ
+
+let validate_declaration_types types =
+  List.fold_left
+    (fun result typ ->
+      Result.bind result (fun () -> validate_declaration_type typ))
+    (Ok ()) types
+
+let authenticate_instantiated_type typ =
+  let rec authenticate = function
+    | Parametric_type.Unit | Int | Mathematical_int | Bool | Parameter _
+    | Aggregate _ ->
+        Ok ()
+    | Bit_vector width -> (
+        match
+          Bv_width.authenticate_bound
+            (Bv_backend_capability_receipt_private.capability ())
+            width
+        with
+        | Ok () ->
+            [%log.trace "authenticated symbolic application BV width"
+              ~stage:(Delator.Field.string "application-type-authentication")
+              ~width:(Delator.Field.int (Bv_width.to_int width))
+              ~decision:(Delator.Field.string "accepted")];
+            Ok ()
+        | Error message ->
+            [%log.debug "rejected symbolic application BV width"
+              ~stage:(Delator.Field.string "application-type-authentication")
+              ~width:(Delator.Field.int (Bv_width.to_int width))
+              ~reason:(Delator.Field.string message)
+              ~decision:(Delator.Field.string "rejected")];
+            Error
+              ("symbolic application bit-vector width is not authenticated: "
+              ^ message))
+    | Tuple components ->
+        List.fold_left
+          (fun result (_, component) ->
+            Result.bind result (fun () -> authenticate component))
+          (Ok ()) components
+    | Application (_, arguments) ->
+        List.fold_left
+          (fun result argument ->
+            Result.bind result (fun () -> authenticate argument))
+          (Ok ()) arguments
+  in
+  authenticate typ
+
+let authenticate_instantiated_types types =
+  List.fold_left
+    (fun result typ ->
+      Result.bind result (fun () -> authenticate_instantiated_type typ))
+    (Ok ()) types
 
 let declare ~marker_id ~declaration_index ~declaration_name ~canonical_path
     ~value_uid ~source_file ~compilation_identity ~declaration_span
@@ -135,42 +205,38 @@ let declare ~marker_id ~declaration_index ~declaration_name ~canonical_path
     Error "symbolic declaration identity is empty"
   else if List.exists (fun binder -> binder.Parametric_type.ordinal < 0) type_binders
   then Error "symbolic declaration has an invalid type binder"
-  else if not (List.for_all supported_type parameter_types) then
-    Error
-      ("symbolic declaration contains an unsupported parameter type: "
-      ^ String.concat ","
-          (List.map Parametric_type.to_string parameter_types))
-  else if not (supported_type result_type) then
-    Error
-      ("symbolic declaration contains an unsupported result type: "
-      ^ Parametric_type.to_string result_type)
   else
-    let identity_material =
-      declaration_material ~canonical_path ~value_uid
-    in
-    [%log.trace "constructed semantic symbolic declaration identity"
-      ~stage:(Delator.Field.string "declaration-identity")
-      ~correlation:
-        (Delator.Field.string
-           (Digest.to_hex (Digest.string identity_material)))
-      ~binder_count:(Delator.Field.int (List.length type_binders))
-      ~parameter_count:(Delator.Field.int (List.length parameter_types))
-      ~decision:(Delator.Field.string "constructed")];
-    Ok
-      {
-        marker_id;
-        declaration_index;
-        declaration_name;
-        canonical_path;
-        value_uid;
-        source_file;
-        compilation_identity;
-        declaration_span;
-        type_binders;
-        parameter_types;
-        result_type;
-        identity_material;
-      }
+    Result.bind
+      (Result.bind
+         (validate_declaration_types parameter_types)
+         (fun () -> validate_declaration_type result_type))
+      (fun () ->
+        let identity_material =
+          declaration_material ~canonical_path ~value_uid
+        in
+        [%log.trace "constructed semantic symbolic declaration identity"
+          ~stage:(Delator.Field.string "declaration-identity")
+          ~correlation:
+            (Delator.Field.string
+               (Digest.to_hex (Digest.string identity_material)))
+          ~binder_count:(Delator.Field.int (List.length type_binders))
+          ~parameter_count:(Delator.Field.int (List.length parameter_types))
+          ~decision:(Delator.Field.string "constructed")];
+        Ok
+          {
+            marker_id;
+            declaration_index;
+            declaration_name;
+            canonical_path;
+            value_uid;
+            source_file;
+            compilation_identity;
+            declaration_span;
+            type_binders;
+            parameter_types;
+            result_type;
+            identity_material;
+          })
 
 let rebase_declaration (declaration : declaration) ~declaration_index ~declaration_name
     ~canonical_path ~value_uid ~type_binders ~parameter_types ~result_type =
@@ -244,6 +310,9 @@ let create declaration ~type_arguments ~arguments ~argument_types ~result_type
   if List.length arguments <> List.length argument_types then
     Error "symbolic application argument and type vectors differ"
   else
+    Result.bind (authenticate_instantiated_types type_arguments) (fun () ->
+    Result.bind (authenticate_instantiated_types argument_types) (fun () ->
+    Result.bind (authenticate_instantiated_type result_type) (fun () ->
     Result.bind (instantiate declaration type_arguments)
       (fun (expected_arguments, expected_result) ->
         if
@@ -277,7 +346,7 @@ let create declaration ~type_arguments ~arguments ~argument_types ~result_type
               symbol_name;
             })
             (symbol_name_for_application declaration ~type_arguments
-               ~argument_types ~result_type))
+               ~argument_types ~result_type)))))
 
 let map_arguments map application =
   { application with arguments = List.map map application.arguments }

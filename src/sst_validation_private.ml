@@ -128,7 +128,7 @@ let fields = function
         constructors
 let deeply_immutable program typ =
   let rec loop visiting = function
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> true
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ -> true
     | Sst.Parameter _ | Sst.Application _ -> false
     | Sst.Tuple components ->
         List.for_all (fun (_, typ) -> loop visiting typ) components
@@ -189,7 +189,7 @@ let abstraction_for_model program model =
               Some (root, evidence, owned)
           | Some _ | None -> None)
       | Some _ | None -> None)
-  | Some { typ = (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+  | Some { typ = (Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
             | Sst.Tuple _ | Sst.Parameter _ | Sst.Application _ );
           _;
         }
@@ -320,7 +320,7 @@ let result_constructor_fields program result_type constructor arguments =
           fail
             "owned-contents application result has no exact authenticated \
              descriptor")
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
   | Sst.Parameter _ | Sst.Aggregate _ ->
       fail "owned-contents result constructor has a substituted result type"
 let model_call program model formal =
@@ -370,7 +370,7 @@ let model_call program model formal =
       let* path, typ = path [] actual in
       (match typ with
       | Sst.Aggregate carrier -> Ok (callee, path, carrier)
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
       | Sst.Parameter _ | Sst.Application _ ->
           fail "owned-contents helper carrier is not an aggregate")
   | _ ->
@@ -382,8 +382,8 @@ let scalar_kind = function
   | Sst.Int -> Some Scalar_int
   | Sst.Bool -> Some Scalar_bool
   | Sst.Unit -> Some Scalar_unit
-  | Sst.Mathematical_int | Sst.Tuple _ | Sst.Aggregate _ | Sst.Parameter _
-  | Sst.Application _ ->
+  | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _ | Sst.Aggregate _
+  | Sst.Parameter _ | Sst.Application _ ->
       None
 let collect_case program owned helper result_type carrier (case : Sst.case) =
   if Option.is_some case.case_guard then
@@ -465,7 +465,7 @@ let collect_case program owned helper result_type carrier (case : Sst.case) =
                       (deeply_immutable program expression.typ
                       && same_type type_id constructor.constructor_type)
                 | Sst.Application _ -> expression.typ <> result_type
-                | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
                 | Sst.Tuple _ | Sst.Parameter _ ->
                     true)
               then
@@ -577,10 +577,13 @@ let collect_case program owned helper result_type carrier (case : Sst.case) =
                   "owned-contents grammar forbids indirect, mutual, helper, or \
                    forged recursion"
           | Sst.Callback_call _ | Sst.Callback_requires _ | Sst.Callback_ensures _
-          | Sst.Symbolic_application _
+          | Sst.Symbolic_application _ | Sst.Logical_constant_reference _
           | Sst.Forall _ | Sst.Exists _
           | Sst.Field_read _ | Sst.Match _ | Sst.Let _ | Sst.If _
-          | Sst.Lift_runtime_int _ | Sst.Compare _ | Sst.Boolean_not _
+          | Sst.Lift_runtime_int _ | Sst.Bv_literal _
+          | Sst.Bv_int_to_bv_mod _ | Sst.Bv_to_int_unsigned _
+          | Sst.Bv_to_int_signed _ | Sst.Bv_not _ | Sst.Bv_binary _
+          | Sst.Bv_compare _ | Sst.Compare _ | Sst.Boolean_not _
           | Sst.Boolean_binary _
           | Sst.Checked_arithmetic _ | Sst.Sequence _ | Sst.Old _
           | Sst.Field_write _ | Sst.Shared_scalar_field_write _
@@ -719,7 +722,7 @@ let collect ~program ~model =
                   fail
                     "owned-contents application result lacks an exact \
                      immutable descriptor")
-          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
           | Sst.Parameter _ | Sst.Aggregate _ ->
             fail
                 "owned-contents model/helper result is substituted or not \
@@ -915,7 +918,9 @@ let field_expression program field expression =
       | Error _ -> None)
   | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
   | Sst.Variable _ | Sst.Tuple_value _ | Sst.Field_read _ | Sst.Match _
-  | Sst.Lift_runtime_int _
+  | Sst.Lift_runtime_int _ | Sst.Bv_literal _ | Sst.Bv_int_to_bv_mod _
+  | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+  | Sst.Bv_binary _ | Sst.Bv_compare _
   | Sst.Let _ | Sst.If _ | Sst.Compare _ | Sst.Boolean_not _
   | Sst.Boolean_binary _ | Sst.Checked_arithmetic _ | Sst.Sequence _
   | Sst.Old _ | Sst.Field_write _ | Sst.Shared_scalar_field_write _
@@ -924,6 +929,7 @@ let field_expression program field expression =
   | Sst.Direct_call _ | Sst.Callback_call _ | Sst.Callback_requires _
   | Sst.Callback_ensures _ | Sst.Reveal _ | Sst.Reveal_with_fuel _
     | Sst.Forall _ | Sst.Exists _ | Sst.Symbolic_application _
+    | Sst.Logical_constant_reference _
     | Sst.Use_type_invariant _ | Sst.Local_assert _ | Sst.Proof_region _
     | Sst.Optional_absent | Sst.Optional_present _ | Sst.Optional_forward _ ->
       None
@@ -1124,7 +1130,9 @@ let authenticate_successor_expression program grammar expression =
   | Sst.Shared_scalar_field_write _ | Sst.Int_constant _
   | Sst.Bool_constant _ | Sst.Unit_constant | Sst.Variable _
   | Sst.Tuple_value _ | Sst.Record_value _ | Sst.Constructor_value _
-  | Sst.Lift_runtime_int _
+  | Sst.Lift_runtime_int _ | Sst.Bv_literal _ | Sst.Bv_int_to_bv_mod _
+  | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+  | Sst.Bv_binary _ | Sst.Bv_compare _
   | Sst.Field_read _ | Sst.Match _ | Sst.Let _ | Sst.If _
   | Sst.Compare _ | Sst.Boolean_not _ | Sst.Boolean_binary _
   | Sst.Checked_arithmetic _ | Sst.Sequence _ | Sst.Old _
@@ -1132,6 +1140,7 @@ let authenticate_successor_expression program grammar expression =
   | Sst.Direct_call _ | Sst.Callback_call _ | Sst.Callback_requires _
   | Sst.Callback_ensures _ | Sst.Reveal _ | Sst.Reveal_with_fuel _
   | Sst.Forall _ | Sst.Exists _ | Sst.Symbolic_application _
+  | Sst.Logical_constant_reference _
   | Sst.Use_type_invariant _ | Sst.Local_assert _ | Sst.Proof_region _
   | Sst.Optional_absent | Sst.Optional_present _ | Sst.Optional_forward _ ->
       fail
@@ -1193,6 +1202,7 @@ type error_kind =
   | Invalid_target_link of string
   | Forged_abstract_evidence of string
   | Forged_rank_domain of string
+  | Unsupported_rank_application_actual of string
   | Invalid_instance_mode of string
   | Invalid_finite_requirement of string
   | Unbound_binding of Sst.binding
@@ -1277,11 +1287,34 @@ let type_contains_mathematical_int ~types ~parametric_adts typ =
                      with
                      | Ok field_type -> contains (typ :: visiting) field_type
                      | Error _ -> true))
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Parameter _ -> false
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Bit_vector _ | Sst.Parameter _ ->
+          false
   in
   contains [] typ
 let rec validate_type_reference types function_id span = function
   | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> Ok ()
+  | Sst.Bit_vector width -> (
+      match
+        Bv_width.authenticate_bound
+          (Bv_backend_capability_receipt_private.capability ())
+          width
+      with
+      | Ok () ->
+          [%log.trace "authenticated SST declaration bit-vector width"
+            ~stage:(Delator.Field.string "sst-type-validation")
+            ~width:(Delator.Field.int (Bv_width.to_int width))
+            ~decision:(Delator.Field.string "accepted")];
+          Ok ()
+      | Error message ->
+          [%log.debug "rejected SST declaration bit-vector width"
+            ~stage:(Delator.Field.string "sst-type-validation")
+            ~width:(Delator.Field.int (Bv_width.to_int width))
+            ~reason:(Delator.Field.string message)
+            ~decision:(Delator.Field.string "rejected")];
+          fail ?function_id span
+            (Malformed_expression
+               ("bit-vector type lacks an authenticated bound width: "
+               ^ message)))
   | Sst.Tuple components ->
       iter_result
         (fun (_, typ) -> validate_type_reference types function_id span typ)
@@ -1485,6 +1518,9 @@ let validate_shared_invariant_client_paths types
       match expression.Sst.expression_desc with
       | Sst.If _ | Sst.Match _ -> true
       | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
+      | Sst.Bv_literal _ | Sst.Bv_int_to_bv_mod _
+      | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+      | Sst.Bv_binary _ | Sst.Bv_compare _
       | Sst.Variable _ | Sst.Tuple_value _ | Sst.Record_value _
       | Sst.Constructor_value _ | Sst.Field_read _ | Sst.Field_write _
       | Sst.Shared_scalar_field_write _ | Sst.Lift_runtime_int _
@@ -1494,6 +1530,7 @@ let validate_shared_invariant_client_paths types
       | Sst.Let _ | Sst.Sequence _ | Sst.Direct_call _
       | Sst.Callback_call _ | Sst.Callback_requires _ | Sst.Callback_ensures _
       | Sst.Forall _ | Sst.Exists _ | Sst.Symbolic_application _
+      | Sst.Logical_constant_reference _
       | Sst.Use_type_invariant _ | Sst.Owned_tree_nested_write _
       | Sst.Owned_tree_rebase _ | Sst.Reveal _ | Sst.Reveal_with_fuel _
         | Sst.Local_assert _ | Sst.Proof_region _ | Sst.Old _
@@ -1505,6 +1542,9 @@ let validate_shared_invariant_client_paths types
       | Sst.Direct_call { callee; _ } ->
           authenticated_shared_invariant_cell_operation types callee
       | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
+      | Sst.Bv_literal _ | Sst.Bv_int_to_bv_mod _
+      | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+      | Sst.Bv_binary _ | Sst.Bv_compare _
       | Sst.Variable _ | Sst.Tuple_value _ | Sst.Record_value _
       | Sst.Constructor_value _ | Sst.Field_read _ | Sst.Field_write _
       | Sst.Shared_scalar_field_write _ | Sst.Lift_runtime_int _
@@ -1514,6 +1554,7 @@ let validate_shared_invariant_client_paths types
       | Sst.Let _ | Sst.Sequence _ | Sst.If _ | Sst.Match _
       | Sst.Callback_call _ | Sst.Callback_requires _ | Sst.Callback_ensures _
       | Sst.Forall _ | Sst.Exists _ | Sst.Symbolic_application _
+      | Sst.Logical_constant_reference _
       | Sst.Use_type_invariant _ | Sst.Owned_tree_nested_write _
       | Sst.Owned_tree_rebase _ | Sst.Reveal _ | Sst.Reveal_with_fuel _
       | Sst.Local_assert _ | Sst.Proof_region _ | Sst.Old _
@@ -1869,8 +1910,8 @@ let validate_owned_tree_transition ~require_authenticated_root types function_id
                 malformed "owned-tree cursor path does not guard target owner")
 let rec validate_expression ~require_authenticated_owned_tree_roots ~types
     ~parametric_adts ~functions ~physical_program ~external_specifications
-    ~function_id ~enclosing_recursive ~stage ~allow_old initial_bound
-    expression =
+    ?(logical_constant_caller = false) ~function_id ~enclosing_recursive ~stage
+    ~allow_old initial_bound expression =
   let callback_bindings =
     List.find_opt
       (fun (definition : Sst.function_definition) ->
@@ -1904,7 +1945,7 @@ let rec validate_expression ~require_authenticated_owned_tree_roots ~types
               }
           | Some { representation = Sst.Revealed; _ } | None ->
               None)
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
       | Sst.Parameter _ | Sst.Application _ ->
             None
     in
@@ -2029,6 +2070,22 @@ let rec validate_expression ~require_authenticated_owned_tree_roots ~types
                  })
         in
         fold_result loop bound arguments
+    | Sst.Logical_constant_reference { constant; type_arguments } ->
+        let logical = stage = Sst.Logical || stage = Sst.Proof_stage in
+        let* () =
+          iter_result
+            (validate_type_reference types (Some function_id) expression.span)
+            type_arguments
+        in
+        Logical_constant_private.validate_reference ~program:physical_program
+          ~logical ~expression_type:expression.typ constant ~type_arguments
+        |> Result.map (fun () -> bound)
+        |> Result.map_error (fun message ->
+               {
+                 function_id = Some function_id;
+                 span = expression.span;
+                 kind = Invalid_call message;
+               })
       | Sst.Direct_call
           { call_form; callee; type_arguments; recursive; arguments } ->
           let* () =
@@ -2046,7 +2103,7 @@ let rec validate_expression ~require_authenticated_owned_tree_roots ~types
           | Some definition -> Ok definition
           | None -> fail ~function_id expression.span (Unknown_function_id callee)
         in
-        let* () =
+        let* trusted_logical_call =
           if
             function_contains_shared_scalar_write callee_definition
             && not
@@ -2061,15 +2118,18 @@ let rec validate_expression ~require_authenticated_owned_tree_roots ~types
           match callee_definition.body with
           | Sst.External_specification
               (Sst.Imported_unverified_target _) ->
-              External_target_specification_private.validate_call
-                external_specifications ~program:physical_program ~functions
-                ~caller_id:function_id ~callee:callee_definition ~expression
-              |> Result.map_error (fun message ->
-                     {
-                       function_id = Some function_id;
-                       span = expression.span;
-                       kind = Invalid_call message;
-                     })
+              let* () =
+                External_target_specification_private.validate_call
+                  external_specifications ~program:physical_program ~functions
+                  ~caller_id:function_id ~callee:callee_definition ~expression
+                |> Result.map_error (fun message ->
+                       {
+                         function_id = Some function_id;
+                         span = expression.span;
+                         kind = Invalid_call message;
+                       })
+              in
+              Ok logical_constant_caller
           | Sst.External_specification
               (Sst.Same_unit_target _ | Sst.Unresolved_target _) ->
               fail ~function_id expression.span
@@ -2077,7 +2137,7 @@ let rec validate_expression ~require_authenticated_owned_tree_roots ~types
                        "external-specification wrappers are semantic \
                         declarations and cannot be called")
           | Sst.Trusted_external_spec_target
-                  (Sst.Same_unit_target { wrapper; _ }) -> (
+                  (Sst.Same_unit_target { wrapper; witness_span; _ }) -> (
               let position id =
                 let rec loop index = function
                   | [] -> None
@@ -2087,10 +2147,21 @@ let rec validate_expression ~require_authenticated_owned_tree_roots ~types
                       else loop (index + 1) rest
                 in
                 loop 0 functions
-                  in
-                  match (position function_id, position wrapper) with
+              in
+              let span_before (left : Diagnostic.span) (right : Diagnostic.span) =
+                String.equal left.file right.file
+                &&
+                (left.end_pos.line < right.start_pos.line
+                || (left.end_pos.line = right.start_pos.line
+                   && left.end_pos.column <= right.start_pos.column))
+              in
+              match (position function_id, position wrapper) with
               | Some caller, Some specification when caller > specification ->
-                  Ok ()
+                  Ok false
+              | _, Some _
+                when logical_constant_caller
+                     && span_before witness_span expression.span ->
+                  Ok true
               | _ ->
                   fail ~function_id expression.span
                     (Invalid_call
@@ -2108,8 +2179,12 @@ let rec validate_expression ~require_authenticated_owned_tree_roots ~types
                    "trusted external target has an unresolved specification")
           | Sst.Checked_exec _ | Sst.Spec_definition _
           | Sst.Recursive_spec_definition _ | Sst.Proof_body _
-          | Sst.Trusted_external_body _ | Sst.Symbolic_declaration _ ->
-              Ok ()
+          | Sst.Symbolic_declaration _ ->
+              Ok false
+          | Sst.Trusted_external_body
+              (Sst.Authenticated_external_body _) ->
+              Ok logical_constant_caller
+          | Sst.Trusted_external_body (Sst.Raw_external_body _) -> Ok false
         in
         let self_call = same_function_id callee function_id in
           let should_be_recursive = self_call && enclosing_recursive in
@@ -2124,6 +2199,24 @@ let rec validate_expression ~require_authenticated_owned_tree_roots ~types
               (Invalid_recursive_marker
                  "call recursion marker does not match its semantic target")
         in
+        let[@log_value.trace] call_form_name =
+          match call_form with
+          | Sst.Specification_call -> "specification"
+          | Sst.Proof_call -> "proof"
+          | Sst.Exec_call -> "exec"
+          | Sst.Unclassified_call -> "unclassified"
+        in
+        [%log.trace "classified direct call validation context"
+          ~stage:(Delator.Field.string "direct-call-stage-validation")
+          ~caller_name:(Delator.Field.string function_id.function_name)
+          ~callee_name:
+            (Delator.Field.string callee_definition.function_id.function_name)
+          ~call_form:
+            (Delator.Field.string (call_form_name [@log_value.trace]))
+          ~logical_constant_caller:
+            (Delator.Field.bool logical_constant_caller)
+          ~trusted_logical_call:(Delator.Field.bool trusted_logical_call)
+          ~decision:(Delator.Field.string "validate")];
         let* () =
           match expected_call_form stage callee_definition.mode with
           | Some expected when expected = call_form -> Ok ()
@@ -2135,6 +2228,18 @@ let rec validate_expression ~require_authenticated_owned_tree_roots ~types
               when stage = Sst.Logical && call_form = Sst.Exec_call
               && authenticated_frozen_spine_terminal types
                    callee_definition.function_id ->
+              Ok ()
+          | None
+              when stage = Sst.Logical
+                   && call_form = Sst.Specification_call
+                   && trusted_logical_call ->
+              [%log.trace "accepted authenticated trust dependency in logical constant equation"
+                ~stage:(Delator.Field.string "logical-constant-validation")
+                ~caller_name:(Delator.Field.string function_id.function_name)
+                ~callee_name:
+                  (Delator.Field.string
+                     callee_definition.function_id.function_name)
+                ~decision:(Delator.Field.string "accepted")];
               Ok ()
           | None ->
               fail ~function_id expression.span
@@ -2581,7 +2686,7 @@ let check_clause_indices function_id label clauses =
   in
   loop 0 clauses
 let scalar_type = function
-  | Sst.Int | Sst.Mathematical_int | Sst.Bool -> true
+  | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Bit_vector _ -> true
   | Sst.Unit | Sst.Tuple _ | Sst.Aggregate _ | Sst.Parameter _
   | Sst.Application _ ->
       false
@@ -2610,12 +2715,13 @@ let locally_ranked_type rank_domains = function
               Parametric_type.compare_constructor candidate constructor = 0
               && List.equal Parametric_type.equal actuals arguments
           | Some
-              (Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _
+              (Unit | Bool | Int | Mathematical_int | Bit_vector _ | Tuple _
+              | Aggregate _
               | Parameter _)
           | None ->
               false)
         rank_domains
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
   | Sst.Parameter _ ->
       false
 (* Rank-backed logical shape is deliberately private to SST validation.  An
@@ -2655,7 +2761,7 @@ let admit_rank_backed_logical_shape ~rank_domains ~parametric_adts types selecte
       | None, _ :: _ :: _ | Some _, [ _ ] | Some _, _ :: _ :: _ -> None
   in
   let rec classify visiting current = function
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> Some current
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ -> Some current
     | Sst.Parameter _ -> None
     | Sst.Application (constructor, arguments) -> (
         match Parametric_adt.find parametric_adts constructor with
@@ -2781,7 +2887,8 @@ let scalar_terminal = function
   | Sst.Int -> Some Owned_terminal_int
   | Sst.Bool -> Some Owned_terminal_bool
   | Sst.Unit -> Some Owned_terminal_unit
-    | Sst.Mathematical_int | Sst.Tuple _ | Sst.Aggregate _ | Sst.Parameter _
+    | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _ | Sst.Aggregate _
+    | Sst.Parameter _
     | Sst.Application _ ->
         None
 let same_owned_path left right =
@@ -2876,7 +2983,7 @@ let collect_owned_root_scalar_model ~program ~types
             malformed definition.span
                 "owned-root scalar model result must be a local immutable \
                  scalar record")
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
       | Sst.Parameter _
       | Sst.Application _ ->
         malformed definition.span
@@ -2917,7 +3024,7 @@ let collect_owned_root_scalar_model ~program ~types
         | Some
             {
                 Sst.field_type =
-                  Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                  Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
                   | Sst.Tuple _;
               _;
             }
@@ -2929,7 +3036,7 @@ let collect_owned_root_scalar_model ~program ~types
   let owner_matches typ owner =
     match typ with
     | Sst.Aggregate type_id -> same_type_id type_id (owner_type owner)
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
       | Sst.Parameter _
       | Sst.Application _ -> false
   in
@@ -3117,7 +3224,7 @@ let collect_owned_root_scalar_model ~program ~types
                   malformed scrutinee.span
                       "owned-root scalar model may match only a registered \
                        local variant")
-            | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+            | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
             | Sst.Tuple _ | Sst.Parameter _ | Sst.Application _ ->
               malformed scrutinee.span
                   "owned-root scalar model match scrutinee is not a variant \
@@ -3251,7 +3358,7 @@ let collect_owned_root_scalar_model ~program ~types
         Result.is_ok
           (Parametric_rank_domain_private.derive_application
              ~program:physical_program ~span:expression.span typ)
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
     | Sst.Aggregate _ | Sst.Parameter _ ->
         false)
     ||
@@ -3266,7 +3373,7 @@ let collect_owned_root_scalar_model ~program ~types
     | Sst.Application (constructor, arguments) ->
         Option.map (fun descriptor -> (descriptor, arguments))
           (Parametric_adt.find parametric_adts constructor)
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
     | Sst.Aggregate _ | Sst.Parameter _ ->
         None
   in
@@ -3384,7 +3491,8 @@ let collect_owned_root_scalar_model ~program ~types
                 else validate_pattern ~irrefutable nested)
               (Ok ()) components expected
           | Sst.Tuple _ | Sst.Unit | Sst.Bool | Sst.Int
-          | Sst.Mathematical_int | Sst.Aggregate _ | Sst.Parameter _
+          | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Aggregate _
+          | Sst.Parameter _
           | Sst.Application _ ->
             malformed pattern.span "spec tuple pattern type mismatch")
     | Sst.Record_pattern fields ->
@@ -3419,7 +3527,8 @@ let collect_owned_root_scalar_model ~program ~types
                 (Ok ()) arguments
                 (constructor_argument_types_for typ constructor_definition)
           | ( ( Sst.Aggregate _ | Sst.Unit | Sst.Bool | Sst.Int
-                | Sst.Mathematical_int | Sst.Tuple _ | Sst.Parameter _
+                | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
+                | Sst.Parameter _
                 | Sst.Application _ ),
                 (Some _ | None) ) ->
               malformed pattern.span
@@ -3451,6 +3560,116 @@ let collect_owned_root_scalar_model ~program ~types
         loop operand
     | Sst.Bool_constant _ when expression.typ = Sst.Bool -> Ok ()
     | Sst.Unit_constant when expression.typ = Sst.Unit -> Ok ()
+    | Sst.Bv_literal value -> (
+        match expression.typ with
+        | Sst.Bit_vector width
+          when Bv_width.equal width value.Bv_value.width ->
+            [%log.trace "validated typed SST bit-vector literal"
+              ~stage:(Delator.Field.string "sst-bv-validation")
+              ~function_name:(Delator.Field.string function_id.function_name)
+              ~width:(Delator.Field.int (Bv_width.to_int width))
+              ~decision:(Delator.Field.string "accepted")];
+            Ok ()
+        | Sst.Bit_vector _ ->
+            malformed expression.span
+              "bit-vector literal width differs from its exact expression type"
+        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+        | Sst.Aggregate _ | Sst.Parameter _ | Sst.Application _ ->
+            malformed expression.span
+              "bit-vector literal does not have a bit-vector expression type")
+    | Sst.Bv_int_to_bv_mod { width; input; source_authority } ->
+        let* () = loop input in
+        let exact_type =
+          Parametric_type.equal input.typ Sst.Mathematical_int
+          && Parametric_type.equal expression.typ (Sst.Bit_vector width)
+        in
+        let authority =
+          Numeric_bv_projection_evidence_private.validate ~width
+            source_authority
+        in
+        if exact_type && Result.is_ok authority then (
+          [%log.trace "validated typed SST Int-to-BV projection"
+            ~stage:(Delator.Field.string "sst-bv-validation")
+            ~function_name:(Delator.Field.string function_id.function_name)
+            ~width:(Delator.Field.int (Bv_width.to_int width))
+            ~decision:(Delator.Field.string "accepted")];
+          Ok ())
+        else
+          let (reason [@log_value.debug]) =
+            if not exact_type then "operand-or-result-sort"
+            else Result.fold ~ok:(fun () -> "unknown") ~error:Fun.id authority
+          in
+          [%log.debug "rejected typed SST Int-to-BV projection"
+            ~stage:(Delator.Field.string "sst-bv-validation")
+            ~function_name:(Delator.Field.string function_id.function_name)
+            ~width:(Delator.Field.int (Bv_width.to_int width))
+            ~reason:(Delator.Field.string (reason [@log_value.debug]))
+            ~decision:(Delator.Field.string "rejected")];
+          malformed expression.span
+            "Int-to-BV projection lacks exact types or source authority"
+    | Sst.Bv_to_int_unsigned operand | Sst.Bv_to_int_signed operand ->
+        let* () = loop operand in
+        if
+          Parametric_type.equal expression.typ Sst.Mathematical_int
+          &&
+          match operand.typ with Sst.Bit_vector _ -> true | _ -> false
+        then Ok ()
+        else
+          malformed expression.span
+            "BV-to-Int view has incompatible operand or result type"
+    | Sst.Bv_not operand ->
+        let* () = loop operand in
+        if Parametric_type.equal expression.typ operand.typ then
+          match operand.typ with
+          | Sst.Bit_vector _ -> Ok ()
+          | _ ->
+              malformed expression.span
+                "bit-vector complement operand is not a bit vector"
+        else
+          malformed expression.span
+            "bit-vector complement changes exact width identity"
+    | Sst.Bv_binary ((operation [@log_value.trace]), left, right) ->
+        let* () = loop left in
+        let* () = loop right in
+        if
+          Parametric_type.equal expression.typ left.typ
+          && Parametric_type.equal left.typ right.typ
+          &&
+          match left.typ with Sst.Bit_vector _ -> true | _ -> false
+        then (
+          [%log.trace "validated typed SST bit-vector binary operation"
+            ~stage:(Delator.Field.string "sst-bv-validation")
+            ~function_name:(Delator.Field.string function_id.function_name)
+            ~operation:
+              (Delator.Field.string
+                 (Bv_operation_private.binary_name
+                    (operation [@log_value.trace])))
+            ~decision:(Delator.Field.string "accepted")];
+          Ok ())
+        else
+          malformed expression.span
+            "bit-vector binary operands or result differ in exact width identity"
+    | Sst.Bv_compare ((comparison [@log_value.trace]), left, right) ->
+        let* () = loop left in
+        let* () = loop right in
+        if
+          Parametric_type.equal expression.typ Sst.Bool
+          && Parametric_type.equal left.typ right.typ
+          &&
+          match left.typ with Sst.Bit_vector _ -> true | _ -> false
+        then (
+          [%log.trace "validated typed SST bit-vector comparison"
+            ~stage:(Delator.Field.string "sst-bv-validation")
+            ~function_name:(Delator.Field.string function_id.function_name)
+            ~comparison:
+              (Delator.Field.string
+                 (Bv_operation_private.comparison_name
+                    (comparison [@log_value.trace])))
+            ~decision:(Delator.Field.string "accepted")];
+          Ok ())
+        else
+          malformed expression.span
+            "bit-vector comparison operands differ in exact width identity or result is not Boolean"
     | Sst.Variable { binding; _ }
       when binding.typ = expression.typ
            && (admitted_logical_type binding.typ
@@ -3471,7 +3690,7 @@ let collect_owned_root_scalar_model ~program ~types
                     "spec tuple component type or label mismatch"
                 else loop component)
               (Ok ()) components expected
-        | Sst.Tuple _ | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+        | Sst.Tuple _ | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
         | Sst.Aggregate _ | Sst.Parameter _ | Sst.Application _ ->
             malformed expression.span "spec tuple value type mismatch")
     | Sst.Record_value { record_type; fields } -> (
@@ -3816,6 +4035,12 @@ let collect_owned_root_scalar_model ~program ~types
         else
           iter_result loop
             (Symbolic_application_private.arguments application)
+    | Sst.Logical_constant_reference _
+      when admitted_logical_type expression.typ
+           || Parametric_type.is_spec_function expression.typ
+           || Parametric_adt.deeply_immutable_instance parametric_adts
+                expression.typ ->
+        Ok ()
     | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant ->
         malformed expression.span "spec constant type mismatch"
       | Sst.Variable _ | Sst.Field_write _ | Sst.Shared_scalar_field_write _
@@ -3827,67 +4052,345 @@ let collect_owned_root_scalar_model ~program ~types
       | Sst.Use_type_invariant _ | Sst.Local_assert _ | Sst.Direct_call _
       | Sst.Lift_runtime_int _ | Sst.Callback_call _ | Sst.Callback_requires _
       | Sst.Callback_ensures _
-      | Sst.Optional_absent | Sst.Optional_present _ | Sst.Optional_forward _ ->
+      | Sst.Optional_absent | Sst.Optional_present _ | Sst.Optional_forward _
+      | Sst.Logical_constant_reference _ ->
         malformed expression.span
           "expression is outside the aggregate spec grammar"
   in
   loop expression
-let validate_spec_graph functions =
-  let spec_definitions =
-    List.filter
-      (fun (definition : Sst.function_definition) ->
-        definition.mode = Sst.Spec)
-      functions
+type logical_definition_node =
+  | Logical_function_node of Sst.function_definition
+  | Logical_constant_node of Sst.logical_constant_definition
+  | Logical_symbolic_node of
+      Symbolic_application_private.declaration * Diagnostic.span
+
+type logical_definition_node_id =
+  | Logical_function_id of Sst.function_id
+  | Logical_constant_id of string
+  | Logical_symbolic_id of string
+
+type logical_definition_edge = {
+  logical_edge_target : logical_definition_node_id;
+  logical_edge_span : Diagnostic.span;
+}
+
+let logical_constant_origin_material (origin : Sst.logical_constant_origin) =
+  let field value = Printf.sprintf "%d:%s" (String.length value) value in
+  "constant-origin:"
+  ^ String.concat ""
+      (List.map field
+         [ origin.semantic_class; origin.provider_unit;
+           origin.provider_interface; origin.value_uid;
+           origin.declaration_marker; origin.canonical_path ])
+
+let logical_definition_node_id = function
+  | Logical_function_node definition ->
+      Logical_function_id definition.Sst.function_id
+  | Logical_constant_node definition ->
+      Logical_constant_id
+        (logical_constant_origin_material
+           definition.Sst.constant_id.constant_origin)
+  | Logical_symbolic_node (declaration, _) ->
+      Logical_symbolic_id
+        (Symbolic_application_private.declaration_identity_material
+           declaration)
+
+let same_logical_definition_node_id left right =
+  match left, right with
+  | Logical_function_id left, Logical_function_id right ->
+      same_function_id left right
+  | Logical_constant_id left, Logical_constant_id right -> String.equal left right
+  | Logical_symbolic_id left, Logical_symbolic_id right -> String.equal left right
+  | Logical_function_id _, Logical_constant_id _
+  | Logical_function_id _, Logical_symbolic_id _
+  | Logical_constant_id _, Logical_function_id _
+  | Logical_constant_id _, Logical_symbolic_id _
+  | Logical_symbolic_id _, Logical_function_id _
+  | Logical_symbolic_id _, Logical_constant_id _ ->
+      false
+
+let logical_definition_node_key = function
+  | Logical_function_id id ->
+      Printf.sprintf "function:%d:%s" id.Sst.function_index id.function_name
+  | Logical_constant_id origin -> "constant:" ^ origin
+  | Logical_symbolic_id identity -> "symbolic:" ^ identity
+
+let logical_definition_node_span = function
+  | Logical_function_node definition -> definition.Sst.span
+  | Logical_constant_node definition -> definition.Sst.constant_span
+  | Logical_symbolic_node (_, span) -> span
+
+let logical_definition_node_function = function
+  | Logical_function_node definition -> Some definition.Sst.function_id
+  | Logical_constant_node _ | Logical_symbolic_node _ -> None
+
+type logical_definition_vertex = {
+  logical_vertex_id : logical_definition_node_id;
+  logical_vertex_span : Diagnostic.span;
+  logical_vertex_function : Sst.function_id option;
+  logical_vertex_outgoing :
+    unit -> (logical_definition_edge list, error) result;
+}
+
+let validate_logical_definition_dag vertices =
+  let vertices =
+    List.sort
+      (fun left right ->
+        String.compare
+          (logical_definition_node_key left.logical_vertex_id)
+          (logical_definition_node_key right.logical_vertex_id))
+      vertices
   in
-  let rec calls expression =
-    let nested = List.concat_map calls (expression_children expression) in
-    match expression.Sst.expression_desc with
-      | Sst.Direct_call { call_form = Sst.Specification_call; callee; _ } ->
-        callee :: nested
-    | _ -> nested
+  let find_vertex id =
+    List.find_opt
+      (fun vertex ->
+        same_logical_definition_node_id vertex.logical_vertex_id id)
+      vertices
   in
-  let outgoing definition =
-    match definition.Sst.body with
-    | Sst.Spec_definition body -> calls body.expression
-    | Sst.Recursive_spec_definition { body; _ } ->
-        List.filter
-          (fun callee ->
-            not
-              (definition.recursive
-              && same_function_id callee definition.function_id))
-          (calls body.expression)
-    | _ -> []
-  in
-  let rec visit active complete definition =
-    let id = definition.Sst.function_id in
-    if List.exists (same_function_id id) active then
-      fail ~function_id:id definition.span
-        (Invalid_call "cyclic pure specification call graph")
-    else if List.exists (same_function_id id) complete then Ok complete
+  let rec visit active complete vertex =
+    let id = vertex.logical_vertex_id in
+    let[@log_value.trace] key = logical_definition_node_key id in
+    if List.exists (same_logical_definition_node_id id) active then
+      fail ?function_id:vertex.logical_vertex_function vertex.logical_vertex_span
+        (Invalid_call "cyclic logical definition dependency graph")
+    else if List.exists (same_logical_definition_node_id id) complete then
+      Ok complete
     else
-      let active = id :: active in
+      let* edges = vertex.logical_vertex_outgoing () in
+      let edges =
+        List.sort
+          (fun left right ->
+            String.compare
+              (logical_definition_node_key left.logical_edge_target)
+              (logical_definition_node_key right.logical_edge_target))
+          edges
+      in
+      [%log.trace "visiting authenticated logical definition graph node"
+        ~stage:(Delator.Field.string "logical-definition-graph")
+        ~node_identity:(Delator.Field.string (key [@log_value.trace]))
+        ~dependency_count:(Delator.Field.int (List.length edges))
+        ~decision:(Delator.Field.string "visiting")];
       let* complete =
         fold_result
-          (fun complete callee ->
-            match
-              List.find_opt
-                (fun candidate ->
-                    same_function_id candidate.Sst.function_id callee)
-                spec_definitions
-            with
-            | None -> Ok complete
-            | Some callee_definition ->
-                visit active complete callee_definition)
-          complete (outgoing definition)
+          (fun complete edge ->
+            match find_vertex edge.logical_edge_target with
+            | Some target -> visit (id :: active) complete target
+            | None ->
+                fail ?function_id:vertex.logical_vertex_function
+                  edge.logical_edge_span
+                  (Invalid_call
+                     "logical definition graph edge has no authenticated target"))
+          complete edges
       in
       Ok (id :: complete)
   in
-  let* _ =
-    fold_result
-      (fun complete definition -> visit [] complete definition)
-      [] spec_definitions
+  let* (complete [@log_value.debug]) =
+    fold_result (fun complete vertex -> visit [] complete vertex) [] vertices
   in
+  [%log.debug "validated authenticated logical definition graph"
+    ~stage:(Delator.Field.string "logical-definition-graph")
+    ~node_count:
+      (Delator.Field.int (List.length (complete [@log_value.debug])))
+    ~decision:(Delator.Field.string "accepted")];
   Ok ()
+
+let validate_logical_definition_graph ~program ~imported_symbolic_definitions
+    functions =
+  let function_nodes =
+    functions
+    |> List.filter (fun (definition : Sst.function_definition) ->
+           match definition.body with
+           | Sst.Symbolic_declaration _ -> false
+           | Sst.External_specification _ | Sst.Trusted_external_spec_target _
+           | Sst.Trusted_external_body _ -> true
+           | Sst.Checked_exec _ | Sst.Spec_definition _
+           | Sst.Recursive_spec_definition _ | Sst.Proof_body _ ->
+               definition.mode = Sst.Spec)
+    |> List.map (fun definition -> Logical_function_node definition)
+  in
+  let constant_nodes =
+    List.map
+      (fun definition -> Logical_constant_node definition)
+      program.Sst.logical_constants
+  in
+  let local_and_callable_symbolic_nodes =
+    functions
+    |> List.filter_map (fun (definition : Sst.function_definition) ->
+           match definition.body with
+           | Sst.Symbolic_declaration declaration ->
+               Some (Logical_symbolic_node (declaration, definition.span))
+           | Sst.Checked_exec _ | Sst.Spec_definition _
+           | Sst.Recursive_spec_definition _ | Sst.Proof_body _
+           | Sst.External_specification _ | Sst.Trusted_external_spec_target _
+           | Sst.Trusted_external_body _ ->
+               None)
+  in
+  let imported_symbolic_nodes =
+    imported_symbolic_definitions
+    |> List.filter_map (fun (definition : Sst.function_definition) ->
+           match definition.body with
+           | Sst.Symbolic_declaration declaration ->
+               Some (Logical_symbolic_node (declaration, definition.span))
+           | Sst.Checked_exec _ | Sst.Spec_definition _
+           | Sst.Recursive_spec_definition _ | Sst.Proof_body _
+           | Sst.External_specification _ | Sst.Trusted_external_spec_target _
+           | Sst.Trusted_external_body _ ->
+               None)
+  in
+  let symbolic_nodes =
+    local_and_callable_symbolic_nodes @ imported_symbolic_nodes
+  in
+  let nodes =
+    List.sort
+      (fun left right ->
+        String.compare
+          (logical_definition_node_key (logical_definition_node_id left))
+          (logical_definition_node_key (logical_definition_node_id right)))
+      (function_nodes @ constant_nodes @ symbolic_nodes)
+  in
+  let find_function callee =
+    List.find_opt
+      (function
+        | Logical_function_node definition ->
+            same_function_id definition.Sst.function_id callee
+        | Logical_constant_node _ | Logical_symbolic_node _ -> false)
+      nodes
+  in
+  let find_constant constant =
+    List.find_opt
+      (function
+        | Logical_constant_node definition ->
+            String.equal
+              (logical_constant_origin_material
+                 definition.Sst.constant_id.constant_origin)
+              (logical_constant_origin_material constant.Sst.constant_origin)
+            && definition.constant_id.constant_index = constant.constant_index
+            && String.equal definition.constant_id.constant_name
+                 constant.constant_name
+        | Logical_function_node _ | Logical_symbolic_node _ -> false)
+      nodes
+  in
+  let find_symbolic declaration =
+    let identity =
+      Symbolic_application_private.declaration_identity_material declaration
+    in
+    List.find_opt
+      (function
+        | Logical_symbolic_node (candidate, _) ->
+            String.equal identity
+              (Symbolic_application_private.declaration_identity_material
+                 candidate)
+        | Logical_function_node _ | Logical_constant_node _ -> false)
+      nodes
+  in
+  let graph_children expression =
+    match expression.Sst.expression_desc with
+    | Sst.Forall quantifier | Sst.Exists quantifier ->
+        quantifier.quantifier_body
+        :: Option.to_list quantifier.quantifier_trigger
+    | _ -> expression_children expression
+  in
+  let rec expression_edges owner expression =
+    let* nested =
+      fold_result
+        (fun edges child ->
+          let* child_edges = expression_edges owner child in
+          Ok (List.rev_append child_edges edges))
+        [] (graph_children expression)
+    in
+    let add target =
+      Ok
+        ({ logical_edge_target = logical_definition_node_id target;
+           logical_edge_span = expression.span }
+        :: nested)
+    in
+    match expression.Sst.expression_desc with
+    | Sst.Direct_call { callee; _ }
+      when Spec_function_sst_private.is_reference expression -> (
+        match find_function callee with
+        | Some target -> add target
+        | None ->
+            fail ?function_id:(logical_definition_node_function owner)
+              expression.span
+              (Invalid_call
+                 "first-class logical definition dependency has no authenticated specification declaration"))
+    | Sst.Direct_call _
+      when
+        Spec_function_sst_private.lambda expression <> None
+        || Spec_function_sst_private.application expression <> None ->
+        Ok nested
+    | Sst.Direct_call
+        { call_form = Sst.Specification_call; callee; recursive; _ } -> (
+        match find_function callee with
+        | Some _
+          when
+            recursive
+            &&
+            (match owner with
+            | Logical_function_node definition ->
+                definition.recursive
+                && same_function_id definition.function_id callee
+            | Logical_constant_node _ | Logical_symbolic_node _ -> false) ->
+            Ok nested
+        | Some target -> add target
+        | None ->
+            fail ?function_id:(logical_definition_node_function owner)
+              expression.span
+              (Invalid_call
+                 "logical definition dependency has no authenticated specification declaration"))
+    | Sst.Symbolic_application application ->
+        let declaration = Symbolic_application_private.declaration application in
+        (match find_symbolic declaration with
+        | Some target -> add target
+        | None ->
+            fail ?function_id:(logical_definition_node_function owner)
+              expression.span
+              (Invalid_call
+                 "logical definition dependency has no authenticated symbolic declaration"))
+    | Sst.Logical_constant_reference { constant; type_arguments = _ } ->
+        (match find_constant constant with
+        | Some target -> add target
+        | None ->
+            fail ?function_id:(logical_definition_node_function owner)
+              expression.span
+              (Invalid_call
+                 "logical definition dependency has no authenticated logical constant"))
+    | _ -> Ok nested
+  in
+  let outgoing node =
+    match node with
+    | Logical_constant_node definition -> (
+        match definition.Sst.constant_equation with
+        | Some equation -> expression_edges node equation.constant_body.expression
+        | None -> Ok [])
+    | Logical_function_node definition -> (
+        match definition.Sst.body with
+        | Sst.Spec_definition body
+        | Sst.Recursive_spec_definition { body; _ } ->
+            expression_edges node body.expression
+        | Sst.Symbolic_declaration _ | Sst.Checked_exec _ | Sst.Proof_body _
+        | Sst.External_specification _ | Sst.Trusted_external_spec_target _
+        | Sst.Trusted_external_body _ ->
+            Ok [])
+    | Logical_symbolic_node _ -> Ok []
+  in
+  [%log.debug "validating authenticated logical definition graph"
+    ~stage:(Delator.Field.string "logical-definition-graph")
+    ~function_node_count:(Delator.Field.int (List.length function_nodes))
+    ~constant_node_count:(Delator.Field.int (List.length constant_nodes))
+    ~symbolic_node_count:(Delator.Field.int (List.length symbolic_nodes))
+    ~imported_symbolic_node_count:
+      (Delator.Field.int (List.length imported_symbolic_nodes))
+    ~decision:(Delator.Field.string "started")];
+  nodes
+  |> List.map (fun node ->
+         {
+           logical_vertex_id = logical_definition_node_id node;
+           logical_vertex_span = logical_definition_node_span node;
+           logical_vertex_function = logical_definition_node_function node;
+           logical_vertex_outgoing = (fun () -> outgoing node);
+         })
+  |> validate_logical_definition_dag
   let validate_proof_expression ~rank_domains ~parametric_adts ~physical_program
       ~types functions definition expression =
   let function_id = definition.Sst.function_id in
@@ -3903,7 +4406,7 @@ let validate_spec_graph functions =
             (fun (_, component) -> admitted_value_type component)
             components
       | Sst.Aggregate _ -> is_logical_type types typ
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
       | Sst.Parameter _ | Sst.Application _ ->
           false
     else
@@ -3963,7 +4466,7 @@ let validate_spec_graph functions =
                 | Sst.Bind
                     {
                       typ =
-                        (Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Unit);
+                        (Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Bit_vector _ | Sst.Unit);
                       _;
                     }
                 when pattern.typ = value.Sst.typ ->
@@ -4055,6 +4558,11 @@ let validate_spec_graph functions =
           ~decision:(Delator.Field.string "delegated-to-logical-grammar")];
         validate_spec_expression ~rank_domains ~physical_program
           ~parametric_adts types functions definition expression
+    | ( Sst.Bv_literal _ | Sst.Bv_int_to_bv_mod _
+      | Sst.Bv_to_int_unsigned _ | Sst.Bv_to_int_signed _ | Sst.Bv_not _
+      | Sst.Bv_binary _ | Sst.Bv_compare _ ) ->
+        validate_spec_expression ~rank_domains ~physical_program
+          ~parametric_adts types functions definition expression
     | Sst.Direct_call
         {
             call_form = Sst.Specification_call | Sst.Proof_call;
@@ -4091,6 +4599,9 @@ let validate_spec_graph functions =
           iter_result loop
             (Symbolic_application_private.arguments application)
         else reject ()
+    | Sst.Logical_constant_reference _
+      when admitted_value_type expression.typ || scalar_type expression.typ ->
+        Ok ()
       | Sst.Variable _ | Sst.Tuple_value _ | Sst.Record_value _
       | Sst.Constructor_value _ | Sst.Field_read _ | Sst.Field_write _
       | Sst.Shared_scalar_field_write _ | Sst.Owned_tree_nested_write _
@@ -4099,7 +4610,7 @@ let validate_spec_graph functions =
       | Sst.Lift_runtime_int _ | Sst.Direct_call _ | Sst.Callback_call _
       | Sst.Callback_requires _
       | Sst.Callback_ensures _ | Sst.Optional_absent | Sst.Optional_present _
-      | Sst.Optional_forward _ ->
+      | Sst.Optional_forward _ | Sst.Logical_constant_reference _ ->
         reject ()
   in
   loop expression
@@ -4302,7 +4813,7 @@ let parametric_decrease ~program ~span typ =
       Result.is_ok
         (Parametric_rank_domain_private.derive_application ~program ~span
            application)
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
   | Sst.Aggregate _
   | Sst.Parameter _ ->
       false
@@ -4312,7 +4823,7 @@ let parametric_formal ~program ~span = function
         (Parametric_rank_domain_private.derive_application ~program ~span typ)
       || Parametric_adt.deeply_immutable_instance program.Sst.parametric_adts
            typ
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
   | Sst.Aggregate _
   | Sst.Parameter _ ->
       false
@@ -4397,13 +4908,40 @@ let validate_function ~require_authenticated_owned_tree_roots ~rank_domains
       (fun bound parameter ->
         match parameter with
         | Sst.Callback_parameter formal -> (
+            let callback = formal.binding in
+            let* () =
+              iter_result
+                (validate_type_reference types (Some function_id)
+                   callback.callback_span)
+                (Callback_shape_private.endpoint_types callback.callback_shape)
+            in
+            let* () =
+              validate_type_reference types (Some function_id)
+                callback.callback_span
+                (Callback_shape_private.result callback.callback_shape)
+            in
             match
               Callback_certificate_private.authenticate_shape
-                formal.binding.callback_certificate formal.binding.callback_shape
+                callback.callback_certificate callback.callback_shape
             with
-            | Ok () -> Ok bound
+            | Ok () ->
+                [%log.trace "authenticated callback declaration schema"
+                  ~stage:(Delator.Field.string "sst-callback-schema")
+                  ~function_name:
+                    (Delator.Field.string function_id.function_name)
+                  ~endpoint_count:
+                    (Delator.Field.int
+                       (Callback_shape_private.arity callback.callback_shape))
+                  ~decision:(Delator.Field.string "accepted")];
+                Ok bound
             | Error message ->
-                fail ~function_id formal.binding.callback_span
+                [%log.debug "rejected callback declaration schema"
+                  ~stage:(Delator.Field.string "sst-callback-schema")
+                  ~function_name:
+                    (Delator.Field.string function_id.function_name)
+                  ~reason:(Delator.Field.string message)
+                  ~decision:(Delator.Field.string "rejected")];
+                fail ~function_id callback.callback_span
                   (Invalid_call message))
         | Sst.Value_parameter parameter ->
             let* bound =
@@ -4636,7 +5174,7 @@ let validate_function ~require_authenticated_owned_tree_roots ~rank_domains
                            identity.rank_type_id = type_id)
                          (Parametric_rank_domain_private.component domain))
                   rank_domains
-            | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+            | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
             | Sst.Tuple _ | Sst.Parameter _ ->
                 false
             | Sst.Application _ as application ->
@@ -4676,7 +5214,7 @@ let validate_function ~require_authenticated_owned_tree_roots ~rank_domains
             (Invalid_body "checked exec body result type mismatch")
     | Sst.Spec, Sst.Symbolic_declaration declaration ->
         let supported = function
-          | Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Bool
+          | Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Bit_vector _
           | Sst.Parameter _ ->
               true
           | Sst.Application _ as typ
@@ -4809,7 +5347,7 @@ let validate_function ~require_authenticated_owned_tree_roots ~rank_domains
         let aggregate_result =
           match definition.result_type with
           | Sst.Aggregate _ | Sst.Application _ -> true
-          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
           | Sst.Parameter _ ->
               false
         in
@@ -4820,7 +5358,7 @@ let validate_function ~require_authenticated_owned_tree_roots ~rank_domains
         in
         let admitted_recursive_shape typ =
           match typ with
-          | Sst.Int | Sst.Mathematical_int | Sst.Bool -> true
+          | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Bit_vector _ -> true
           | Sst.Aggregate type_id
               when Option.fold ~none:false
                 ~some:(fun frozen ->
@@ -4845,7 +5383,7 @@ let validate_function ~require_authenticated_owned_tree_roots ~rank_domains
                 (fun candidate ->
                   Parametric_type.compare_binder binder candidate = 0)
                 definition.type_binders
-          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
           | Sst.Tuple _ | Sst.Aggregate _
           | Sst.Application _ ->
               false)
@@ -4904,7 +5442,7 @@ let validate_function ~require_authenticated_owned_tree_roots ~rank_domains
                  ||
                  match parameter.pattern.pattern_desc with
                    | Sst.Bind
-                       { typ = Sst.Int | Sst.Mathematical_int | Sst.Bool; _ } ->
+                       { typ = Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Bit_vector _; _ } ->
                        false
                    | Sst.Bind { typ; _ }
                      when Parametric_type.is_spec_function typ ->
@@ -5073,7 +5611,7 @@ let validate_function ~require_authenticated_owned_tree_roots ~rank_domains
                   | Sst.Bind
                       {
                         typ =
-                          (Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Bool);
+                          (Sst.Unit | Sst.Int | Sst.Mathematical_int | Sst.Bool | Sst.Bit_vector _);
                         _;
                       } ->
                       false
@@ -6103,7 +6641,7 @@ let validate_shared_scalar_function ~physical_program types functions
     | Sst.Aggregate type_id -> same_type_id owner type_id
     | Sst.Tuple components ->
         List.exists (fun (_, typ) -> mentions_type owner typ) components
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Parameter _
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Parameter _
     | Sst.Application _ ->
         false
   in
@@ -6132,7 +6670,8 @@ let validate_shared_scalar_function ~physical_program types functions
   let* () =
     match definition.result_type with
     | Sst.Unit | Sst.Bool | Sst.Int -> Ok ()
-    | Sst.Mathematical_int | Sst.Tuple _ | Sst.Aggregate _ | Sst.Parameter _
+    | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _ | Sst.Aggregate _
+    | Sst.Parameter _
     | Sst.Application _ ->
         malformed definition.span
           "bounded shared-scalar mutation may return only unit or a scalar"
@@ -6156,7 +6695,7 @@ let validate_shared_scalar_function ~physical_program types functions
       (fun (parameter : Sst.value_parameter) ->
         match parameter.pattern.typ with
         | Sst.Aggregate _ -> true
-          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+          | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
           | Sst.Parameter _
           | Sst.Application _ -> false)
       (Sst_callback_private.value_parameters definition.parameters)
@@ -6280,7 +6819,7 @@ let validate_shared_scalar_function ~physical_program types functions
             | Some edge -> (
                 match edge.field_type with
                 | Sst.Aggregate _ -> true
-                        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                        | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
                         | Sst.Tuple _
                         | Sst.Parameter _ | Sst.Application _ ->
                             false)
@@ -6308,7 +6847,8 @@ let validate_shared_scalar_function ~physical_program types functions
         | Sst.Bind binding -> (
             match binding.typ with
             | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ -> [ binding.id ]
-            | Sst.Mathematical_int | Sst.Aggregate _ | Sst.Parameter _
+            | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Aggregate _
+            | Sst.Parameter _
             | Sst.Application _ ->
                 [])
         | _ -> [])
@@ -6483,7 +7023,9 @@ let validate_shared_scalar_function ~physical_program types functions
   let rec pure ~allow_old aliases scalar_bound expression =
     let recurse = pure ~allow_old aliases scalar_bound in
     match expression.Sst.expression_desc with
-    | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant -> Ok ()
+    | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
+    | Sst.Logical_constant_reference _ ->
+        Ok ()
     | Sst.Variable { binding; _ } -> (
         match binding.typ with
           | (Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _)
@@ -6532,7 +7074,8 @@ let validate_shared_scalar_function ~physical_program types functions
           match quantifier.quantifier_binder.typ with
           | Sst.Int | Sst.Mathematical_int | Sst.Bool ->
               quantifier.quantifier_binder.id :: scalar_bound
-          | Sst.Unit | Sst.Tuple _ | Sst.Aggregate _ | Sst.Parameter _
+          | Sst.Unit | Sst.Bit_vector _ | Sst.Tuple _ | Sst.Aggregate _
+          | Sst.Parameter _
           | Sst.Application _ ->
               scalar_bound
         in
@@ -6577,7 +7120,10 @@ let validate_shared_scalar_function ~physical_program types functions
       | Sst.Sequence _ | Sst.If _ | Sst.Match _ | Sst.Direct_call _
       | Sst.Callback_call _ | Sst.Callback_requires _ | Sst.Callback_ensures _
       | Sst.Reveal _ | Sst.Reveal_with_fuel _ | Sst.Use_type_invariant _
-      | Sst.Lift_runtime_int _ | Sst.Proof_region _ | Sst.Optional_absent
+      | Sst.Lift_runtime_int _ | Sst.Bv_literal _
+      | Sst.Bv_int_to_bv_mod _ | Sst.Bv_to_int_unsigned _
+      | Sst.Bv_to_int_signed _ | Sst.Bv_not _ | Sst.Bv_binary _
+      | Sst.Bv_compare _ | Sst.Proof_region _ | Sst.Optional_absent
       | Sst.Optional_present _
       | Sst.Optional_forward _ | Sst.Symbolic_application _ ->
         malformed expression.span
@@ -6650,7 +7196,8 @@ let validate_shared_scalar_function ~physical_program types functions
             | Sst.Unit | Sst.Bool | Sst.Int | Sst.Tuple _ ->
                 let* () = pure ~allow_old:false aliases scalar_bound value in
                 runtime aliases (binding.id :: scalar_bound) epoch writes body
-            | Sst.Mathematical_int | Sst.Aggregate _ | Sst.Parameter _
+            | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Aggregate _
+            | Sst.Parameter _
             | Sst.Application _ ->
                 malformed value.span
                   "shared-scalar aggregate construction or rebinding is not \
@@ -6819,7 +7366,7 @@ let finite_rank_domain_for_type ~program ~span ~types rank_domains type_id =
         with
         | Ok domain -> Some domain
         | Error _ -> None)
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Parameter _ ->
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Parameter _ ->
         None
     | Sst.Tuple components ->
         List.fold_left
@@ -7050,7 +7597,8 @@ module Semantic_environment = struct
             = 0
             && List.equal Parametric_type.equal candidate_arguments arguments
         | Some
-            (Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _
+            (Unit | Bool | Int | Mathematical_int | Bit_vector _ | Tuple _
+            | Aggregate _
             | Parameter _)
         | None ->
             false)
@@ -7141,7 +7689,8 @@ module Semantic_environment = struct
                               Non_integer_decrease decrease.clause.span))
                   | Some _ | None ->
                       Non_integer_decrease decrease.clause.span)
-              | Sst.Unit | Sst.Bool | Sst.Tuple _ | Sst.Parameter _
+              | Sst.Unit | Sst.Bool | Sst.Bit_vector _ | Sst.Tuple _
+              | Sst.Parameter _
                   ->
                   Non_integer_decrease decrease.clause.span)
           | _, _ :: duplicate :: _ -> Duplicate_decrease duplicate.clause.span)
@@ -7377,7 +7926,7 @@ module Semantic_environment = struct
       | Sst.Aggregate type_id -> finite_rank_domain_for_type ~program:physical_program ~span:pattern.span ~types !rank_domains type_id
       | Sst.Application _ as application -> (
           match Parametric_rank_domain_private.derive_application ~program:physical_program ~span:pattern.span application with Ok domain -> Some domain | Error _ -> None)
-      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
       | Sst.Parameter _ ->
           None
     in
@@ -7480,7 +8029,8 @@ module Semantic_environment = struct
                             | Sst.Aggregate type_id -> Some type_id
                             | Sst.Application _ -> None
                             | Sst.Unit | Sst.Bool | Sst.Int
-                            | Sst.Mathematical_int | Sst.Tuple _
+                            | Sst.Mathematical_int | Sst.Bit_vector _
+                            | Sst.Tuple _
                             | Sst.Parameter _ ->
                                 assert false);
                         }
@@ -7638,7 +8188,7 @@ let find_logical_type validated typ =
   match typ with
   | Sst.Aggregate type_id ->
       Option.bind (find_type validated type_id) type_logical_type
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
     | Sst.Parameter _
     | Sst.Application _ ->
       Option.map
@@ -7966,17 +8516,47 @@ let validate_rank_domains program =
   | Ok () -> Ok ()
   | Error validation ->
       fail validation.span (Forged_rank_domain validation.detail)
+let validate_logical_constants ~external_specifications
+    (program : Sst.program) functions =
+  iter_result
+    (fun (definition : Sst.logical_constant_definition) ->
+      let function_id =
+        {
+          Sst.function_index = definition.constant_id.constant_index;
+          function_name = definition.constant_id.constant_name;
+        }
+      in
+      let* () =
+        validate_type_reference program.types (Some function_id)
+          definition.constant_span definition.constant_declared_type
+      in
+      match definition.constant_equation with
+      | None -> Ok ()
+      | Some equation ->
+          validate_expression ~require_authenticated_owned_tree_roots:true
+            ~types:program.types ~parametric_adts:program.parametric_adts
+            ~functions ~physical_program:program ~external_specifications
+            ~logical_constant_caller:true ~function_id
+            ~enclosing_recursive:false ~stage:Sst.Logical ~allow_old:false []
+            equation.constant_body.expression)
+    program.logical_constants
 let validate_internal ?imports ?external_specifications (program : Sst.program) =
-  let imported_callables =
+  let imported_callables, imported_symbolic_logical_values =
     match imports with
-    | None -> []
+    | None -> ([], [])
     | Some registration ->
         let environment =
           Imported_callable.registration_environment registration
         in
-        Imported_callable.callables environment
+        ( Imported_callable.callables environment
           |> List.map (fun (snapshot : Imported_callable.callable_snapshot) ->
-               snapshot.definition)
+                 snapshot.definition),
+          Imported_callable.logical_constants environment
+          |> List.filter_map (function
+               | Imported_callable.Imported_symbolic_logical_value
+                   { symbolic; _ } ->
+                   Some symbolic.definition
+               | Imported_callable.Imported_defined_logical_value _ -> None) )
   in
   let adopted_external_specifications =
     Option.fold ~none:[]
@@ -7990,6 +8570,17 @@ let validate_internal ?imports ?external_specifications (program : Sst.program) 
         imported_callables @ adopted_external_specifications @ program.functions;
     }
   in
+  [%log.debug "assembled semantic validation dependencies"
+    ~stage:(Delator.Field.string "semantic-validation-imports")
+    ~imported_callable_count:
+      (Delator.Field.int (List.length imported_callables))
+    ~imported_symbolic_logical_value_count:
+      (Delator.Field.int (List.length imported_symbolic_logical_values))
+    ~adopted_external_specification_count:
+      (Delator.Field.int (List.length adopted_external_specifications))
+    ~local_function_count:
+      (Delator.Field.int (List.length program.Sst.functions))
+    ~decision:(Delator.Field.string "authenticated-dependencies-classified")];
   let policy_span =
     match (program.Sst.functions, program.types) with
     | definition :: _, _ -> definition.Sst.span
@@ -7997,6 +8588,17 @@ let validate_internal ?imports ?external_specifications (program : Sst.program) 
     | [], [] -> Diagnostic.file_span "<semantic-sst>"
   in
   let* () = validate_policy policy_span program.Sst.policy in
+  let* () =
+    if program.logical_constants = [] then Ok ()
+    else
+      Logical_constant_private.authenticate_program program
+      |> Result.map_error (fun message ->
+             {
+               function_id = None;
+               span = policy_span;
+               kind = Malformed_expression message;
+             })
+  in
   let* () = validate_unique_identities semantic_program in
   (* Canonical nominal ownership is established before any function pass can
      classify an aggregate as logical and before semantic handles are issued. *)
@@ -8014,7 +8616,10 @@ let validate_internal ?imports ?external_specifications (program : Sst.program) 
       program.types
   in
   let* () = validate_rank_domains program in
-  let* () = validate_spec_graph semantic_program.functions in
+  let* () =
+    validate_logical_constants ~external_specifications program
+      semantic_program.functions
+  in
   let* () = validate_proof_graph semantic_program.functions in
   let validate_instance_modes () =
     match Instance_mode.validate program with
@@ -8047,9 +8652,16 @@ let validate_internal ?imports ?external_specifications (program : Sst.program) 
                       with
                       | Ok _ -> Ok ()
                       | Error error ->
+                          let kind =
+                            match error.Parametric_rank_domain_private.kind with
+                            | Unsupported_application_actual ->
+                                Unsupported_rank_application_actual error.detail
+                            | Invalid_authority ->
+                                Forged_rank_domain error.detail
+                          in
                           fail ~function_id:definition.function_id error.span
-                            (Forged_rank_domain error.detail))
-                  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                            kind)
+                  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
                   | Sst.Tuple _
                   | Sst.Aggregate _ | Sst.Parameter _ ->
                       Ok ()))
@@ -8060,6 +8672,11 @@ let validate_internal ?imports ?external_specifications (program : Sst.program) 
     validate_functions ~require_authenticated_owned_tree_roots:true
       ~rank_program:program ~external_specifications
       ~definitions:program.functions semantic_program
+  in
+  let* () =
+    validate_logical_definition_graph ~program
+      ~imported_symbolic_definitions:imported_symbolic_logical_values
+      semantic_program.functions
   in
   let* () =
     validate_shared_invariant_client_paths program.types program.functions
@@ -8141,7 +8758,7 @@ let validate_internal ?imports ?external_specifications (program : Sst.program) 
                             invalid
                                 "finite formal must be an exact local ranked \
                                  deeply immutable aggregate")
-                      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+                      | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
                       | Sst.Tuple _
                       | Sst.Parameter _ ->
                         invalid
@@ -8217,6 +8834,7 @@ let error_detail error =
     | Invalid_call detail | Invalid_recursive_marker detail
     | Invalid_unique_return detail | Invalid_target_link detail
     | Forged_abstract_evidence detail | Forged_rank_domain detail
+    | Unsupported_rank_application_actual detail
     | Invalid_instance_mode detail | Invalid_finite_requirement detail
     | Malformed_expression detail ->
         detail
@@ -8259,6 +8877,10 @@ let to_diagnostic error =
              callee_mode = mode_name callee_mode;
            })
         error.span
+  | Unsupported_rank_application_actual _ ->
+      Diagnostic.make
+        (Diagnostic.Unsupported_construct Diagnostic.Unsupported_type)
+        error.span
   | Unsupported_policy _ | Duplicate_type_id _ | Duplicate_function_id _
   | Duplicate_binding_id _ | Unknown_type_id _ | Unknown_function_id _
   | Conflicting_identity _ | Invalid_clause _ | Invalid_body _
@@ -8294,6 +8916,54 @@ let external_target_identity (Validated environment) definition =
       External_target_specification_private.external_target_identity registration
         ~program:environment.program definition)
 module For_testing = struct
+  type logical_definition_graph_matrix = {
+    mixed_cycle_rejected : bool;
+    constant_cycle_rejected : bool;
+    constant_self_cycle_rejected : bool;
+    unresolved_edge_rejected : bool;
+    recursive_self_edge_omission_accepted : bool;
+  }
+
+  let logical_definition_graph_matrix () =
+    let span = Diagnostic.file_span "<logical-definition-graph-test>" in
+    let function_id = { Sst.function_index = 0; function_name = "f" } in
+    let function_node = Logical_function_id function_id in
+    let constant_a = Logical_constant_id "constant-a" in
+    let constant_b = Logical_constant_id "constant-b" in
+    let edge logical_edge_target = { logical_edge_target; logical_edge_span = span } in
+    let vertex logical_vertex_id targets =
+      {
+        logical_vertex_id;
+        logical_vertex_span = span;
+        logical_vertex_function =
+          (match logical_vertex_id with
+          | Logical_function_id id -> Some id
+          | Logical_constant_id _ | Logical_symbolic_id _ -> None);
+        logical_vertex_outgoing =
+          (fun () -> Ok (List.map edge targets));
+      }
+    in
+    let rejected vertices =
+      Result.is_error (validate_logical_definition_dag vertices)
+    in
+    {
+      mixed_cycle_rejected =
+        rejected
+          [ vertex function_node [ constant_a ];
+            vertex constant_a [ function_node ] ];
+      constant_cycle_rejected =
+        rejected
+          [ vertex constant_a [ constant_b ];
+            vertex constant_b [ constant_a ] ];
+      constant_self_cycle_rejected =
+        rejected [ vertex constant_a [ constant_a ] ];
+      unresolved_edge_rejected =
+        rejected [ vertex function_node [ constant_a ] ];
+      recursive_self_edge_omission_accepted =
+        Result.is_ok
+          (validate_logical_definition_dag [ vertex function_node [] ]);
+    }
+
   let with_program_mutation_at_validation_boundary ~mutate ~observe callback =
     if
       !program_mutator_for_testing <> None

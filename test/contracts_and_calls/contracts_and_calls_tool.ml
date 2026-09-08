@@ -136,7 +136,7 @@ let direct_call line typ callee arguments =
 let lower functions =
   match
     Symbolic_executor.lower_program
-      Sst.{ policy = Default_linear_z3; parametric_adts = []; types = []; functions }
+      Sst.{ policy = Default_linear_z3; parametric_adts = []; types = []; logical_constants = []; functions }
   with
   | Ok program -> program
   | Error error -> fail "%s" (Symbolic_executor.error_to_string error)
@@ -672,6 +672,7 @@ let run_error_checks () =
            policy = Default_linear_z3;
            parametric_adts = [];
            types = [];
+           logical_constants = [];
            functions = [ recursive ];
          }
    with

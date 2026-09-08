@@ -73,7 +73,9 @@ let rec contains typ =
   match typ with
   | Parametric_type.Application (_, arguments) -> List.exists contains arguments
   | Tuple components -> List.exists (fun (_, typ) -> contains typ) components
-  | Int | Mathematical_int | Bool | Unit | Aggregate _ | Parameter _ -> false
+  | Int | Mathematical_int | Bool | Unit | Bit_vector _ | Aggregate _
+  | Parameter _ ->
+      false
 
 let arrow_digest = Parametric_type.structural_identity_digest
 
@@ -184,6 +186,7 @@ let lower_arrow ~logical label domain range =
         Error Parametric_lowering_private.Higher_order_source_type
 
 type source_application =
+  | Runtime_scalar_application of [ `Int | `Bool | `Unit ]
   | Logical_sort_application of Logical_sort_private.t
   | Ambiguous_logical_sort_application
   | Conflicting_logical_sort_identity
@@ -212,6 +215,9 @@ let lower_compiler_type ~substitutions ~binders ~logical ~resolve typ =
         lower_arguments descriptor (argument :: lowered) rest
   and application path arguments =
     match resolve path with
+    | Runtime_scalar_application scalar when arguments = [] ->
+        Ok (match scalar with `Int -> Sst.Int | `Bool -> Bool | `Unit -> Unit)
+    | Runtime_scalar_application _ -> Error Parametric_lowering_private.Polymorphic_source_type
     | Logical_sort_application _ when arguments = [] ->
         Ok Parametric_type.Mathematical_int
     | Logical_sort_application _ ->
@@ -275,6 +281,7 @@ let quantifier_body services kind binder_type body =
           services.disjunction (services.negation range) body
       | Logic_quantifier_private.Exists -> services.conjunction range body)
   | Parametric_type.Mathematical_int | Parametric_type.Bool
+  | Parametric_type.Bit_vector _
   | Parametric_type.Parameter _
   | Parametric_type.Application _ | Parametric_type.Unit
   | Parametric_type.Tuple _ | Parametric_type.Aggregate _ ->

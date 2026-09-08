@@ -1,8 +1,8 @@
 (* Every invocation creates its own context; the tuple returned by [solve_one]
    contains only portable primitive data.  No Z3 handle is captured or returned. *)
-let solve_one () : bool * string =
+let solve_one @ portable = fun () ->
   let context = Z3.mk_context [ "model", "true" ] in
-  let solver = Z3.Solver.mk_solver_s context "QF_LIA" in
+  let solver = Z3.Solver.mk_solver context None in
   Fun.protect
     ~finally:(fun () -> Z3.Solver.reset solver)
     (fun () ->
@@ -13,9 +13,52 @@ let solve_one () : bool * string =
       let zero = Z3.Arithmetic.Integer.mk_numeral_s context "0" in
       let one = Z3.Arithmetic.Integer.mk_numeral_s context "1" in
       let assertion = Z3.Arithmetic.mk_lt context zero one in
-      Z3.Solver.add solver [ assertion ];
+      let bv_sort = Z3.BitVector.mk_sort context 8 in
+      let bv value = Z3.Expr.mk_numeral_string context value bv_sort in
+      let bv_zero = bv "0" and bv_one = bv "1" and bv_max = bv "255" in
+      let bv_symbol = Z3.Expr.mk_const_s context "portable_bv" bv_sort in
+      let eq left right = Z3.Boolean.mk_eq context left right in
+      let bv_assertions =
+        [ eq bv_symbol bv_max;
+          eq (Z3.BitVector.mk_not context bv_zero) bv_max;
+          eq (Z3.BitVector.mk_and context bv_zero bv_max) bv_zero;
+          eq (Z3.BitVector.mk_or context bv_zero bv_max) bv_max;
+          eq (Z3.BitVector.mk_xor context bv_zero bv_max) bv_max;
+          eq (Z3.BitVector.mk_add context bv_max bv_one) bv_zero;
+          eq (Z3.BitVector.mk_sub context bv_zero bv_one) bv_max;
+          Z3.BitVector.mk_ult context bv_zero bv_one;
+          Z3.BitVector.mk_ule context bv_zero bv_zero;
+          Z3.BitVector.mk_ugt context bv_one bv_zero;
+          Z3.BitVector.mk_uge context bv_one bv_one;
+          Z3.BitVector.mk_slt context bv_max bv_zero;
+          Z3.BitVector.mk_sle context bv_max bv_max;
+          Z3.BitVector.mk_sgt context bv_zero bv_max;
+          Z3.BitVector.mk_sge context bv_zero bv_zero;
+          eq (Z3.BitVector.mk_bv2int context bv_max false)
+            (Z3.Arithmetic.Integer.mk_numeral_s context "255");
+          eq (Z3.BitVector.mk_bv2int context bv_max true)
+            (Z3.Arithmetic.Integer.mk_numeral_s context "-1");
+          eq
+            (Z3.Arithmetic.Integer.mk_int2bv context 8
+               (Z3.Arithmetic.Integer.mk_numeral_s context "-1"))
+            bv_max ]
+      in
+      Z3.Solver.add solver (assertion :: bv_assertions);
       let sat = Z3.Solver.check solver [] = Z3.Solver.SATISFIABLE in
-      sat, Z3.Expr.to_string assertion)
+      let decoded =
+        match Z3.Solver.get_model solver with
+        | None -> false
+        | Some model -> (
+            match Z3.Model.evaluate model bv_symbol true with
+            | None -> false
+            | Some value ->
+                Z3.Expr.is_numeral value
+                && Z3.Sort.get_sort_kind (Z3.Expr.get_sort value)
+                   = Z3enums.BV_SORT
+                && Z3.BitVector.get_size (Z3.Expr.get_sort value) = 8
+                && String.equal (Z3.BitVector.numeral_to_string value) "255")
+      in
+      sat && decoded, Z3.Expr.to_string assertion)
 
 let record_domain seen domain =
   let bit = 1 lsl domain in

@@ -30,6 +30,7 @@ and argument_contains_recursive_specification argument =
          (match argument with
          | Vir.Recursive_integer_argument _ -> "integer"
          | Vir.Recursive_boolean_argument _ -> "boolean"
+         | Vir.Recursive_bv_argument _ -> "bit-vector"
          | Vir.Recursive_aggregate_argument _ -> "aggregate"
          | Vir.Recursive_parametric_argument _ -> "parametric"))
     ~contains_recursive_specification:
@@ -42,7 +43,8 @@ let argument_type ~parametric_adts ~expected = function
         match expected with
         | Some (Sst.Int | Sst.Mathematical_int as typ) -> typ
         | Some
-            ( Sst.Unit | Sst.Bool | Sst.Tuple _ | Sst.Aggregate _
+            ( Sst.Unit | Sst.Bool | Sst.Bit_vector _ | Sst.Tuple _
+            | Sst.Aggregate _
             | Sst.Parameter _ | Sst.Application _ )
         | None ->
             Sst.Int
@@ -63,6 +65,12 @@ let argument_type ~parametric_adts ~expected = function
              | Some _ | None -> "runtime-integer-fallback"))];
       resolved
   | Vir.Recursive_boolean_argument _ -> Sst.Bool
+  | Vir.Recursive_bv_argument term -> (
+      match expected with
+      | Some (Sst.Bit_vector width as typ)
+        when Bv_width.equal width term.Vir.bit_vector_width ->
+          typ
+      | Some _ | None -> Sst.Bit_vector term.Vir.bit_vector_width)
   | Vir.Recursive_aggregate_argument term ->
       let aggregate = term.Vir.aggregate_type in
       Option.value

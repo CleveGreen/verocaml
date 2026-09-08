@@ -10,6 +10,7 @@ type typ = Parametric_type.t =
   | Bool
   | Int
   | Mathematical_int
+  | Bit_vector of Bv_width.t
   | Tuple of (string option * typ) list
   | Aggregate of type_id
   | Parameter of Parametric_type.binder
@@ -69,6 +70,22 @@ type type_kind =
 type function_id = {
   function_index : int;
   function_name : string;
+}
+
+type logical_constant_origin = {
+  semantic_class : string;
+  provider_unit : string;
+  provider_interface : string;
+  value_uid : string;
+  declaration_marker : string;
+  canonical_path : string;
+  origin_digest : string;
+}
+
+type logical_constant_id = {
+  constant_index : int;
+  constant_name : string;
+  constant_origin : logical_constant_origin;
 }
 
 type same_cmt_abstraction_evidence = {
@@ -277,6 +294,23 @@ type checked_arithmetic =
   | Predecessor
   | Absolute_value
 
+type bit_vector_binary = Bv_operation_private.binary =
+  | Bv_add_mod
+  | Bv_sub_mod
+  | Bv_and
+  | Bv_or
+  | Bv_xor
+
+type bit_vector_comparison = Bv_operation_private.comparison =
+  | Bv_unsigned_less_than
+  | Bv_unsigned_less_or_equal
+  | Bv_unsigned_greater_than
+  | Bv_unsigned_greater_or_equal
+  | Bv_signed_less_than
+  | Bv_signed_less_or_equal
+  | Bv_signed_greater_than
+  | Bv_signed_greater_or_equal
+
 type comparison =
   | Equal
   | Not_equal
@@ -380,6 +414,17 @@ and expression_desc =
   | If of expression * expression * expression option
   | Match of expression * case list
   | Lift_runtime_int of expression
+  | Bv_literal of Bv_value.t
+  | Bv_int_to_bv_mod of {
+      width : Bv_width.t;
+      input : expression;
+      source_authority : Numeric_bv_projection_evidence_private.t;
+    }
+  | Bv_to_int_unsigned of expression
+  | Bv_to_int_signed of expression
+  | Bv_not of expression
+  | Bv_binary of bit_vector_binary * expression * expression
+  | Bv_compare of bit_vector_comparison * expression * expression
   | Checked_arithmetic of checked_arithmetic * expression list
   | Compare of comparison * expression * expression
   | Boolean_not of expression
@@ -394,6 +439,10 @@ and expression_desc =
       recursive : bool;
     }
   | Symbolic_application of expression Symbolic_application_private.t
+  | Logical_constant_reference of {
+      constant : logical_constant_id;
+      type_arguments : typ list;
+    }
   | Callback_call of callback_application
   | Callback_requires of callback_application
   | Callback_ensures of {
@@ -550,10 +599,34 @@ type function_definition = {
   span : span;
 }
 
+type logical_constant_provenance =
+  | Uninterpreted_symbolic
+  | Opaque_defined_identity
+  | Verified_definitional_equation
+
+type logical_constant_equation = {
+  constant_body : staged_expression;
+  constant_source_body_digest : string;
+  constant_body_digest : string;
+  constant_dependency_receipt : string;
+  constant_trust_dependencies : string list;
+}
+
+type logical_constant_definition = {
+  constant_id : logical_constant_id;
+  constant_type_binders : Parametric_type.binder list;
+  constant_declared_type : typ;
+  constant_descriptor_digest : string;
+  constant_provenance : logical_constant_provenance;
+  constant_equation : logical_constant_equation option;
+  constant_span : span;
+}
+
 type program = {
   policy : verification_policy;
   parametric_adts : Parametric_adt.t list;
   types : type_definition list;
+  logical_constants : logical_constant_definition list;
   functions : function_definition list;
 }
 

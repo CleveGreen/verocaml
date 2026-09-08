@@ -99,7 +99,7 @@ let make_theorem_quantifier ~sort_of_type ~schema ~binders ~requires ~ensures
                   (conjunction
                      (Vir.integer_range (Vir.Integer_symbol symbol))),
                 body )
-        | Boolean | Aggregate _ | Parametric _ -> body)
+        | Boolean | Bit_vector _ | Aggregate _ | Parametric _ -> body)
       binders body
   in
   Vir.make_boolean_quantifier ~sort_of_type ~schema ~binders ~body
@@ -129,11 +129,13 @@ type ('state, 'value, 'error) lowering = {
 }
 
 let make_lowering ~error ~aggregate_of_type ~integer_value ~boolean_value
-    ~parametric_value ~spec_function_value ~aggregate_value ~initial_state ~evaluate
+    ~bit_vector_value ~parametric_value ~spec_function_value ~aggregate_value
+    ~initial_state ~evaluate
     ~evaluate_ensure ~evaluate_trigger =
   let sort_of_type = function
     | Parametric_type.Int | Parametric_type.Mathematical_int -> Ok Vir.Integer
     | Bool -> Ok Vir.Boolean
+    | Bit_vector width -> Ok (Vir.Bit_vector width)
     | Parameter binder -> Ok (Vir.Parametric binder)
     | Application _ as typ when Parametric_type.is_spec_function typ ->
         Ok (Vir.Parametric (Spec_function_logic_private.binder typ))
@@ -153,6 +155,10 @@ let make_lowering ~error ~aggregate_of_type ~integer_value ~boolean_value
       match symbol.sort with
     | Vir.Integer -> Ok (integer_value (Vir.Integer_symbol symbol))
     | Boolean -> Ok (boolean_value (Vir.Boolean_symbol symbol))
+    | Bit_vector _ ->
+        Vir.bv_symbol symbol
+        |> Result.map bit_vector_value
+        |> Result.map_error (error symbol.span)
     | Parametric _ ->
         Parametric_logic_private.of_symbol symbol
         |> Result.map parametric_value
@@ -176,12 +182,14 @@ let make_lowering ~error ~aggregate_of_type ~integer_value ~boolean_value
   }
 
 let make_evaluator_lowering ~error ~aggregate_of_type ~integer_value
-    ~boolean_value ~parametric_value ~spec_function_value ~aggregate_value
+    ~boolean_value ~bit_vector_value ~parametric_value ~spec_function_value
+    ~aggregate_value
     ~map_expression
     ~environment ~reset ~context ~evaluate_formula ~prepare_ensure ~restore
     ~evaluate_trigger_formula =
   make_lowering ~error ~aggregate_of_type ~integer_value ~boolean_value
-    ~parametric_value ~spec_function_value ~aggregate_value ~initial_state:reset
+    ~bit_vector_value ~parametric_value ~spec_function_value ~aggregate_value
+    ~initial_state:reset
     ~evaluate:(fun substitution state expression ->
       evaluate_formula (context (environment state))
         (map_expression substitution expression)
@@ -281,6 +289,7 @@ let add_occurrence callee type_arguments occurrences =
 let rec argument_occurrences occurrences = function
   | Vir.Recursive_integer_argument term -> integer_occurrences occurrences term
   | Recursive_boolean_argument term -> boolean_occurrences occurrences term
+  | Recursive_bv_argument term -> bit_vector_occurrences occurrences term
   | Recursive_aggregate_argument term -> aggregate_occurrences occurrences term
   | Recursive_parametric_argument term ->
       parametric_occurrences occurrences term
@@ -340,6 +349,30 @@ and integer_occurrences occurrences = function
         (add_occurrence callee type_arguments occurrences)
         arguments
   | Integer_symbolic_application application ->
+      symbolic_occurrences occurrences application
+  | Integer_bv_to_int_unsigned term | Integer_bv_to_int_signed term ->
+      bit_vector_occurrences occurrences term
+
+and bit_vector_occurrences occurrences term =
+  match term.Vir.bit_vector_desc with
+  | Vir.Bv_symbol _ | Bv_literal _ -> occurrences
+  | Bv_int_to_bv_mod { input; _ } -> integer_occurrences occurrences input
+  | Bv_conditional (condition, consequent, alternative) ->
+      bit_vector_occurrences
+        (bit_vector_occurrences
+           (boolean_occurrences occurrences condition)
+           consequent)
+        alternative
+  | Bv_selector (_, aggregate) -> aggregate_occurrences occurrences aggregate
+  | Bv_not value -> bit_vector_occurrences occurrences value
+  | Bv_binary (_, left, right) ->
+      bit_vector_occurrences (bit_vector_occurrences occurrences left) right
+  | Bv_recursive_spec_application
+      { callee; type_arguments; arguments; _ } ->
+      arguments_occurrences
+        (add_occurrence callee type_arguments occurrences)
+        arguments
+  | Bv_symbolic_application application ->
       symbolic_occurrences occurrences application
 
 and aggregate_occurrences occurrences aggregate =
@@ -402,6 +435,11 @@ and boolean_occurrences occurrences = function
         quantifier.boolean_quantifier_trigger
   | Integer_compare (_, left, right) ->
       integer_occurrences (integer_occurrences occurrences left) right
+  | Bv_equal (left, right) | Bv_not_equal (left, right)
+  | Bv_compare (_, left, right) ->
+      bit_vector_occurrences
+        (bit_vector_occurrences occurrences left)
+        right
   | Boolean_selector (_, aggregate)
   | Boolean_invariant_application { value = aggregate; _ } ->
       aggregate_occurrences occurrences aggregate
@@ -427,6 +465,7 @@ and boolean_occurrences occurrences = function
 and application_occurrences occurrences = function
   | Vir.Integer_application term -> integer_occurrences occurrences term
   | Boolean_application term -> boolean_occurrences occurrences term
+  | Bv_application term -> bit_vector_occurrences occurrences term
   | Aggregate_application term -> aggregate_occurrences occurrences term
   | Parametric_application term -> parametric_occurrences occurrences term
 

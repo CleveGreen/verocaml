@@ -542,6 +542,8 @@ let driver_reject filename =
     | Error (Verification_driver_private.Frontend_error _) -> "frontend"
     | Error (Verification_driver_private.Validation_error _) -> "validation"
     | Error (Verification_driver_private.Invariant_error _) -> "invariant"
+    | Error (Verification_driver_private.Provider_surface_error _) ->
+        "provider-surface"
     | Error (Verification_driver_private.Pipeline_error _) -> "pipeline"
     | Error (Verification_driver_private.Internal_error _) -> "internal"
     | Ok _ -> fail "semantic authority attack was accepted"

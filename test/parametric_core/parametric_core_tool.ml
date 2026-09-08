@@ -175,7 +175,8 @@ let rec map_expression transform (expression : Sst.expression) =
     | Sst.Old payload -> Sst.Old (recurse payload)
     | ( Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
       | Sst.Variable _ | Sst.Mutable_read _ | Sst.Owned_tree_rebase _
-      | Sst.Optional_absent | Sst.Reveal _ | Sst.Reveal_with_fuel _ ) as leaf ->
+      | Sst.Optional_absent | Sst.Reveal _ | Sst.Reveal_with_fuel _
+      | Sst.Logical_constant_reference _ ) as leaf ->
         leaf
   in
   transform { expression with expression_desc }
@@ -478,6 +479,8 @@ let backend_control () =
         path_condition = [];
         goal = Parametric_equal (left, right);
         projection_symbols = [];
+        logical_constant_instances = [];
+        logical_constant_equations = [];
       }
   in
   let config =
@@ -538,6 +541,8 @@ let vir_structure_attacks () =
           path_condition = [];
           goal = Parametric_equal (forged, valid);
           projection_symbols = [];
+          logical_constant_instances = [];
+          logical_constant_equations = [];
         }
     in
     let config = Z3_bridge.{ timeout_ms = 1000; model = false } in

@@ -50,12 +50,14 @@ val post_validation_invariant_breach :
 
 type report = {
   outcome : (completion, error) result;
+  proof_evidence : Verification_proof_evidence_private.t option;
   counters : Verification_session.counters;
   session_destroyed : bool;
 }
 
 val run_validated :
   imports:Imported_callable.registration option ->
+  numeric_bv_source:Numeric_bv_source_admission_private.source option ->
   implementation:Cmt_input.implementation ->
   program:Sst.program ->
   validated:Sst_validation.validated_program ->
@@ -64,12 +66,18 @@ val run_validated :
   proof_entry_activations:
     (unit -> Sst.function_id -> Spec_unfolding.activation list) ->
   configure_solver:(unit -> (solve, setup_error) result) ->
+  on_function_commit:
+    (Sst.function_definition ->
+    Vir.function_execution ->
+    Solver_backend.obligation_result list ->
+    unit) ->
   on_result:(Solver_backend.obligation_result -> unit) ->
   (report, string) result
 
 val run_validated_with_threads :
   threads:int ->
   imports:Imported_callable.registration option ->
+  numeric_bv_source:Numeric_bv_source_admission_private.source option ->
   implementation:Cmt_input.implementation ->
   program:Sst.program ->
   validated:Sst_validation.validated_program ->
@@ -78,6 +86,11 @@ val run_validated_with_threads :
   proof_entry_activations:
     (unit -> Sst.function_id -> Spec_unfolding.activation list) ->
   configure_solver:(unit -> (threaded_solve, setup_error) result) ->
+  on_function_commit:
+    (Sst.function_definition ->
+    Vir.function_execution ->
+    Solver_backend.obligation_result list ->
+    unit) ->
   on_result:(Solver_backend.obligation_result -> unit) ->
   (report, string) result
 

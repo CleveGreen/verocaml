@@ -13,7 +13,8 @@ type threaded = {
 
 type prepared_vc = {
   prepared_obligation : Vir.obligation;
-  projected_symbols : Vir.symbol list;
+  projection_manifest : Z3_bridge.vir_projection_metadata list;
+  deliver_projection_model : bool;
   worker_vc : Function_vc_worker_private.vc_request;
   retry_query : Recursive_spec_encoding.prepared_query option;
 }
@@ -276,11 +277,21 @@ let prepare_worker_vc threaded ~activations routed ~canonical_index
   let policy = threaded.threaded_policy in
   let timeout_ms = Solver_policy_private.timeout_ms policy in
   let rlimit = Solver_policy_private.rlimit policy in
-  let make route projected_symbols retry_query =
+  let make ~deliver_projection_model route projection_manifest retry_query =
+    [%log.trace "prepared coordinator model delivery policy"
+      ~stage:(Delator.Field.string "coordinator-model-delivery")
+      ~canonical_index:(Delator.Field.int canonical_index)
+      ~projection_count:(Delator.Field.int (List.length projection_manifest))
+      ~deliver_projection_model:
+        (Delator.Field.bool deliver_projection_model)
+      ~decision:
+        (Delator.Field.string
+           (if deliver_projection_model then "preserved" else "suppressed"))];
     Ok
       {
         prepared_obligation = obligation;
-        projected_symbols;
+        projection_manifest;
+        deliver_projection_model;
         worker_vc =
           {
             Function_vc_worker_private.canonical_index;
@@ -340,7 +351,7 @@ let prepare_worker_vc threaded ~activations routed ~canonical_index
                  | Vir.Recursive_call_strict_descent _ ->
                      false
                in
-               make
+               make ~deliver_projection_model:false
                  (Function_vc_worker_private.Recursive
                     {
                       initial_query;
@@ -355,23 +366,41 @@ let prepare_worker_vc threaded ~activations routed ~canonical_index
                     })
                  [] retry_query)
   else
-    let requires, route =
+    let requires, direct, route =
       if Vir.obligation_has_structural_rank obligation then
         ( direct_requirements,
-          fun query ->
-            Function_vc_worker_private.Structural_rank query )
+          true,
+          fun query deliver_original_model ->
+            Function_vc_worker_private.Structural_rank
+              { direct_query = query; deliver_original_model } )
       else if Vir.obligation_has_logical_aggregate_construction obligation
       then
         ( direct_requirements,
-          fun query ->
-            Function_vc_worker_private.Logical_aggregate query )
-      else ([], fun query -> Function_vc_worker_private.Ordinary query)
+          true,
+          fun query deliver_original_model ->
+            Function_vc_worker_private.Logical_aggregate
+              { direct_query = query; deliver_original_model } )
+      else
+        ( [],
+          false,
+          fun query _ -> Function_vc_worker_private.Ordinary query )
     in
     Result.bind
       (Z3_bridge.detach_vir ~requires obligation
       |> Result.map_error Z3_bridge.error_to_string)
-      (fun (query, projected_symbols) ->
-        make (route query) projected_symbols None)
+      (fun (query, projection_manifest) ->
+        let has_bv_projection =
+          List.exists
+            (fun metadata ->
+              Option.is_some (Z3_bridge.projection_width metadata))
+            projection_manifest
+        in
+        let deliver_projection_model =
+          if direct then has_bv_projection else true
+        in
+        make ~deliver_projection_model
+          (route query deliver_projection_model)
+          projection_manifest None)
 
 let prepare_function threaded ~source_ordinal
     (request : Verification_pipeline.solve_request) =
@@ -576,14 +605,186 @@ let aggregate_identity rendered =
       try detached_integer rendered
       with _ -> Z.of_int (Hashtbl.hash rendered))
 
-let detached_model_value = function
-  | Z3_bridge.Detached_integer value ->
-      Solver_backend.Integer (detached_integer value)
-  | Detached_boolean value -> Boolean value
-  | Detached_aggregate value ->
-      Aggregate_identity (aggregate_identity value)
+let detached_value_identity = function
+  | Z3_bridge.Detached_integer (identity, _)
+  | Detached_boolean (identity, _)
+  | Detached_aggregate (identity, _)
+  | Detached_bit_vector (identity, _, _) ->
+      identity
 
-let detached_outcome policy projected_symbols = function
+let reject_detached_model_value metadata reason message =
+  let symbol = Z3_bridge.projection_symbol metadata in
+  let width =
+    match Z3_bridge.projection_width metadata with
+    | Some width -> Bv_width.to_int width
+    | None -> 0
+  in
+  [%log.error "detached model projection failed coordinator validation"
+    ~stage:(Delator.Field.string "coordinator-model-reassembly")
+    ~reason:(Delator.Field.string reason)
+    ~projection_order:
+      (Delator.Field.int (Z3_bridge.projection_order metadata))
+    ~symbol_id:(Delator.Field.int symbol.Vir.symbol_id)
+    ~expected_width:(Delator.Field.int width)
+    ~decision:(Delator.Field.string "rejected")];
+  Error message
+[@@delator.instrument] [@@delator.level error]
+
+let reject_detached_model_header ~expected_count ~observed_count reason message =
+  [%log.error "detached model manifest failed coordinator validation"
+    ~stage:(Delator.Field.string "coordinator-model-reassembly")
+    ~reason:(Delator.Field.string reason)
+    ~expected_count:(Delator.Field.int expected_count)
+    ~observed_count:(Delator.Field.int observed_count)
+    ~decision:(Delator.Field.string "rejected")];
+  Error message
+[@@delator.instrument] [@@delator.level error]
+
+let validate_detached_model_headers projection_manifest values =
+  let expected_count = List.length projection_manifest
+  and observed_count = List.length values in
+  if expected_count <> observed_count then
+    reject_detached_model_header ~expected_count ~observed_count "count"
+      "worker model projection count does not match coordinator"
+  else
+    let seen_expected = Hashtbl.create expected_count
+    and seen_observed = Hashtbl.create observed_count in
+    let rec validate_manifest order = function
+      | [] -> Ok ()
+      | metadata :: rest ->
+          let identity = Z3_bridge.projection_identity metadata in
+          if Z3_bridge.projection_order metadata <> order then
+            reject_detached_model_header ~expected_count ~observed_count
+              "manifest-order"
+              "coordinator model projection manifest order is invalid"
+          else if Hashtbl.mem seen_expected identity then
+            reject_detached_model_header ~expected_count ~observed_count
+              "manifest-duplicate-identity"
+              "coordinator model projection manifest identity is duplicated"
+          else (
+            Hashtbl.add seen_expected identity ();
+            validate_manifest (order + 1) rest)
+    in
+    let rec validate_observed = function
+      | [] -> Ok ()
+      | None :: rest -> validate_observed rest
+      | Some value :: rest ->
+          let identity = detached_value_identity value in
+          if Hashtbl.mem seen_observed identity then
+            reject_detached_model_header ~expected_count ~observed_count
+              "response-duplicate-identity"
+              "worker model projection identity is duplicated"
+          else (
+            Hashtbl.add seen_observed identity ();
+            validate_observed rest)
+    in
+    let rec validate_order manifest observed =
+      match (manifest, observed) with
+      | [], [] -> Ok ()
+      | _ :: manifest, None :: observed -> validate_order manifest observed
+      | metadata :: manifest, Some value :: observed ->
+          let expected_identity = Z3_bridge.projection_identity metadata
+          and observed_identity = detached_value_identity value in
+          if String.equal expected_identity observed_identity then
+            validate_order manifest observed
+          else
+            reject_detached_model_value metadata "response-order-or-identity"
+              "worker model projection identity/order does not match coordinator"
+      | [], _ :: _ | _ :: _, [] ->
+          reject_detached_model_header ~expected_count ~observed_count "count"
+            "worker model projection count does not match coordinator"
+    in
+    let* () = validate_manifest 0 projection_manifest in
+    let* () = validate_observed values in
+    validate_order projection_manifest values
+
+let detached_model_value metadata = function
+  | None -> (
+      match Z3_bridge.projection_width metadata with
+      | Some _ ->
+          reject_detached_model_value metadata "mandatory-value-absent"
+            "worker omitted a mandatory BV model projection"
+      | None -> Ok None)
+  | Some value ->
+      match (Z3_bridge.projection_width metadata, value) with
+      | None, Z3_bridge.Detached_integer (_, rendered) -> (
+          match (Z3_bridge.projection_symbol metadata).Vir.sort with
+          | Vir.Integer ->
+              (try Ok (Some (Solver_backend.Integer (detached_integer rendered)))
+               with _ ->
+                 reject_detached_model_value metadata "integer-payload"
+                   "worker returned a malformed integer model value")
+          | Vir.Boolean | Bit_vector _ | Aggregate _ | Parametric _ ->
+              reject_detached_model_value metadata "sort"
+                "worker model projection sort does not match coordinator")
+      | None, Detached_boolean (_, observed) -> (
+          match (Z3_bridge.projection_symbol metadata).Vir.sort with
+          | Vir.Boolean -> Ok (Some (Solver_backend.Boolean observed))
+          | Vir.Integer | Bit_vector _ | Aggregate _ | Parametric _ ->
+              reject_detached_model_value metadata "sort"
+                "worker model projection sort does not match coordinator")
+      | None, Detached_aggregate (_, rendered) -> (
+          match (Z3_bridge.projection_symbol metadata).Vir.sort with
+          | Vir.Aggregate _ ->
+              Ok
+                (Some
+                   (Solver_backend.Aggregate_identity
+                      (aggregate_identity rendered)))
+          | Vir.Integer | Boolean | Bit_vector _ | Parametric _ ->
+              reject_detached_model_value metadata "sort"
+                "worker model projection sort does not match coordinator")
+      | Some expected_width,
+        Detached_bit_vector (_, observed_reference, residue) -> (
+          match Z3_bridge.projection_width_reference metadata with
+          | None ->
+              reject_detached_model_value metadata "missing-width-reference"
+                "coordinator BV projection lost its width reference"
+          | Some expected_reference
+            when not (String.equal expected_reference observed_reference) ->
+              reject_detached_model_value metadata "width-reference"
+                "worker BV model width reference does not match coordinator"
+          | Some _ ->
+              let capability =
+                Bv_backend_capability_receipt_private.capability ()
+              in
+              let* observed_width =
+                match
+                  Bv_width.decode_reference capability observed_reference
+                with
+                | Ok width -> Ok width
+                | Error _ ->
+                    reject_detached_model_value metadata
+                      "width-reference-decode"
+                      "worker BV model width reference is invalid"
+              in
+              if not (Bv_width.equal expected_width observed_width) then
+                reject_detached_model_value metadata "width"
+                  "worker BV model width does not match coordinator"
+              else
+                let* decoded =
+                  match Bv_value.of_string ~width:expected_width residue with
+                  | Ok value -> Ok value
+                  | Error _ ->
+                      reject_detached_model_value metadata "residue"
+                        "worker BV model residue is invalid"
+                in
+                [%log.trace "reassembled mandatory detached BV projection"
+                  ~stage:
+                    (Delator.Field.string "coordinator-bv-model-reassembly")
+                  ~projection_order:
+                    (Delator.Field.int (Z3_bridge.projection_order metadata))
+                  ~width:(Delator.Field.int (Bv_width.to_int expected_width))
+                  ~residue_decimal_bytes:
+                    (Delator.Field.int (String.length residue))
+                  ~decision:(Delator.Field.string "accepted")];
+                Ok (Some (Solver_backend.Bit_vector decoded)))
+      | ( Some _,
+          (Detached_integer _ | Detached_boolean _ | Detached_aggregate _) )
+      | None, Detached_bit_vector _ ->
+          reject_detached_model_value metadata "sort"
+            "worker model projection sort does not match coordinator"
+
+let detached_outcome policy projection_manifest = function
   | Z3_bridge.Detached_verified -> Ok Solver_backend.Verified
   | Detached_inconclusive reason ->
       Ok
@@ -595,18 +796,23 @@ let detached_outcome policy projected_symbols = function
              reason = backend_reason reason;
            })
   | Detached_counterexample values ->
-      if List.length projected_symbols <> List.length values then
-        Error "worker model projection count does not match coordinator"
-      else
-        Ok
-          (Solver_backend.Counterexample
-             (List.map2
-                (fun symbol value ->
-                  {
-                    Solver_backend.symbol;
-                    value = Option.map detached_model_value value;
-                  })
-                projected_symbols values))
+      let* () = validate_detached_model_headers projection_manifest values in
+      let rec reassemble bindings manifest values =
+        match (manifest, values) with
+        | [], [] -> Ok (List.rev bindings)
+        | metadata :: manifest, value :: values ->
+            let* value = detached_model_value metadata value in
+            reassemble
+              ({ Solver_backend.symbol =
+                   Z3_bridge.projection_symbol metadata;
+                 value }
+              :: bindings)
+              manifest values
+        | [], _ :: _ | _ :: _, [] ->
+            Error "worker model projection count does not match coordinator"
+      in
+      let* bindings = reassemble [] projection_manifest values in
+      Ok (Solver_backend.Counterexample bindings)
 
 let commit_worker_vc policy prepared
     (result : Function_vc_worker_private.vc_result) =
@@ -656,7 +862,8 @@ let commit_worker_vc policy prepared
     | Error message -> Error message
     | Ok outcome ->
         detached_outcome policy
-          (if result.ordinary_contribution then prepared.projected_symbols
+          (if prepared.deliver_projection_model then
+             prepared.projection_manifest
            else [])
           outcome)
 

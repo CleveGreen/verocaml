@@ -52,6 +52,7 @@ val lower_arrow :
   (Parametric_type.t, Parametric_lowering_private.source_type_error) result
 
 type source_application =
+  | Runtime_scalar_application of [ `Int | `Bool | `Unit ]
   | Logical_sort_application of Logical_sort_private.t
   | Ambiguous_logical_sort_application
   | Conflicting_logical_sort_identity

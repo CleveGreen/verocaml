@@ -3,6 +3,7 @@ type kind = Forall | Exists
 type first_order_binder =
   | Integer_binder
   | Boolean_binder
+  | Bit_vector_binder of Bv_width.t
   | Parameter_binder of Parametric_type.binder
   | Application_binder of Parametric_type.t
 
@@ -259,6 +260,7 @@ let validate_vector_identity schema =
 let first_order_binder = function
   | Parametric_type.Int | Parametric_type.Mathematical_int -> Ok Integer_binder
   | Parametric_type.Bool -> Ok Boolean_binder
+  | Parametric_type.Bit_vector width -> Ok (Bit_vector_binder width)
   | Parametric_type.Parameter binder -> Ok (Parameter_binder binder)
   | Parametric_type.Application _ as typ -> Ok (Application_binder typ)
   | Parametric_type.Unit | Parametric_type.Tuple _ | Parametric_type.Aggregate _ ->

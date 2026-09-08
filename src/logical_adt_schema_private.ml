@@ -55,7 +55,7 @@ let instantiate ~descriptors ~applications =
       let self_constructor = Parametric_adt.type_constructor descriptor in
       let add_type completed source_type typ =
         match typ with
-        | Parametric_type.Unit | Bool | Int | Mathematical_int | Parameter _
+        | Parametric_type.Unit | Bool | Int | Mathematical_int | Bit_vector _ | Parameter _
         | Aggregate _ ->
             Ok completed
         | Tuple _ ->

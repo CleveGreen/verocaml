@@ -73,7 +73,7 @@ let raw_exec ?(index = 0) ?(name = "f") ?(recursive = false)
     }
 
 let program ?(policy = Sst.Default_linear_z3) ?(types = []) functions =
-  Sst.{ policy; parametric_adts = []; types; functions }
+  Sst.{ policy; parametric_adts = []; types; logical_constants = []; functions }
 
 let expect_error label predicate program =
   match Sst_validation.validate program with

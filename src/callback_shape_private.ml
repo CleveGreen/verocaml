@@ -22,18 +22,65 @@ let valid_label = function
   | Unlabelled -> true
   | Labelled label -> not (String.equal label "")
 
+let authenticate_type typ =
+  let rec authenticate = function
+    | Parametric_type.Unit | Bool | Int | Mathematical_int | Aggregate _
+    | Parameter _ ->
+        Ok ()
+    | Bit_vector width -> (
+        match
+          Bv_width.authenticate_bound
+            (Bv_backend_capability_receipt_private.capability ())
+            width
+        with
+        | Ok () ->
+            [%log.trace "authenticated callback bit-vector endpoint"
+              ~stage:(Delator.Field.string "callback-shape-validation")
+              ~width:(Delator.Field.int (Bv_width.to_int width))
+              ~decision:(Delator.Field.string "accepted")];
+            Ok ()
+        | Error message ->
+            [%log.debug "rejected callback bit-vector endpoint"
+              ~stage:(Delator.Field.string "callback-shape-validation")
+              ~width:(Delator.Field.int (Bv_width.to_int width))
+              ~reason:(Delator.Field.string message)
+              ~decision:(Delator.Field.string "rejected")];
+            Error
+              ("callback bit-vector width is not authenticated: " ^ message))
+    | Tuple components ->
+        List.fold_left
+          (fun result (_, component) ->
+            Result.bind result (fun () -> authenticate component))
+          (Ok ()) components
+    | Application (_, arguments) ->
+        List.fold_left
+          (fun result argument ->
+            Result.bind result (fun () -> authenticate argument))
+          (Ok ()) arguments
+  in
+  authenticate typ
+
+let authenticate_types types =
+  List.fold_left
+    (fun result typ -> Result.bind result (fun () -> authenticate_type typ))
+    (Ok ()) types
+
 let create ~endpoints ~result =
   if endpoints = [] then Error "a callback shape requires at least one endpoint"
   else if not (List.for_all (fun (label, _) -> valid_label label) endpoints) then
     Error "a callback endpoint has an empty compiler label"
   else
-    Ok
-      {
-        identity = ref ();
-        endpoints =
-          List.map (fun (label, typ) -> { label; typ }) endpoints;
-        result;
-      }
+    Result.bind
+      (Result.bind (authenticate_types (List.map snd endpoints)) (fun () ->
+           authenticate_type result))
+      (fun () ->
+        Ok
+          {
+            identity = ref ();
+            endpoints =
+              List.map (fun (label, typ) -> { label; typ }) endpoints;
+            result;
+          })
 
 let endpoints shape =
   List.map (fun endpoint -> (endpoint.label, endpoint.typ)) shape.endpoints
@@ -78,6 +125,10 @@ let instantiate substitutions shape =
 let validate_saturated shape ~labels:actual_labels ~arguments ~result =
   let expected_labels = labels shape in
   let expected_arguments = endpoint_types shape in
+  let* () = authenticate_types expected_arguments in
+  let* () = authenticate_type shape.result in
+  let* () = authenticate_types arguments in
+  let* () = authenticate_type result in
   if List.length actual_labels <> List.length expected_labels then
     Error
       (Printf.sprintf "callback expects %d endpoint(s), received %d"

@@ -80,6 +80,15 @@ val translate_boolean_selector :
   Vir.aggregate_term ->
   (Logic_ir.term, 'error) result
 
+val translate_bit_vector_selector :
+  'error scalar_selector_services ->
+  width:Bv_width.t ->
+  translate_bit_vector:
+    (Vir.bit_vector_term -> (Logic_ir.term, 'error) result) ->
+  Vir.selector ->
+  Vir.aggregate_term ->
+  (Logic_ir.term, 'error) result
+
 val translate_parametric :
   'error scalar_selector_services ->
   Vir.parametric_term ->
@@ -90,6 +99,8 @@ type 'error integer_core_services = {
   symbol : Vir.symbol -> (Logic_ir.term, 'error) result;
   translate_integer : Vir.integer_term -> (Logic_ir.term, 'error) result;
   translate_boolean : Vir.boolean_term -> (Logic_ir.term, 'error) result;
+  translate_bit_vector :
+    Vir.bit_vector_term -> (Logic_ir.term, 'error) result;
   translate_arguments :
     Vir.recursive_spec_argument list -> (Logic_ir.term list, 'error) result;
   recursive_function :
@@ -105,11 +116,46 @@ val translate_integer_core :
   Vir.integer_term ->
   (Logic_ir.term option, 'error) result
 
+type 'error bit_vector_core_services = {
+  span : Diagnostic.span;
+  symbol :
+    Bv_width.t -> Vir.symbol -> (Logic_ir.term, 'error) result;
+  translate_integer : Vir.integer_term -> (Logic_ir.term, 'error) result;
+  translate_boolean : Vir.boolean_term -> (Logic_ir.term, 'error) result;
+  translate_bit_vector :
+    Vir.bit_vector_term -> (Logic_ir.term, 'error) result;
+  translate_selector :
+    Bv_width.t ->
+    Vir.selector ->
+    Vir.aggregate_term ->
+    (Logic_ir.term, 'error) result;
+  translate_arguments :
+    Vir.recursive_spec_argument list -> (Logic_ir.term list, 'error) result;
+  recursive_function :
+    Sst.function_id ->
+    Parametric_type.t list ->
+    Bv_width.t ->
+    (Logic_ir.function_symbol, 'error) result;
+  symbolic_application :
+    Bv_width.t ->
+    Vir.recursive_spec_argument Symbolic_application_private.t ->
+    (Logic_ir.term, 'error) result;
+  term_result :
+    (Logic_ir.term, Logic_ir.error) result -> (Logic_ir.term, 'error) result;
+}
+
+val translate_bit_vector_core :
+  'error bit_vector_core_services ->
+  Vir.bit_vector_term ->
+  (Logic_ir.term, 'error) result
+
 type 'error boolean_core_services = {
   span : Diagnostic.span;
   symbol : Vir.symbol -> (Logic_ir.term, 'error) result;
   translate_boolean : Vir.boolean_term -> (Logic_ir.term, 'error) result;
   translate_integer : Vir.integer_term -> (Logic_ir.term, 'error) result;
+  translate_bit_vector :
+    Vir.bit_vector_term -> (Logic_ir.term, 'error) result;
   term_result :
     (Logic_ir.term, Logic_ir.error) result -> (Logic_ir.term, 'error) result;
 }
@@ -170,6 +216,7 @@ val translate_normalized :
 val translate_arguments :
   integer:(Vir.integer_term -> ('term, 'error) result) ->
   boolean:(Vir.boolean_term -> ('term, 'error) result) ->
+  bit_vector:(Vir.bit_vector_term -> ('term, 'error) result) ->
   aggregate:(Vir.aggregate_term -> ('term, 'error) result) ->
   parametric:(Vir.parametric_term -> ('term, 'error) result) ->
   Vir.recursive_spec_argument list ->

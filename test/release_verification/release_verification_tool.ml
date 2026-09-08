@@ -21,6 +21,8 @@ let controlled_inconclusive () =
       path_condition = [];
       goal = Boolean_constant true;
       projection_symbols = [ symbol ];
+      logical_constant_instances = [];
+      logical_constant_equations = [];
     }
   in
   let config =

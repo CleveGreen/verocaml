@@ -7,6 +7,8 @@ let rec summary_value span typ =
     | Sst.Unit -> Ok Sst.Unit_constant
     | Sst.Bool -> Ok (Sst.Bool_constant false)
     | Sst.Int | Sst.Mathematical_int -> Ok (Sst.Int_constant Z.zero)
+    | Sst.Bit_vector width ->
+        Ok (Sst.Bv_literal (Bv_value.reduce_int ~width Z.zero))
     | Sst.Tuple components ->
         let rec loop values = function
           | [] -> Ok (Sst.Tuple_value (List.rev values))
@@ -49,7 +51,8 @@ let rec requires_opaque_result = function
   | Sst.Aggregate _ | Sst.Parameter _ | Sst.Application _ -> true
   | Sst.Tuple components ->
       List.exists (fun (_, typ) -> requires_opaque_result typ) components
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> false
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+  | Sst.Bit_vector _ -> false
 
 let obligation_definition ~resolved_path ~opaque_binding_id definition =
   let* expression =

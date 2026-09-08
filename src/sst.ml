@@ -10,6 +10,7 @@ type typ = Parametric_type.t =
   | Bool
   | Int
   | Mathematical_int
+  | Bit_vector of Bv_width.t
   | Tuple of (string option * typ) list
   | Aggregate of type_id
   | Parameter of Parametric_type.binder
@@ -68,6 +69,22 @@ type type_kind =
 type function_id = {
   function_index : int;
   function_name : string
+}
+
+type logical_constant_origin = {
+  semantic_class : string;
+  provider_unit : string;
+  provider_interface : string;
+  value_uid : string;
+  declaration_marker : string;
+  canonical_path : string;
+  origin_digest : string;
+}
+
+type logical_constant_id = {
+  constant_index : int;
+  constant_name : string;
+  constant_origin : logical_constant_origin;
 }
 
 type same_cmt_abstraction_evidence = {
@@ -290,6 +307,23 @@ type checked_arithmetic =
   | Predecessor
   | Absolute_value
 
+type bit_vector_binary = Bv_operation_private.binary =
+  | Bv_add_mod
+  | Bv_sub_mod
+  | Bv_and
+  | Bv_or
+  | Bv_xor
+
+type bit_vector_comparison = Bv_operation_private.comparison =
+  | Bv_unsigned_less_than
+  | Bv_unsigned_less_or_equal
+  | Bv_unsigned_greater_than
+  | Bv_unsigned_greater_or_equal
+  | Bv_signed_less_than
+  | Bv_signed_less_or_equal
+  | Bv_signed_greater_than
+  | Bv_signed_greater_or_equal
+
 type comparison =
   | Equal
   | Not_equal
@@ -393,6 +427,17 @@ and expression_desc =
   | If of expression * expression * expression option
   | Match of expression * case list
   | Lift_runtime_int of expression
+  | Bv_literal of Bv_value.t
+  | Bv_int_to_bv_mod of {
+      width : Bv_width.t;
+      input : expression;
+      source_authority : Numeric_bv_projection_evidence_private.t;
+    }
+  | Bv_to_int_unsigned of expression
+  | Bv_to_int_signed of expression
+  | Bv_not of expression
+  | Bv_binary of bit_vector_binary * expression * expression
+  | Bv_compare of bit_vector_comparison * expression * expression
   | Checked_arithmetic of checked_arithmetic * expression list
   | Compare of comparison * expression * expression
   | Boolean_not of expression
@@ -407,6 +452,10 @@ and expression_desc =
       recursive : bool;
     }
   | Symbolic_application of expression Symbolic_application_private.t
+  | Logical_constant_reference of {
+      constant : logical_constant_id;
+      type_arguments : typ list;
+    }
   | Callback_call of callback_application
   | Callback_requires of callback_application
   | Callback_ensures of {
@@ -570,10 +619,34 @@ type function_definition = {
   span : span;
 }
 
+type logical_constant_provenance =
+  | Uninterpreted_symbolic
+  | Opaque_defined_identity
+  | Verified_definitional_equation
+
+type logical_constant_equation = {
+  constant_body : staged_expression;
+  constant_source_body_digest : string;
+  constant_body_digest : string;
+  constant_dependency_receipt : string;
+  constant_trust_dependencies : string list;
+}
+
+type logical_constant_definition = {
+  constant_id : logical_constant_id;
+  constant_type_binders : Parametric_type.binder list;
+  constant_declared_type : typ;
+  constant_descriptor_digest : string;
+  constant_provenance : logical_constant_provenance;
+  constant_equation : logical_constant_equation option;
+  constant_span : span;
+}
+
 type program = {
   policy : verification_policy;
   parametric_adts : Parametric_adt.t list;
   types : type_definition list;
+  logical_constants : logical_constant_definition list;
   functions : function_definition list;
 }
 
@@ -629,7 +702,7 @@ let binding_to_string binding =
     (string_of_type binding.typ)
     (match (binding.typ, binding.uniqueness) with
     | ( Aggregate _ | Parameter _ | Application _), Definitely_unique -> " uniqueness=unique"
-    | (Unit | Bool | Int | Mathematical_int | Tuple _), Definitely_unique
+    | (Unit | Bool | Int | Mathematical_int | Bit_vector _ | Tuple _), Definitely_unique
     | _, Definitely_aliased ->
         "")
 
@@ -756,7 +829,7 @@ let rec print_expression buffer indent (expression : expression) =
       line buffer indent "variable %s%s%s" (binding_to_string binding)
         (match (binding.typ, use_uniqueness) with
         | ( Aggregate _ | Parameter _ | Application _), Definitely_unique -> " use=unique"
-        | (Unit | Bool | Int | Mathematical_int | Tuple _), Definitely_unique
+        | (Unit | Bool | Int | Mathematical_int | Bit_vector _ | Tuple _), Definitely_unique
         | _, Definitely_aliased ->
             "")
         suffix
@@ -959,6 +1032,32 @@ let rec print_expression buffer indent (expression : expression) =
   | Lift_runtime_int operand ->
       line buffer indent "lift-runtime-int%s" suffix;
       print_expression buffer (indent + 2) operand
+  | Bv_literal value ->
+      line buffer indent "bv-literal %s%s" (Bv_value.canonical_decimal value)
+        suffix
+  | Bv_int_to_bv_mod { input; width; _ } ->
+      line buffer indent "int-to-bv-mod width=%s%s" (Bv_width.to_string width)
+        suffix;
+      print_expression buffer (indent + 2) input
+  | Bv_to_int_unsigned operand ->
+      line buffer indent "bv-to-int-unsigned%s" suffix;
+      print_expression buffer (indent + 2) operand
+  | Bv_to_int_signed operand ->
+      line buffer indent "bv-to-int-signed%s" suffix;
+      print_expression buffer (indent + 2) operand
+  | Bv_not operand ->
+      line buffer indent "bv-not%s" suffix;
+      print_expression buffer (indent + 2) operand
+  | Bv_binary (operation, left, right) ->
+      line buffer indent "bv-%s%s" (Bv_operation_private.binary_name operation)
+        suffix;
+      print_expression buffer (indent + 2) left;
+      print_expression buffer (indent + 2) right
+  | Bv_compare (comparison, left, right) ->
+      line buffer indent "bv-%s%s"
+        (Bv_operation_private.comparison_name comparison) suffix;
+      print_expression buffer (indent + 2) left;
+      print_expression buffer (indent + 2) right
   | Checked_arithmetic (operation, operands) ->
       line buffer indent "checked-%s%s" (checked_name operation) suffix;
       List.iter (print_expression buffer (indent + 2)) operands
@@ -1014,6 +1113,12 @@ let rec print_expression buffer indent (expression : expression) =
         (Symbolic_application_private.identity_digest application) suffix;
       List.iter (print_expression buffer (indent + 2))
         (Symbolic_application_private.arguments application)
+  | Logical_constant_reference { constant; type_arguments } ->
+      line buffer indent
+        "logical-constant-reference %s#%d origin=%s type-arguments=[%s]%s"
+        constant.constant_name constant.constant_index
+        constant.constant_origin.origin_digest
+        (String.concat ", " (List.map string_of_type type_arguments)) suffix
   | Callback_call application ->
       line buffer indent "callback-call %s#%d%s" application.callback.callback_name
         application.callback.callback_id suffix;
@@ -1073,6 +1178,7 @@ let rec shared_scalar_transitions expression =
     | Let_mutable (_, initial, body) -> [ initial; body ]
     | Let (bindings, body) -> List.map snd bindings @ [ body ]
     | Sequence (left, right) | Compare (_, left, right)
+    | Bv_binary (_, left, right) | Bv_compare (_, left, right)
     | Boolean_binary (_, left, right) ->
         [ left; right ]
     | If (condition, consequent, alternative) ->
@@ -1082,7 +1188,9 @@ let rec shared_scalar_transitions expression =
         :: List.concat_map
              (fun case -> Option.to_list case.case_guard @ [ case.case_body ])
              cases
-    | Lift_runtime_int operand -> [ operand ]
+    | Lift_runtime_int operand | Bv_to_int_unsigned operand
+    | Bv_to_int_signed operand | Bv_not operand -> [ operand ]
+    | Bv_int_to_bv_mod { input; _ } -> [ input ]
     | Checked_arithmetic (_, operands) -> operands
     | Boolean_not operand | Old operand | Proof_region operand -> [ operand ]
     | Forall quantifier | Exists quantifier ->
@@ -1095,13 +1203,14 @@ let rec shared_scalar_transitions expression =
           arguments
     | Symbolic_application application ->
         Symbolic_application_private.arguments application
+    | Logical_constant_reference _ -> []
     | Callback_call application | Callback_requires application ->
         List.map snd application.arguments
     | Callback_ensures { application; result } ->
         List.map snd application.arguments @ [ result ]
     | Use_type_invariant { value; _ } -> [ value ]
     | Local_assert { predicate; _ } -> [ predicate ]
-    | Int_constant _ | Bool_constant _ | Unit_constant | Variable _
+    | Int_constant _ | Bool_constant _ | Unit_constant | Bv_literal _ | Variable _
     | Mutable_read _ | Reveal _ | Reveal_with_fuel _ ->
         []
   in
@@ -1247,6 +1356,15 @@ let rec map_expression_types substitute expression =
                  case_guard = Option.map recurse case.case_guard;
                  case_body = recurse case.case_body }) cases)
     | Lift_runtime_int operand -> Lift_runtime_int (recurse operand)
+    | Bv_int_to_bv_mod value ->
+        Bv_int_to_bv_mod { value with input = recurse value.input }
+    | Bv_to_int_unsigned operand -> Bv_to_int_unsigned (recurse operand)
+    | Bv_to_int_signed operand -> Bv_to_int_signed (recurse operand)
+    | Bv_not operand -> Bv_not (recurse operand)
+    | Bv_binary (operation, left, right) ->
+        Bv_binary (operation, recurse left, recurse right)
+    | Bv_compare (operation, left, right) ->
+        Bv_compare (operation, recurse left, recurse right)
     | Checked_arithmetic (operation, operands) ->
         Checked_arithmetic (operation, List.map recurse operands)
     | Compare (operation, left, right) ->
@@ -1274,9 +1392,11 @@ let rec map_expression_types substitute expression =
         | Field_write _ | Shared_scalar_field_write _
         | Owned_tree_nested_write _ | Owned_tree_rebase _ | Let_mutable _
         | Mutable_read _ | Mutable_write _ | Let _ | Sequence _ | If _
-        | Match _ | Lift_runtime_int _ | Checked_arithmetic _ | Compare _
+        | Match _ | Lift_runtime_int _ | Bv_literal _ | Bv_int_to_bv_mod _
+        | Bv_to_int_unsigned _ | Bv_to_int_signed _ | Bv_not _ | Bv_binary _
+        | Bv_compare _ | Checked_arithmetic _ | Compare _
         | Boolean_binary _ | Direct_call _ | Callback_call _
-        | Symbolic_application _
+        | Symbolic_application _ | Logical_constant_reference _
         | Callback_requires _ | Callback_ensures _ | Optional_absent
         | Optional_present _ | Optional_forward _ | Reveal _
         | Reveal_with_fuel _ | Use_type_invariant _ | Local_assert _
@@ -1299,6 +1419,12 @@ let rec map_expression_types substitute expression =
           |> Symbolic_application_private.map_arguments recurse
           |> Symbolic_application_private.map_types substitute
           |> Result.get_ok)
+    | Logical_constant_reference reference ->
+        Logical_constant_reference
+          {
+            reference with
+            type_arguments = List.map substitute reference.type_arguments;
+          }
     | Callback_call application ->
         Callback_call
           (map_callback_application_types recurse application)
@@ -1317,7 +1443,7 @@ let rec map_expression_types substitute expression =
     | Old body -> Old (recurse body)
     | Optional_present payload -> Optional_present (recurse payload)
     | Optional_forward payload -> Optional_forward (recurse payload)
-    | (Int_constant _ | Bool_constant _ | Unit_constant
+    | (Int_constant _ | Bool_constant _ | Unit_constant | Bv_literal _
       | Reveal _ | Reveal_with_fuel _ | Optional_absent) as desc ->
         desc
   in
@@ -1525,6 +1651,36 @@ let to_string program =
               List.iter (print_field 6) constructor.constructor_fields)
             constructors)
     program.types;
+  List.iter
+    (fun definition ->
+      let provenance =
+        match definition.constant_provenance with
+        | Uninterpreted_symbolic -> "uninterpreted-symbolic"
+        | Opaque_defined_identity -> "opaque-defined-identity"
+        | Verified_definitional_equation ->
+            "verified-definitional-equation"
+      in
+      line buffer 0
+        "logical-constant %s#%d origin=%s binders=[%s] type=%s descriptor=%s \
+         provenance=%s @ %s"
+        definition.constant_id.constant_name
+        definition.constant_id.constant_index
+        definition.constant_id.constant_origin.origin_digest
+        (String.concat ", "
+           (List.map Parametric_type.binder_to_string
+              definition.constant_type_binders))
+        (string_of_type definition.constant_declared_type)
+        definition.constant_descriptor_digest provenance
+        (span_to_string definition.constant_span);
+      Option.iter
+        (fun equation ->
+          line buffer 2 "equation source-body=%s body=%s dependencies=%s trust=[%s]"
+            equation.constant_source_body_digest equation.constant_body_digest
+            equation.constant_dependency_receipt
+            (String.concat "," equation.constant_trust_dependencies);
+          print_expression buffer 4 equation.constant_body.expression)
+        definition.constant_equation)
+    program.logical_constants;
   List.iter
     (fun definition ->
       line buffer 0

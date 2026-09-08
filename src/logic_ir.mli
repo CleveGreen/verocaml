@@ -3,7 +3,7 @@ type span = Diagnostic.span
 type builder
 type named_sort
 
-type sort = Int | Bool | Named of named_sort
+type sort = Int | Bool | Bv of Bv_width.t | Named of named_sort
 
 type function_symbol
 type datatype
@@ -12,6 +12,7 @@ type datatype_field
 type rank_domain
 type binder
 type term
+type bv_projection
 type user_quantifier
 type axiom
 type query
@@ -26,6 +27,8 @@ type feature =
   | Models
   | Nonlinear_integer_arithmetic
   | Algebraic_datatypes
+  | Bit_vectors
+  | Int_bitvector_conversions
 
 type datatype_field_sort = Field_sort of sort | Recursive_self
 type datatype_field_spec = {
@@ -86,6 +89,7 @@ val bind :
 
 val int : span:span -> Z.t -> term
 val bool : span:span -> bool -> term
+val bv_literal : span:span -> Bv_value.t -> (term, error) result
 val bound : binder -> term
 
 val apply :
@@ -113,6 +117,26 @@ val not_ : span:span -> term -> (term, error) result
 val and_ : span:span -> term list -> (term, error) result
 val or_ : span:span -> term list -> (term, error) result
 val implies : span:span -> term -> term -> (term, error) result
+val bv_eq : span:span -> term -> term -> (term, error) result
+val bv_distinct : span:span -> term -> term -> (term, error) result
+val bv_add_mod : span:span -> term -> term -> (term, error) result
+val bv_sub_mod : span:span -> term -> term -> (term, error) result
+val bv_not : span:span -> term -> (term, error) result
+val bv_and : span:span -> term -> term -> (term, error) result
+val bv_or : span:span -> term -> term -> (term, error) result
+val bv_xor : span:span -> term -> term -> (term, error) result
+val bv_ult : span:span -> term -> term -> (term, error) result
+val bv_ule : span:span -> term -> term -> (term, error) result
+val bv_ugt : span:span -> term -> term -> (term, error) result
+val bv_uge : span:span -> term -> term -> (term, error) result
+val bv_slt : span:span -> term -> term -> (term, error) result
+val bv_sle : span:span -> term -> term -> (term, error) result
+val bv_sgt : span:span -> term -> term -> (term, error) result
+val bv_sge : span:span -> term -> term -> (term, error) result
+val bv_to_int_unsigned : span:span -> term -> (term, error) result
+val bv_to_int_signed : span:span -> term -> (term, error) result
+val int_to_bv_mod :
+  span:span -> width:Bv_width.t -> term -> (term, error) result
 
 val ite :
   span:span -> term -> then_:term -> else_:term -> (term, error) result
@@ -146,7 +170,15 @@ val forall :
   span:span ->
   (axiom, error) result
 
+val project_bv :
+  builder ->
+  identity:string ->
+  term ->
+  span:span ->
+  (bv_projection, error) result
+
 val query :
+  ?bv_projections:bv_projection list ->
   builder ->
   axioms:axiom list ->
   assertions:term list ->
@@ -191,12 +223,37 @@ module View : sig
     | Forall_term of user_quantifier
     | Exists_term of user_quantifier
     | Ite of term * term * term
+    | Bv_literal of Bv_value.t
+    | Bv_eq of term * term
+    | Bv_distinct of term * term
+    | Bv_add_mod of term * term
+    | Bv_sub_mod of term * term
+    | Bv_not of term
+    | Bv_and of term * term
+    | Bv_or of term * term
+    | Bv_xor of term * term
+    | Bv_ult of term * term
+    | Bv_ule of term * term
+    | Bv_ugt of term * term
+    | Bv_uge of term * term
+    | Bv_slt of term * term
+    | Bv_sle of term * term
+    | Bv_sgt of term * term
+    | Bv_sge of term * term
+    | Bv_to_int_unsigned of term
+    | Bv_to_int_signed of term
+    | Int_to_bv_mod of Bv_width.t * term
 
   val declarations : query -> declaration list
   val datatypes : query -> datatype list
   val axioms : query -> axiom list
   val assertions : query -> term list
+  val bv_projections : query -> bv_projection list
   val query_span : query -> span
+  val bv_projection_identity : bv_projection -> string
+  val bv_projection_width : bv_projection -> Bv_width.t
+  val bv_projection_term : bv_projection -> term
+  val bv_projection_span : bv_projection -> span
 
   val named_sort_index : named_sort -> int
   val named_sort_name : named_sort -> string

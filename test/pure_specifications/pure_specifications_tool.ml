@@ -70,7 +70,7 @@ let spec ?(contracts = Sst.empty_contracts) ?(recursive = false) function_id
     }
 
 let program functions =
-  Sst.{ policy = Default_linear_z3; parametric_adts = []; types = []; functions }
+  Sst.{ policy = Default_linear_z3; parametric_adts = []; types = []; logical_constants = []; functions }
 
 let expect_rejected label program =
   match Sst_validation.validate program with

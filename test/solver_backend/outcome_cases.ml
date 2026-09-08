@@ -31,6 +31,8 @@ let obligation ?(assumptions = []) ?(required_preceding_safety = []) ~kind
       path_condition = [];
       goal;
       projection_symbols = [];
+      logical_constant_instances = [];
+      logical_constant_equations = [];
     }
 
 let configuration () =

@@ -21,10 +21,15 @@ type recursive_route : value mod contended portable = {
   retry_rlimit : int;
 }
 
+type direct_route : value mod contended portable = {
+  direct_query : Z3_bridge.detached_query;
+  deliver_original_model : bool;
+}
+
 type route : value mod contended portable =
   | Ordinary of Z3_bridge.detached_query
-  | Structural_rank of Z3_bridge.detached_query
-  | Logical_aggregate of Z3_bridge.detached_query
+  | Structural_rank of direct_route
+  | Logical_aggregate of direct_route
   | Recursive of recursive_route
 
 type vc_request : value mod contended portable = {
@@ -314,14 +319,26 @@ let solve_vc request =
         retry_observation = zero_retry;
         ground_observation = zero_ground;
       }
-  | Structural_rank query | Logical_aggregate query ->
+  | Structural_rank direct | Logical_aggregate direct ->
       let attempt =
         solve_query request ~controlled:Z3_bridge.Real
-          ~rlimit:request.rlimit ~model:true query
+          ~rlimit:request.rlimit ~model:true direct.direct_query
       in
+      [%log.trace "selected detached direct-route model delivery"
+        ~stage:(Delator.Field.string "worker-model-delivery")
+        ~canonical_index:(Delator.Field.int request.canonical_index)
+        ~deliver_original_model:
+          (Delator.Field.bool direct.deliver_original_model)
+        ~ordinary_contribution:(Delator.Field.bool false)
+        ~decision:
+          (Delator.Field.string
+             (if direct.deliver_original_model then "preserved" else "suppressed"))];
       {
         result_index = request.canonical_index;
-        result_outcome = Result.map private_outcome attempt.detached_result;
+        result_outcome =
+          Result.map
+            (if direct.deliver_original_model then Fun.id else private_outcome)
+            attempt.detached_result;
         attempt_telemetry = [ attempt.detached_telemetry ];
         ordinary_contribution = false;
         proof_queries = 0;

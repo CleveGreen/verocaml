@@ -3,11 +3,13 @@
  (public_name verocaml.ppx-rewriter)
  (modules
   vero_ppx_logical_builtin_private
+  vero_ppx_logical_constant_private
   vero_ppx_broadcast_private
   vero_ppx_symbolic_private
   vero_ppx_rewriter)
  (private_modules
   vero_ppx_logical_builtin_private
+  vero_ppx_logical_constant_private
   vero_ppx_broadcast_private
   vero_ppx_symbolic_private)
  (libraries compiler-libs.common delator)

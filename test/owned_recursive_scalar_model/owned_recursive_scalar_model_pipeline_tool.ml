@@ -139,6 +139,7 @@ let driver_error_name = function
   | Verification_driver_private.Frontend_error _ -> "frontend"
   | Validation_error _ -> "validation"
   | Invariant_error _ -> "invariant"
+  | Provider_surface_error _ -> "provider-surface"
   | Pipeline_error _ -> "pipeline"
   | Internal_error _ -> "internal"
 

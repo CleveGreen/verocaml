@@ -201,7 +201,7 @@ let public_identity_checks types callables models =
         false
     | Callback_call _ | Callback_requires _ | Callback_ensures _
     | Reveal _ | Reveal_with_fuel _ | Use_type_invariant _
-    | Local_assert _ ->
+    | Local_assert _ | Logical_constant_reference _ ->
         false
     | Lift_runtime_int operand -> public_expression operand
   in
@@ -771,6 +771,8 @@ let aggregate_backend_matrix () =
         path_condition = [];
         goal;
         projection_symbols = [];
+        logical_constant_instances = [];
+        logical_constant_equations = [];
       }
   in
   let config =

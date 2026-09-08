@@ -150,7 +150,7 @@ let raw_type_definition type_id type_kind line =
     }
 
 let raw_type_program types =
-  Sst.{ policy = Default_linear_z3; parametric_adts = []; types; functions = [] }
+  Sst.{ policy = Default_linear_z3; parametric_adts = []; types; logical_constants = []; functions = [] }
 
 let expect_identity_rejection label line detail program =
   let expected_validation =
@@ -376,6 +376,7 @@ let raw_attacks filename =
             type_definition left_id left_field;
             type_definition right_id right_field;
           ];
+        logical_constants = [];
         functions = [ definition ];
       }
   in
@@ -410,6 +411,7 @@ let raw_attacks filename =
         policy = Default_linear_z3;
         parametric_adts = [];
         types = [ type_definition left_id owned_field ];
+        logical_constants = [];
         functions = [ owned_definition ];
       }
   in

@@ -141,6 +141,7 @@ let diagnostic_matrix consumer =
       Verifier_service.diagnostic_model_bindings diagnostic
       |> List.iter (fun binding ->
              ignore (Verifier_service.model_binding_source_name binding);
+             ignore (Verifier_service.model_binding_source_span binding);
              ignore (Verifier_service.model_binding_value binding)))
     diagnostics;
   print_endline "diagnostics=function/kind/outcome/model status=counterexample"

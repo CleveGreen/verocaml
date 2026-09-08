@@ -8,6 +8,7 @@ type bindings = {
 type sort_reference =
   | Int_sort
   | Bool_sort
+  | Bv_sort of string
   | Named_sort of int
   | Recursive_self
 
@@ -42,5 +43,6 @@ val declare :
 val declare_detached :
   context:Z3.context ->
   resolve_named_sort:(int -> Z3.Sort.sort) ->
+  resolve_bv_sort:(string -> Z3.Sort.sort) ->
   declaration ->
   (bindings, string) result

@@ -1,0 +1,327 @@
+(rule
+ (targets numeric_receipt_prerequisites.ml)
+ (deps
+  ../../src/.verocaml_core.objs/byte/logical_sort_private.cmi
+  ../../src/.verocaml_core.objs/byte/numeric_receipt_private.cmi
+  ../../src/.verocaml_core.objs/byte/target_profile_private.cmi
+  ../../src/.verocaml_core.objs/byte/numeric_descriptor_private.cmi)
+ (action
+  (with-stdout-to %{targets} (echo "let ready = ()"))))
+
+(library
+ (name numeric_source_fixture)
+ (wrapped false)
+ (modules
+  numeric_source_provider
+  numeric_bad_semantics_provider
+  numeric_extension_provider
+  numeric_mli_only_provider
+  numeric_mismatch_provider
+  numeric_shadow_provider
+  numeric_collision_dependency
+  numeric_resolution_provider
+  numeric_diamond_leaf
+  numeric_diamond_left
+  numeric_diamond_right
+  numeric_diamond_root
+  numeric_nonnumeric_provider
+  numeric_direct_reexport
+  numeric_external_direct_reexport)
+ (libraries verocaml.ghost)
+ (preprocess (pps verocaml.ppx -- --verocaml-retained)))
+
+(rule
+ (targets
+  numeric-source-provider.cmt
+  numeric-source-provider.cmi
+  numeric-source-provider.cmti)
+ (deps
+  (:cmt .numeric_source_fixture.objs/byte/numeric_source_provider.cmt)
+  (:cmi .numeric_source_fixture.objs/byte/numeric_source_provider.cmi)
+  (:cmti .numeric_source_fixture.objs/byte/numeric_source_provider.cmti))
+ (action
+  (progn
+   (copy %{cmt} numeric-source-provider.cmt)
+   (copy %{cmi} numeric-source-provider.cmi)
+   (copy %{cmti} numeric-source-provider.cmti))))
+
+(rule
+ (targets
+  numeric-bad-semantics-provider.cmt
+  numeric-bad-semantics-provider.cmi
+  numeric-bad-semantics-provider.cmti)
+ (deps
+  (:cmt .numeric_source_fixture.objs/byte/numeric_bad_semantics_provider.cmt)
+  (:cmi .numeric_source_fixture.objs/byte/numeric_bad_semantics_provider.cmi)
+  (:cmti .numeric_source_fixture.objs/byte/numeric_bad_semantics_provider.cmti))
+ (action
+  (progn
+   (copy %{cmt} numeric-bad-semantics-provider.cmt)
+   (copy %{cmi} numeric-bad-semantics-provider.cmi)
+   (copy %{cmti} numeric-bad-semantics-provider.cmti))))
+
+(rule
+ (targets
+  numeric-extension-provider.cmt
+  numeric-extension-provider.cmi
+  numeric-extension-provider.cmti)
+ (deps
+  (:cmt .numeric_source_fixture.objs/byte/numeric_extension_provider.cmt)
+  (:cmi .numeric_source_fixture.objs/byte/numeric_extension_provider.cmi)
+  (:cmti .numeric_source_fixture.objs/byte/numeric_extension_provider.cmti))
+ (action
+  (progn
+   (copy %{cmt} numeric-extension-provider.cmt)
+   (copy %{cmi} numeric-extension-provider.cmi)
+   (copy %{cmti} numeric-extension-provider.cmti))))
+
+(rule
+ (targets
+  numeric-mli-only-provider.cmt
+  numeric-mli-only-provider.cmi
+  numeric-mli-only-provider.cmti
+  numeric-mismatch-provider.cmt
+  numeric-mismatch-provider.cmi
+  numeric-mismatch-provider.cmti
+  numeric-shadow-provider.cmt
+  numeric-shadow-provider.cmi
+  numeric-shadow-provider.cmti
+  numeric-collision-dependency.cmt
+  numeric-collision-dependency.cmi
+  numeric-collision-dependency.cmti
+  numeric-resolution-provider.cmt
+  numeric-resolution-provider.cmi
+  numeric-resolution-provider.cmti
+  numeric-diamond-leaf.cmt
+  numeric-diamond-leaf.cmi
+  numeric-diamond-leaf.cmti
+  numeric-diamond-left.cmt
+  numeric-diamond-left.cmi
+  numeric-diamond-left.cmti
+  numeric-diamond-right.cmt
+  numeric-diamond-right.cmi
+  numeric-diamond-right.cmti
+  numeric-diamond-root.cmt
+  numeric-diamond-root.cmi
+  numeric-diamond-root.cmti
+  numeric-nonnumeric-provider.cmt
+  numeric-nonnumeric-provider.cmi
+  numeric-nonnumeric-provider.cmti
+  numeric_source_provider.cmi
+  numeric_source_provider.cmti
+  numeric_extension_provider.cmi
+  numeric_extension_provider.cmti
+  numeric_collision_dependency.cmi
+  numeric_collision_dependency.cmti
+  numeric_diamond_leaf.cmi
+  numeric_diamond_leaf.cmti
+  numeric_diamond_left.cmi
+  numeric_diamond_left.cmti
+  numeric_diamond_right.cmi
+  numeric_diamond_right.cmti
+  numeric-direct-reexport.cmt
+  numeric-direct-reexport.cmi
+  numeric-direct-reexport.cmti
+  numeric-external-direct-reexport.cmt
+  numeric-external-direct-reexport.cmi
+  numeric-external-direct-reexport.cmti)
+ (deps
+  (:numeric_source_cmi .numeric_source_fixture.objs/byte/numeric_source_provider.cmi)
+  (:numeric_source_cmti .numeric_source_fixture.objs/byte/numeric_source_provider.cmti)
+  (:numeric_extension_cmi .numeric_source_fixture.objs/byte/numeric_extension_provider.cmi)
+  (:numeric_extension_cmti .numeric_source_fixture.objs/byte/numeric_extension_provider.cmti)
+  (:mli_only_cmt .numeric_source_fixture.objs/byte/numeric_mli_only_provider.cmt)
+  (:mli_only_cmi .numeric_source_fixture.objs/byte/numeric_mli_only_provider.cmi)
+  (:mli_only_cmti .numeric_source_fixture.objs/byte/numeric_mli_only_provider.cmti)
+  (:mismatch_cmt .numeric_source_fixture.objs/byte/numeric_mismatch_provider.cmt)
+  (:mismatch_cmi .numeric_source_fixture.objs/byte/numeric_mismatch_provider.cmi)
+  (:mismatch_cmti .numeric_source_fixture.objs/byte/numeric_mismatch_provider.cmti)
+  (:shadow_cmt .numeric_source_fixture.objs/byte/numeric_shadow_provider.cmt)
+  (:shadow_cmi .numeric_source_fixture.objs/byte/numeric_shadow_provider.cmi)
+  (:shadow_cmti .numeric_source_fixture.objs/byte/numeric_shadow_provider.cmti)
+  (:collision_cmt .numeric_source_fixture.objs/byte/numeric_collision_dependency.cmt)
+  (:collision_cmi .numeric_source_fixture.objs/byte/numeric_collision_dependency.cmi)
+  (:collision_cmti .numeric_source_fixture.objs/byte/numeric_collision_dependency.cmti)
+  (:resolution_cmt .numeric_source_fixture.objs/byte/numeric_resolution_provider.cmt)
+  (:resolution_cmi .numeric_source_fixture.objs/byte/numeric_resolution_provider.cmi)
+  (:resolution_cmti .numeric_source_fixture.objs/byte/numeric_resolution_provider.cmti)
+  (:diamond_leaf_cmt .numeric_source_fixture.objs/byte/numeric_diamond_leaf.cmt)
+  (:diamond_leaf_cmi .numeric_source_fixture.objs/byte/numeric_diamond_leaf.cmi)
+  (:diamond_leaf_cmti .numeric_source_fixture.objs/byte/numeric_diamond_leaf.cmti)
+  (:diamond_left_cmt .numeric_source_fixture.objs/byte/numeric_diamond_left.cmt)
+  (:diamond_left_cmi .numeric_source_fixture.objs/byte/numeric_diamond_left.cmi)
+  (:diamond_left_cmti .numeric_source_fixture.objs/byte/numeric_diamond_left.cmti)
+  (:diamond_right_cmt .numeric_source_fixture.objs/byte/numeric_diamond_right.cmt)
+  (:diamond_right_cmi .numeric_source_fixture.objs/byte/numeric_diamond_right.cmi)
+  (:diamond_right_cmti .numeric_source_fixture.objs/byte/numeric_diamond_right.cmti)
+  (:diamond_root_cmt .numeric_source_fixture.objs/byte/numeric_diamond_root.cmt)
+  (:diamond_root_cmi .numeric_source_fixture.objs/byte/numeric_diamond_root.cmi)
+  (:diamond_root_cmti .numeric_source_fixture.objs/byte/numeric_diamond_root.cmti)
+  (:nonnumeric_cmt .numeric_source_fixture.objs/byte/numeric_nonnumeric_provider.cmt)
+  (:nonnumeric_cmi .numeric_source_fixture.objs/byte/numeric_nonnumeric_provider.cmi)
+  (:nonnumeric_cmti .numeric_source_fixture.objs/byte/numeric_nonnumeric_provider.cmti)
+  (:reexport_cmt .numeric_source_fixture.objs/byte/numeric_direct_reexport.cmt)
+  (:reexport_cmi .numeric_source_fixture.objs/byte/numeric_direct_reexport.cmi)
+  (:reexport_cmti .numeric_source_fixture.objs/byte/numeric_direct_reexport.cmti)
+  (:external_reexport_cmt .numeric_source_fixture.objs/byte/numeric_external_direct_reexport.cmt)
+  (:external_reexport_cmi .numeric_source_fixture.objs/byte/numeric_external_direct_reexport.cmi)
+  (:external_reexport_cmti .numeric_source_fixture.objs/byte/numeric_external_direct_reexport.cmti))
+ (action
+  (progn
+   (copy %{mli_only_cmt} numeric-mli-only-provider.cmt)
+   (copy %{mli_only_cmi} numeric-mli-only-provider.cmi)
+   (copy %{mli_only_cmti} numeric-mli-only-provider.cmti)
+   (copy %{mismatch_cmt} numeric-mismatch-provider.cmt)
+   (copy %{mismatch_cmi} numeric-mismatch-provider.cmi)
+   (copy %{mismatch_cmti} numeric-mismatch-provider.cmti)
+   (copy %{shadow_cmt} numeric-shadow-provider.cmt)
+   (copy %{shadow_cmi} numeric-shadow-provider.cmi)
+   (copy %{shadow_cmti} numeric-shadow-provider.cmti)
+   (copy %{collision_cmt} numeric-collision-dependency.cmt)
+   (copy %{collision_cmi} numeric-collision-dependency.cmi)
+   (copy %{collision_cmti} numeric-collision-dependency.cmti)
+   (copy %{resolution_cmt} numeric-resolution-provider.cmt)
+   (copy %{resolution_cmi} numeric-resolution-provider.cmi)
+   (copy %{resolution_cmti} numeric-resolution-provider.cmti)
+   (copy %{diamond_leaf_cmt} numeric-diamond-leaf.cmt)
+   (copy %{diamond_leaf_cmi} numeric-diamond-leaf.cmi)
+   (copy %{diamond_leaf_cmti} numeric-diamond-leaf.cmti)
+   (copy %{diamond_left_cmt} numeric-diamond-left.cmt)
+   (copy %{diamond_left_cmi} numeric-diamond-left.cmi)
+   (copy %{diamond_left_cmti} numeric-diamond-left.cmti)
+   (copy %{diamond_right_cmt} numeric-diamond-right.cmt)
+   (copy %{diamond_right_cmi} numeric-diamond-right.cmi)
+   (copy %{diamond_right_cmti} numeric-diamond-right.cmti)
+   (copy %{diamond_root_cmt} numeric-diamond-root.cmt)
+   (copy %{diamond_root_cmi} numeric-diamond-root.cmi)
+   (copy %{diamond_root_cmti} numeric-diamond-root.cmti)
+   (copy %{nonnumeric_cmt} numeric-nonnumeric-provider.cmt)
+   (copy %{nonnumeric_cmi} numeric-nonnumeric-provider.cmi)
+   (copy %{nonnumeric_cmti} numeric-nonnumeric-provider.cmti)
+   (copy %{numeric_source_cmi} numeric_source_provider.cmi)
+   (copy %{numeric_source_cmti} numeric_source_provider.cmti)
+   (copy %{numeric_extension_cmi} numeric_extension_provider.cmi)
+   (copy %{numeric_extension_cmti} numeric_extension_provider.cmti)
+   (copy %{collision_cmi} numeric_collision_dependency.cmi)
+   (copy %{collision_cmti} numeric_collision_dependency.cmti)
+   (copy %{diamond_leaf_cmi} numeric_diamond_leaf.cmi)
+   (copy %{diamond_leaf_cmti} numeric_diamond_leaf.cmti)
+   (copy %{diamond_left_cmi} numeric_diamond_left.cmi)
+   (copy %{diamond_left_cmti} numeric_diamond_left.cmti)
+   (copy %{diamond_right_cmi} numeric_diamond_right.cmi)
+   (copy %{diamond_right_cmti} numeric_diamond_right.cmti)
+   (copy %{reexport_cmt} numeric-direct-reexport.cmt)
+   (copy %{reexport_cmi} numeric-direct-reexport.cmi)
+   (copy %{reexport_cmti} numeric-direct-reexport.cmti)
+   (copy %{external_reexport_cmt} numeric-external-direct-reexport.cmt)
+   (copy %{external_reexport_cmi} numeric-external-direct-reexport.cmi)
+   (copy %{external_reexport_cmti} numeric-external-direct-reexport.cmti))))
+
+(rule
+ (targets
+  integration_environment.ml
+  integration-library-environment.manifest)
+ (deps
+  (:environment_module ../outcome_framework/integration_environment.ml)
+  (:manifest ../outcome_framework/integration-library-environment.manifest))
+ (action
+  (progn
+   (copy %{environment_module} integration_environment.ml)
+   (copy %{manifest} integration-library-environment.manifest))))
+
+(executable
+ (name outcome_cases)
+ (modules outcome_cases numeric_semantics_cases numeric_law_cases numeric_base_int_cases numeric_ghost_law_cases numeric_registry_cases numeric_signed_law_cases numeric_target_set_cases numeric_relation_cases numeric_bv_source_cases numeric_ecosystem_cases numeric_original_import_cases numeric_extension_cases integration_environment numeric_receipt_prerequisites)
+ (flags (:standard -I src/.verocaml_core.objs/byte))
+ (libraries
+  outcome_test_support
+  verocaml_core
+  vero_ppx_rewriter
+  compiler-libs.common))
+
+(rule
+ (targets
+  numeric-receipt-outcome-cases.result-report
+  numeric-receipt-outcome-cases.failure-archive)
+ (deps
+  (sandbox always)
+ (:suite outcome_cases.exe)
+  ../../ppx/vero_ppx.exe
+  ../../runtime/.vero_ghost.objs/byte/vero_ghost.cmi
+  numeric-source-provider.cmt
+  numeric-source-provider.cmi
+  numeric-source-provider.cmti
+  numeric-bad-semantics-provider.cmt
+  numeric-bad-semantics-provider.cmi
+  numeric-bad-semantics-provider.cmti
+  numeric-extension-provider.cmt
+  numeric-extension-provider.cmi
+  numeric-extension-provider.cmti
+  numeric-mli-only-provider.cmt
+  numeric-mli-only-provider.cmi
+  numeric-mli-only-provider.cmti
+  numeric-mismatch-provider.cmt
+  numeric-mismatch-provider.cmi
+  numeric-mismatch-provider.cmti
+  numeric-shadow-provider.cmt
+  numeric-shadow-provider.cmi
+  numeric-shadow-provider.cmti
+  numeric-collision-dependency.cmt
+  numeric-collision-dependency.cmi
+  numeric-collision-dependency.cmti
+  numeric-resolution-provider.cmt
+  numeric-resolution-provider.cmi
+  numeric-resolution-provider.cmti
+  numeric-diamond-leaf.cmt
+  numeric-diamond-leaf.cmi
+  numeric-diamond-leaf.cmti
+  numeric-diamond-left.cmt
+  numeric-diamond-left.cmi
+  numeric-diamond-left.cmti
+  numeric-diamond-right.cmt
+  numeric-diamond-right.cmi
+  numeric-diamond-right.cmti
+  numeric-diamond-root.cmt
+  numeric-diamond-root.cmi
+  numeric-diamond-root.cmti
+  numeric-nonnumeric-provider.cmt
+  numeric-nonnumeric-provider.cmi
+  numeric-nonnumeric-provider.cmti
+  numeric_source_provider.cmi
+  numeric_source_provider.cmti
+  numeric_extension_provider.cmi
+  numeric_extension_provider.cmti
+  numeric_collision_dependency.cmi
+  numeric_collision_dependency.cmti
+  numeric_diamond_leaf.cmi
+  numeric_diamond_leaf.cmti
+  numeric_diamond_left.cmi
+  numeric_diamond_left.cmti
+  numeric_diamond_right.cmi
+  numeric_diamond_right.cmti
+  numeric-direct-reexport.cmt
+  numeric-direct-reexport.cmi
+  numeric-direct-reexport.cmti
+  numeric-external-direct-reexport.cmt
+  numeric-external-direct-reexport.cmi
+  numeric-external-direct-reexport.cmti
+  integration-library-environment.manifest)
+ (action
+  (run
+   %{suite}
+   --produce
+   numeric-receipt-outcome-cases.result-report
+   numeric-receipt-outcome-cases.failure-archive)))
+
+(rule
+ (alias numeric-receipt-outcome-check)
+ (deps
+  (:report numeric-receipt-outcome-cases.result-report)
+  (:archive numeric-receipt-outcome-cases.failure-archive)
+  (:validator ../support/report_validator.exe))
+ (action
+  (run %{validator} %{report} %{archive})))
+
+(alias
+ (name runtest)
+ (deps (alias numeric-receipt-outcome-check)))

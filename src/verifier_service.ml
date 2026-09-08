@@ -76,6 +76,7 @@ type model_value =
   | Integer of string
   | Boolean of bool
   | Aggregate_identity of string
+  | Bit_vector of Bv_value.t
 
 type inconclusive_reason =
   | Resource_exhausted
@@ -93,7 +94,28 @@ type diagnostic_outcome =
 type model_binding = {
   source_name : string;
   symbol_id : int;
+  source_span : Diagnostic.span;
   value : model_value option;
+}
+
+type native_bv_provenance =
+  Numeric_bv_projection_evidence_private.source_observation
+
+type native_bv_result_outcome =
+  | Native_bv_verified
+  | Native_bv_counterexample
+  | Native_bv_inconclusive of {
+      configured_timeout_ms : int;
+      configured_rlimit : int;
+      reason : inconclusive_reason;
+    }
+
+type native_bv_result_provenance = {
+  function_ : function_ref;
+  obligation_identity : string;
+  obligation_span : Diagnostic.span;
+  outcome : native_bv_result_outcome;
+  source_observations : native_bv_provenance list;
 }
 
 type diagnostic = {
@@ -102,6 +124,7 @@ type diagnostic = {
   span : Diagnostic.span;
   outcome : diagnostic_outcome;
   model_bindings : model_binding list;
+  native_bv_provenance : native_bv_provenance list;
 }
 
 type trusted_external_view =
@@ -161,6 +184,8 @@ type result = {
   obligations : int;
   provenance : provenance list;
   diagnostics : diagnostic list;
+  native_bv_provenance : native_bv_provenance list;
+  native_bv_results : native_bv_result_provenance list;
   trusted_external_observations : trusted_external_observation list;
 }
 
@@ -286,11 +311,13 @@ let model_value = function
   | Solver_backend.Integer value -> Integer (Z.to_string value)
   | Boolean value -> Boolean value
   | Aggregate_identity value -> Aggregate_identity (Z.to_string value)
+  | Bit_vector value -> Bit_vector value
 
 let model_binding (binding : Solver_backend.model_binding) =
   {
     source_name = binding.symbol.source_name;
     symbol_id = binding.symbol.symbol_id;
+    source_span = binding.symbol.span;
     value = Option.map model_value binding.value;
   }
 
@@ -300,6 +327,9 @@ let inconclusive_reason = function
   | Backend_unknown detail -> Backend_unknown detail
 
 let diagnostic (value : Solver_backend.obligation_result) =
+  let native_bv_provenance =
+    Vir.obligation_native_bv_source_observations value.obligation
+  in
   match value.outcome with
   | Solver_backend.Verified -> None
   | Counterexample bindings ->
@@ -310,6 +340,7 @@ let diagnostic (value : Solver_backend.obligation_result) =
           span = value.obligation.span;
           outcome = Diagnostic_counterexample;
           model_bindings = List.map model_binding bindings;
+          native_bv_provenance;
         }
   | Inconclusive { configured_timeout_ms; configured_rlimit; reason } ->
       Some
@@ -325,7 +356,56 @@ let diagnostic (value : Solver_backend.obligation_result) =
                 reason = inconclusive_reason reason;
               };
           model_bindings = [];
+          native_bv_provenance;
         }
+
+let native_bv_result_outcome = function
+  | Solver_backend.Verified -> Native_bv_verified
+  | Counterexample _ -> Native_bv_counterexample
+  | Inconclusive { configured_timeout_ms; configured_rlimit; reason } ->
+      Native_bv_inconclusive
+        { configured_timeout_ms; configured_rlimit;
+          reason = inconclusive_reason reason }
+
+let associate_native_bv_results
+    (results : Solver_backend.obligation_result list) =
+  let associations =
+    results
+    |> List.filter_map (fun (result : Solver_backend.obligation_result) ->
+           let source_observations =
+             Vir.obligation_native_bv_source_observations result.obligation
+           in
+           if source_observations = [] then None
+           else
+             Some
+               { function_ = function_ref result.obligation.function_ref;
+                 obligation_identity =
+                   Vir_identity_private.obligation result.obligation;
+                 obligation_span = result.obligation.span;
+                 outcome = native_bv_result_outcome result.outcome;
+                 source_observations })
+  in
+  let[@log_value.debug] source_occurrences =
+    List.fold_left
+      (fun count association ->
+        count + List.length association.source_observations)
+      0 associations
+  in
+  [%log.debug "associated native BV source provenance with coordinator results"
+    ~stage:(Delator.Field.string "verification-service-provenance")
+    ~coordinator_results:(Delator.Field.int (List.length results))
+    ~associated_results:(Delator.Field.int (List.length associations))
+    ~source_occurrences:
+      (Delator.Field.int (source_occurrences [@log_value.debug]))
+    ~decision:(Delator.Field.string "preserved-original-results")];
+  associations
+[@@delator.instrument] [@@delator.level debug]
+
+let native_bv_provenance native_bv_results =
+  native_bv_results
+  |> List.concat_map (fun result -> result.source_observations)
+  |> List.sort_uniq (fun (left : native_bv_provenance) right ->
+         String.compare left.occurrence_identity right.occurrence_identity)
 
 let trusted_external_observations (vir : Vir.program) =
   let uses =
@@ -477,6 +557,8 @@ let verify_with_external ?external_specifications ?(external_targets = []) reque
                })
       in
       let result =
+        let obligation_results = Verification_driver_private.results driver in
+        let native_bv_results = associate_native_bv_results obligation_results in
         {
           status = status (Verification_driver_private.status driver);
           semantic_sst =
@@ -485,9 +567,9 @@ let verify_with_external ?external_specifications ?(external_targets = []) reque
           functions = Verification_driver_private.functions driver;
           obligations = Verification_driver_private.obligations driver;
           provenance;
-          diagnostics =
-            Verification_driver_private.results driver
-            |> List.filter_map diagnostic;
+          diagnostics = obligation_results |> List.filter_map diagnostic;
+          native_bv_provenance = native_bv_provenance native_bv_results;
+          native_bv_results;
           trusted_external_observations = trusted_external_observations vir;
         }
       in
@@ -502,6 +584,10 @@ let verify_with_external ?external_specifications ?(external_targets = []) reque
              | Incomplete_source -> "incomplete-source"))
         ~functions:(Delator.Field.int result.functions)
         ~obligations:(Delator.Field.int result.obligations)
+        ~native_bv_source_occurrences:
+          (Delator.Field.int (List.length result.native_bv_provenance))
+        ~native_bv_result_associations:
+          (Delator.Field.int (List.length result.native_bv_results))
         ~dependency_count:(Delator.Field.int (List.length request.dependencies))];
       Ok result
 [@@delator.instrument] [@@delator.level info]
@@ -650,6 +736,19 @@ let provenance_interface_digest value = value.interface_digest
 let provenance_direct_dependencies value = value.direct_dependencies
 let provenance_transitive_dependencies value = value.transitive_dependencies
 let diagnostics result = result.diagnostics
+let native_bv_provenance result = result.native_bv_provenance
+let native_bv_results result = result.native_bv_results
+let native_bv_result_function (value : native_bv_result_provenance) =
+  value.function_
+let native_bv_result_obligation_identity
+    (value : native_bv_result_provenance) =
+  value.obligation_identity
+let native_bv_result_obligation_span (value : native_bv_result_provenance) =
+  value.obligation_span
+let native_bv_result_outcome (value : native_bv_result_provenance) = value.outcome
+let native_bv_result_source_observations
+    (value : native_bv_result_provenance) =
+  value.source_observations
 let diagnostic_function value = value.function_
 let function_name value = value.function_name
 let function_index value = value.function_index
@@ -657,8 +756,11 @@ let diagnostic_kind value = value.kind
 let diagnostic_span value = value.span
 let diagnostic_outcome value = value.outcome
 let diagnostic_model_bindings value = value.model_bindings
+let diagnostic_native_bv_provenance (value : diagnostic) =
+  value.native_bv_provenance
 let model_binding_source_name value = value.source_name
 let model_binding_symbol_id value = value.symbol_id
+let model_binding_source_span value = value.source_span
 let model_binding_value value = value.value
 
 let trusted_external_observations result =
@@ -672,3 +774,7 @@ let scoped_row_outcome row = row.scoped_outcome
 let scoped_row_unit_name row =
   Verification_scope_private.unit_name row.scoped_artifact
 let scoped_row_cmt row = Verification_scope_private.cmt row.scoped_artifact
+
+module For_testing = struct
+  let native_bv_results = associate_native_bv_results
+end

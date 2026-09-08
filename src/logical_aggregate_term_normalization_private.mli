@@ -28,6 +28,12 @@ val boolean_selector :
   Vir.aggregate_term ->
   ((Vir.aggregate_term, Vir.boolean_term) observation, string) result
 
+val bit_vector_selector :
+  Bv_width.t ->
+  Vir.selector ->
+  Vir.aggregate_term ->
+  ((Vir.aggregate_term, Vir.bit_vector_term) observation, string) result
+
 val aggregate_selector :
   Vir.selector ->
   Vir.aggregate_term ->

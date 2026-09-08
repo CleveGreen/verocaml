@@ -78,6 +78,7 @@ let injected_invariant_breach () =
 
 type report = {
   outcome : (completion, error) result;
+  proof_evidence : Verification_proof_evidence_private.t option;
   counters : Verification_session.counters;
   session_destroyed : bool;
 }
@@ -176,8 +177,83 @@ let outcome_flags results =
   in
   (counterexample, inconclusive)
 
-let run session prepared ~initial_obligations ~solve ~on_result =
-  let serial_source_ordinal = ref (-1) in
+let scheduling_dependency_indices numeric_bv_source scheduled =
+  let definition =
+    Symbolic_executor_private.scheduled_definition scheduled
+  in
+  let numeric =
+    Option.fold ~none:[]
+      ~some:(fun source ->
+        Numeric_bv_source_admission_private.prior_law_scheduling_dependencies
+          source ~definition)
+      numeric_bv_source
+  in
+  List.concat
+    [ Symbolic_executor_private.scheduled_receipt_prerequisites scheduled;
+      Symbolic_executor_private
+      .scheduled_invariant_receipt_prerequisites scheduled;
+      Symbolic_executor_private.scheduled_finite_result_prerequisites scheduled;
+      Symbolic_executor_private.scheduled_frozen_formal_prerequisites scheduled;
+      numeric ]
+  |> List.sort_uniq Int.compare
+
+let scheduled_with_source_ordinals prepared numeric_bv_source =
+  let original =
+    Symbolic_executor_private.scheduled_functions prepared
+    |> List.mapi (fun source_ordinal scheduled -> (source_ordinal, scheduled))
+  in
+  match numeric_bv_source with
+  | None -> original
+  | Some _ ->
+      let rec select completed ordered remaining =
+        match remaining with
+        | [] -> List.rev ordered
+        | _ ->
+            let remaining_indices =
+              List.map
+                (fun (_, scheduled) ->
+                  (Symbolic_executor_private.scheduled_definition scheduled)
+                    .Sst.function_id.function_index)
+                remaining
+            in
+            let ready (_, scheduled) =
+              scheduling_dependency_indices numeric_bv_source scheduled
+              |> List.for_all (fun dependency ->
+                     List.mem dependency completed
+                     || not (List.mem dependency remaining_indices))
+            in
+            (match List.find_opt ready remaining with
+            | None ->
+                [%log.error "refused cyclic numeric law-first schedule"
+                  ~stage:
+                    (Delator.Field.string "numeric-prior-law-scheduling")
+                  ~remaining_functions:
+                    (Delator.Field.int (List.length remaining))
+                  ~decision:
+                    (Delator.Field.string "preserve-ordinary-source-order")];
+                List.rev_append ordered remaining
+            | Some ((_, scheduled) as selected) ->
+                let index =
+                  (Symbolic_executor_private.scheduled_definition scheduled)
+                    .Sst.function_id.function_index
+                in
+                select (index :: completed) (selected :: ordered)
+                  (List.filter (fun item -> item != selected) remaining))
+      in
+      let ordered = select [] [] original in
+      [%log.debug "ordered exact numeric prior laws before dependent goals"
+        ~stage:(Delator.Field.string "numeric-prior-law-scheduling")
+        ~function_count:(Delator.Field.int (List.length ordered))
+        ~reordered:
+          (Delator.Field.bool
+             (List.map fst ordered <> List.map fst original))
+        ~source_ordinals_preserved:(Delator.Field.bool true)
+        ~decision:(Delator.Field.string "dependency-safe-order")];
+      ordered
+[@@delator.instrument] [@@delator.level debug]
+
+let run session prepared ~numeric_bv_source ~initial_obligations ~solve
+    ~on_function_commit ~on_result =
   let rec loop executions functions obligations saw_counterexample
       saw_inconclusive saw_incomplete blocked_invariant_callables
       blocked_finite_callables blocked_frozen_callables
@@ -194,13 +270,14 @@ let run session prepared ~initial_obligations ~solve ~on_result =
             status;
             vir =
               Symbolic_executor_private.staged_program prepared
-                (List.rev executions);
+                (executions
+                |> List.sort (fun (left, _) (right, _) ->
+                       Int.compare left right)
+                |> List.map snd);
             functions;
             obligations;
           }
-    | scheduled :: rest ->
-        incr serial_source_ordinal;
-        let source_ordinal = !serial_source_ordinal in
+    | (source_ordinal, scheduled) :: rest ->
         let definition =
           Symbolic_executor_private.scheduled_definition scheduled
         in
@@ -378,6 +455,7 @@ let run session prepared ~initial_obligations ~solve ~on_result =
                               session)
                           results;
                       List.iter on_result results;
+                      on_function_commit definition execution results;
                       let complete =
                         List.length results
                         = List.length execution.Vir.obligations
@@ -424,7 +502,7 @@ let run session prepared ~initial_obligations ~solve ~on_result =
                       with
                       | Error error -> Error (Engine_error error)
                       | Ok _ ->
-                      let executions = execution :: executions in
+                      let executions = (source_ordinal, execution) :: executions in
                       let functions = functions + 1 in
                       let obligations =
                         obligations + List.length execution.Vir.obligations
@@ -505,11 +583,11 @@ let run session prepared ~initial_obligations ~solve ~on_result =
                               rest))))))
   in
   loop [] 0 initial_obligations false false false [] [] [] false
-    (Symbolic_executor_private.scheduled_functions prepared)
+    (scheduled_with_source_ordinals prepared numeric_bv_source)
 [@@delator.instrument] [@@delator.level debug]
 
 type threaded_state = {
-  executions : Vir.function_execution list;
+  executions : (int * Vir.function_execution) list;
   functions : int;
   obligations : int;
   saw_counterexample : bool;
@@ -560,7 +638,9 @@ let completion_of_threaded_state prepared state =
     status;
     vir =
       Symbolic_executor_private.staged_program prepared
-        (List.rev state.executions);
+        (state.executions
+        |> List.sort (fun (left, _) (right, _) -> Int.compare left right)
+        |> List.map snd);
     functions = state.functions;
     obligations = state.obligations;
   }
@@ -740,7 +820,8 @@ let materialize_function session prepared prepare source_ordinal scheduled =
                           prepared_function;
                         }))))
 
-let note_result_authority session envelope results ~on_result =
+let note_result_authority session envelope results ~on_function_commit
+    ~on_result =
   List.iter
     (fun result ->
       match result.Solver_backend.obligation.Vir.kind with
@@ -771,7 +852,8 @@ let note_result_authority session envelope results ~on_result =
       (fun _ ->
         Verification_session.note_dependent_solver_attempt session)
       results;
-  List.iter on_result results
+  List.iter on_result results;
+  on_function_commit envelope.definition envelope.execution results
 
 let update_after_results prepared state envelope results =
   let complete =
@@ -798,7 +880,8 @@ let update_after_results prepared state envelope results =
   ( complete,
     {
       state with
-      executions = envelope.execution :: state.executions;
+      executions =
+        (envelope.source_ordinal, envelope.execution) :: state.executions;
       functions = state.functions + 1;
       obligations =
         state.obligations + List.length envelope.execution.Vir.obligations;
@@ -814,7 +897,8 @@ let update_after_results prepared state envelope results =
          else state.blocked_frozen_callables);
     } )
 
-let commit_envelope session prepared commit ~on_result state envelope worker =
+let commit_envelope session prepared commit ~on_function_commit ~on_result state
+    envelope worker =
   [%log.trace "commit verification function"
     ~source_ordinal:(Delator.Field.int envelope.source_ordinal)
     ~function_name:
@@ -826,7 +910,8 @@ let commit_envelope session prepared commit ~on_result state envelope worker =
   match commit envelope.prepared_function worker with
   | Error message -> Error (Solve_error message)
   | Ok results ->
-      note_result_authority session envelope results ~on_result;
+      note_result_authority session envelope results ~on_function_commit
+        ~on_result;
       let complete, state =
         update_after_results prepared state envelope results
       in
@@ -953,8 +1038,9 @@ let dispatch_frontier scheduler
           failwith
             (Printf.sprintf "parallel function result %d was not joined" index))
 
-let run_threaded session prepared ~initial_obligations scheduler
-    (Threaded_solve { prepare; worker_request; commit }) ~on_result =
+let run_threaded session prepared ~numeric_bv_source ~initial_obligations scheduler
+    (Threaded_solve { prepare; worker_request; commit }) ~on_function_commit
+    ~on_result =
   let scheduled_functions =
     Symbolic_executor_private.scheduled_functions prepared
   in
@@ -967,24 +1053,10 @@ let run_threaded session prepared ~initial_obligations scheduler
         (definition.function_id.function_index, ordinal))
       scheduled_functions
   in
-  let dependency_ordinal function_index =
-    match List.assoc_opt function_index ordinal_by_function with
-    | Some ordinal -> ordinal
-    | None -> function_index
-  in
   let dependencies scheduled =
-    List.concat
-      [
-        Symbolic_executor_private.scheduled_receipt_prerequisites scheduled;
-        Symbolic_executor_private
-        .scheduled_invariant_receipt_prerequisites scheduled;
-        Symbolic_executor_private
-        .scheduled_finite_result_prerequisites scheduled;
-        Symbolic_executor_private
-        .scheduled_frozen_formal_prerequisites scheduled;
-      ]
-    |> List.sort_uniq Int.compare
-    |> List.map dependency_ordinal
+    scheduling_dependency_indices numeric_bv_source scheduled
+    |> List.filter_map (fun function_index ->
+           List.assoc_opt function_index ordinal_by_function)
   in
   let candidates =
     scheduled_functions
@@ -996,7 +1068,8 @@ let run_threaded session prepared ~initial_obligations scheduler
   in
   let frontier_prefix ready =
     let scalar = function
-      | Sst.Unit | Bool | Int | Mathematical_int | Parameter _ -> true
+      | Sst.Unit | Bool | Int | Mathematical_int | Bit_vector _ | Parameter _ ->
+          true
       | Tuple _ | Aggregate _ | Application _ -> false
     in
     match ready with
@@ -1120,8 +1193,8 @@ let run_threaded session prepared ~initial_obligations scheduler
               | [], [] -> Ok state
               | envelope :: envelope_rest, worker :: worker_rest -> (
                   match
-                    commit_envelope session prepared commit ~on_result state
-                      envelope worker
+                    commit_envelope session prepared commit ~on_function_commit
+                      ~on_result state envelope worker
                   with
                   | Error _ as error -> error
                   | Ok state ->
@@ -1143,14 +1216,23 @@ let run_threaded session prepared ~initial_obligations scheduler
   loop (initial_threaded_state initial_obligations) candidates
 [@@delator.instrument] [@@delator.level debug]
 
-let run_validated ~imports ~implementation ~program ~validated ~invariants
-    ~preflight ~proof_entry_activations ~configure_solver ~on_result =
+let capture_completed_evidence program destination outcome =
+  (match outcome with
+  | Ok { status = Verified; vir; _ } ->
+      destination := Some (Verification_proof_evidence_private.For_pipeline.capture ~program vir)
+  | Ok _ | Error _ -> ());
+  outcome
+
+let run_validated ~imports ~numeric_bv_source ~implementation ~program ~validated ~invariants
+    ~preflight ~proof_entry_activations ~configure_solver ~on_function_commit
+    ~on_result =
   incr validated_pipeline_entries;
   match
     Verification_session.create ~imports ~implementation ~validated ~invariants
   with
   | Error _ as error -> error
   | Ok session ->
+      let proof_evidence = ref None in
       let outcome =
         Fun.protect
           ~finally:(fun () ->
@@ -1184,7 +1266,8 @@ let run_validated ~imports ~implementation ~program ~validated ~invariants
                 | Error message -> Error (Solve_error message)
                 | Ok () ->
                 match
-                  Symbolic_executor_private.prepare_program ~imports ~session
+                  Symbolic_executor_private.prepare_program ~imports
+                    ?numeric_bv_source ~session
                     ~validated ~invariants
                     ~proof_entry_activations:(proof_entry_activations ())
                     program
@@ -1194,12 +1277,15 @@ let run_validated ~imports ~implementation ~program ~validated ~invariants
                     match configure_solver () with
                     | Error error -> Error (Setup_error error)
                     | Ok solve ->
-                        run session prepared ~initial_obligations ~solve
-                          ~on_result)))
+                        run session prepared ~numeric_bv_source
+                          ~initial_obligations ~solve
+                          ~on_function_commit ~on_result
+                        |> capture_completed_evidence program proof_evidence)))
       in
       Ok
         {
           outcome;
+          proof_evidence = !proof_evidence;
           counters = Verification_session.counters session;
           session_destroyed = not (Verification_session.is_active session);
         }
@@ -1208,15 +1294,16 @@ let run_validated ~imports ~implementation ~program ~validated ~invariants
 let scheduler_creation_count = ref 0
 let scheduler_stop_count = ref 0
 
-let run_validated_with_threads ~threads ~imports ~implementation ~program
+let run_validated_with_threads ~threads ~imports ~numeric_bv_source ~implementation ~program
     ~validated ~invariants ~preflight ~proof_entry_activations
-    ~configure_solver ~on_result =
+    ~configure_solver ~on_function_commit ~on_result =
   incr validated_pipeline_entries;
   match
     Verification_session.create ~imports ~implementation ~validated ~invariants
   with
   | Error _ as error -> error
   | Ok session ->
+      let proof_evidence = ref None in
       let outcome =
         Fun.protect
           ~finally:(fun () ->
@@ -1247,6 +1334,7 @@ let run_validated_with_threads ~threads ~imports ~implementation ~program
                 | Ok () -> (
                     match
                       Symbolic_executor_private.prepare_program ~imports
+                        ?numeric_bv_source
                         ~session ~validated ~invariants
                         ~proof_entry_activations:(proof_entry_activations ())
                         program
@@ -1266,12 +1354,15 @@ let run_validated_with_threads ~threads ~imports ~implementation ~program
                                 Parallel_scheduler.stop scheduler)
                               (fun () ->
                                 run_threaded session prepared
+                                  ~numeric_bv_source
                                   ~initial_obligations scheduler solve
-                                  ~on_result)))))
+                                  ~on_function_commit ~on_result
+                                |> capture_completed_evidence program proof_evidence)))))
       in
       Ok
         {
           outcome;
+          proof_evidence = !proof_evidence;
           counters = Verification_session.counters session;
           session_destroyed = not (Verification_session.is_active session);
         }

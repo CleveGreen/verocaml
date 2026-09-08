@@ -4,6 +4,8 @@ type public_surface = {
   public_callable_names : string list;
   public_external_type_constructors : Parametric_type.constructor list;
   public_symbolic_names : string list;
+  public_logical_values :
+    (string * Retained_interface_authority_private.logical_value) list;
 }
 
 val strict_candidate :
@@ -41,6 +43,7 @@ val public_function : public_surface -> Sst.function_id -> bool
 val surface_type_kind_is_public :
   public_surface -> Parametric_type.binder list -> Sst.type_kind -> bool
 val public_callable_descriptor :
+  ?imported_specification_call:(Sst.expression -> bool) ->
   public_surface -> Sst_validation.callable_descriptor -> bool
 
 module For_testing : sig

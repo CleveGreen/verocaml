@@ -96,7 +96,6 @@ val authenticates_definition :
 val authenticate_call :
   registration ->
   program:Sst.program ->
-  caller:Sst.function_definition ->
   callee:Sst.function_definition ->
   expression:Sst.expression ->
   (Parametric_signature_private.instantiated, string) result

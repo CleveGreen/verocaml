@@ -8,7 +8,7 @@ type application_binding = {
   aggregate_type : Vir.aggregate_type;
   sort : Logic_ir.sort;
   constructors : constructor_binding list;
-  selectors : (string * Logic_ir.function_symbol) list;
+  selectors : (Vir.selector * Logic_ir.function_symbol) list;
 }
 
 type t = application_binding list
@@ -75,6 +75,7 @@ let sort_for_sst registry typ =
   match typ with
   | Sst.Int | Sst.Mathematical_int -> Logic_ir.Int
   | Sst.Bool -> Logic_ir.Bool
+  | Sst.Bit_vector width -> Logic_ir.Bv width
   | Sst.Aggregate type_id ->
       declare (Printf.sprintf "RankType_%d_%s" type_id.type_index type_id.type_name)
   | Sst.Parameter binder -> registry.parametric_sort binder
@@ -161,6 +162,7 @@ let vir_sort schema_for_application typ =
   match typ with
   | Parametric_type.Unit | Bool -> `Primitive Logic_ir.Bool
   | Int | Mathematical_int -> `Primitive Logic_ir.Int
+  | Bit_vector width -> `Primitive (Logic_ir.Bv width)
   | Parameter binder -> `Parameter binder
   | Aggregate type_id ->
       `Aggregate
@@ -175,17 +177,19 @@ let selector_range schema_for_application typ =
   match vir_sort schema_for_application typ with
   | `Primitive Logic_ir.Int -> Vir.Integer
   | `Primitive Logic_ir.Bool -> Vir.Boolean
+  | `Primitive (Logic_ir.Bv width) -> Vir.Bit_vector width
+  | `Primitive (Logic_ir.Named _) -> assert false
   | `Parameter binder -> Vir.Parametric binder
   | `Aggregate aggregate -> Vir.Aggregate aggregate
   | `Application (Some schema) -> Vir.Aggregate (aggregate_type schema)
   | `Application None | `Unsupported -> invalid_arg "unsupported ADT field sort"
-  | `Primitive (Logic_ir.Named _) -> assert false
 
 let selector_name selector =
   let range =
     match selector.Vir.selector_range with
     | Vir.Integer -> "int"
     | Boolean -> "bool"
+    | Bit_vector width -> "bv" ^ Bv_width.to_string width
     | Aggregate aggregate ->
         Printf.sprintf "agg%d_%s" aggregate.aggregate_type_index
           aggregate.aggregate_type_name
@@ -195,13 +199,121 @@ let selector_name selector =
   in
   Aggregate_logic_symbol_private.selector ~range selector
 
-let selector bindings selector =
+type selector_resolution =
+  | Declared_selector of Logic_ir.function_symbol
+  | Invalid_declared_selector
+  | Unavailable_selector_schema
+
+let selector_equal (left : Vir.selector) (right : Vir.selector) =
+  left.selector_domain = right.selector_domain
+  && Vir.sort_equal left.selector_range right.selector_range
+  && String.equal left.selector_namespace right.selector_namespace
+  && Int.equal left.selector_index right.selector_index
+  && String.equal left.selector_name right.selector_name
+  && left.selector_path = right.selector_path
+
+let resolve_selector bindings selector =
   List.find_map
     (fun binding ->
       if same_application binding.aggregate_type selector.Vir.selector_domain
-      then List.assoc_opt (selector_name selector) binding.selectors
+      then
+        Some
+          (match
+             List.find_opt
+               (fun (declared, _) -> selector_equal declared selector)
+               binding.selectors
+           with
+          | Some (_, function_) -> Declared_selector function_
+          | None -> Invalid_declared_selector)
       else None)
     bindings
+  |> Option.value ~default:Unavailable_selector_schema
+
+let selector bindings selector =
+  match resolve_selector bindings selector with
+  | Declared_selector function_ -> Some function_
+  | Invalid_declared_selector | Unavailable_selector_schema -> None
+
+type record_schema_validation =
+  | Validated_record_schema
+  | Unavailable_record_schema
+
+let argument_sort = function
+  | Vir.Recursive_integer_argument _ -> Vir.Integer
+  | Recursive_boolean_argument _ -> Vir.Boolean
+  | Recursive_bv_argument term -> Vir.Bit_vector term.bit_vector_width
+  | Recursive_aggregate_argument term -> Vir.Aggregate term.aggregate_type
+  | Recursive_parametric_argument term -> Vir.Parametric term.parametric_sort
+
+let validate_record_fields ~schemas ~aggregate_type:target_aggregate ~record_type
+    ~fields =
+  match
+    List.find_opt
+      (fun schema -> same_application (aggregate_type schema) target_aggregate)
+      schemas
+  with
+  | None -> Ok Unavailable_record_schema
+  | Some schema ->
+      let declared_aggregate = aggregate_type schema in
+      if declared_aggregate <> target_aggregate then
+        Error "aggregate record differs from its declared schema identity"
+      else
+        let descriptor = Logical_adt_schema_private.descriptor schema in
+        let declared_type = Parametric_adt.type_id descriptor in
+        if declared_type <> record_type then
+          Error "aggregate record schema has a mismatched nominal type"
+        else (
+          match Parametric_adt.kind descriptor with
+          | Parametric_adt.Variant _ ->
+              Error "aggregate record schema names a variant type"
+          | Parametric_adt.Record expected_fields ->
+              if List.length fields <> List.length expected_fields then
+                Error "aggregate record has an incomplete field vector"
+              else
+                let arguments = Logical_adt_schema_private.arguments schema in
+                List.fold_left2
+                  (fun result (field, value) expected ->
+                    let* () = result in
+                    let expected_id =
+                      Sst.
+                        { field_owner = Record_owner record_type;
+                          field_index = expected.Parametric_adt.field_index;
+                          field_name = expected.field_name }
+                    in
+                    let* expected_type =
+                      Parametric_adt.instantiate_field descriptor arguments
+                        expected
+                    in
+                    let expected_sort =
+                      selector_range
+                        (fun constructor arguments ->
+                          List.find_opt
+                            (fun candidate ->
+                              let nested =
+                                Logical_adt_schema_private.descriptor candidate
+                              in
+                              Parametric_type.compare_constructor
+                                (Parametric_adt.type_constructor nested)
+                                constructor
+                              = 0
+                              && List.length
+                                   (Logical_adt_schema_private.arguments candidate)
+                                 = List.length arguments
+                              && List.for_all2 Parametric_type.equal
+                                   (Logical_adt_schema_private.arguments candidate)
+                                   arguments)
+                            schemas)
+                        expected_type
+                    in
+                    if field <> expected_id then
+                      Error
+                        "aggregate record field metadata/order is not exact"
+                    else if
+                      not (Vir.sort_equal (argument_sort value) expected_sort)
+                    then Error "aggregate record field has a mismatched type/sort"
+                    else Ok ())
+                  (Ok ()) fields expected_fields
+                |> Result.map (fun () -> Validated_record_schema))
 
 type declaration_context = {
   builder : Logic_ir.builder;
@@ -259,9 +371,10 @@ let field_spec context bindings schema descriptor arguments aggregate namespace
       selector_path = [] }
   in
   Ok
-    { Logic_ir.field_id = field.field_uid;
-      field_name = selector_name selector;
-      field_sort }
+    ( { Logic_ir.field_id = field.field_uid;
+        field_name = selector_name selector;
+        field_sort },
+      selector )
 
 let field_specs context bindings schema descriptor arguments aggregate namespace
     name fields =
@@ -289,20 +402,22 @@ let constructor_spec context bindings schema descriptor arguments aggregate
       (fun field -> Printf.sprintf "$arg%d" field.Parametric_adt.field_index)
       constructor.constructor_fields
   in
+  let field_specs, selectors = List.split fields in
   let constructor_id =
     { Sst.constructor_type = type_id;
       constructor_index = index;
       constructor_name = name }
   in
   Ok
-    { Logic_ir.constructor_id = constructor.constructor_uid;
-      constructor_name =
-        Aggregate_logic_symbol_private.constructor aggregate constructor_id;
-      recognizer_id =
-        Printf.sprintf "verocaml_is_%s_c%d_%s"
-          (Aggregate_logic_symbol_private.suffix aggregate)
-          index name;
-      fields }
+    ( { Logic_ir.constructor_id = constructor.constructor_uid;
+        constructor_name =
+          Aggregate_logic_symbol_private.constructor aggregate constructor_id;
+        recognizer_id =
+          Printf.sprintf "verocaml_is_%s_c%d_%s"
+            (Aggregate_logic_symbol_private.suffix aggregate)
+            index name;
+        fields = field_specs },
+      selectors )
 
 let datatype_specs context bindings schema descriptor arguments aggregate =
   let type_id = Parametric_adt.type_id descriptor in
@@ -326,24 +441,27 @@ let datatype_specs context bindings schema descriptor arguments aggregate =
         field_specs context bindings schema descriptor arguments aggregate
           namespace (fun field -> field.Parametric_adt.field_name) fields
       in
+      let field_specs, selectors = List.split fields in
       Ok
-        [ { Logic_ir.constructor_id =
-              "record:" ^ Logical_adt_schema_private.application_id schema;
-            constructor_name =
-              Aggregate_logic_symbol_private.record_constructor aggregate
-                type_id;
-            recognizer_id =
-              "verocaml_is_record_"
-              ^ Aggregate_logic_symbol_private.suffix aggregate;
-            fields } ]
+        [ ( { Logic_ir.constructor_id =
+                "record:" ^ Logical_adt_schema_private.application_id schema;
+              constructor_name =
+                Aggregate_logic_symbol_private.record_constructor aggregate
+                  type_id;
+              recognizer_id =
+                "verocaml_is_record_"
+                ^ Aggregate_logic_symbol_private.suffix aggregate;
+              fields = field_specs },
+            selectors ) ]
 
 let declare_schema context bindings schema =
   let descriptor = Logical_adt_schema_private.descriptor schema in
   let arguments = Logical_adt_schema_private.arguments schema in
   let aggregate = aggregate_type schema in
-  let* specs =
+  let* specs_and_selectors =
     datatype_specs context bindings schema descriptor arguments aggregate
   in
+  let specs, selector_vectors = List.split specs_and_selectors in
   let* datatype =
     Logic_ir.declare_datatype context.builder
       ~datatype_id:(Logical_adt_schema_private.application_id schema)
@@ -361,13 +479,32 @@ let declare_schema context bindings schema =
              recognizer_symbol =
                Logic_ir.datatype_recognizer_symbol constructor })
   in
-  let selectors =
+  let selector_symbols =
     Logic_ir.datatype_constructors datatype
     |> List.concat_map (fun constructor ->
            Logic_ir.datatype_fields constructor
-           |> List.map (fun field ->
-                  let symbol = Logic_ir.datatype_field_symbol field in
-                  (Logic_ir.View.function_name symbol, symbol)))
+           |> List.map Logic_ir.datatype_field_symbol)
+  in
+  let expected_selectors = List.concat selector_vectors in
+  let* selectors =
+    if List.length selector_symbols <> List.length expected_selectors then
+      Error "logical datatype selector declaration vector is inconsistent"
+    else
+      List.map2
+        (fun selector symbol ->
+          if
+            String.equal (Logic_ir.View.function_name symbol)
+              (selector_name selector)
+          then Ok (selector, symbol)
+          else Error "logical datatype selector declaration identity changed")
+        expected_selectors selector_symbols
+      |> List.fold_left
+           (fun result item ->
+             let* selectors = result in
+             let* selector = item in
+             Ok (selector :: selectors))
+           (Ok [])
+      |> Result.map List.rev
   in
   Ok
     ({ aggregate_type = aggregate;
@@ -418,7 +555,8 @@ let rec ensure context active bindings schema =
                   Error "logical datatype dependency lacks an exact schema"
               | Some nested ->
                   ensure context (application_id :: active) bindings nested)
-          | Unit | Bool | Int | Mathematical_int | Parameter _ | Aggregate _
+          | Unit | Bool | Int | Mathematical_int | Bit_vector _ | Parameter _
+          | Aggregate _
           | Application _ ->
               Ok bindings
           | Tuple _ -> Error "tuple-valued logical datatype field"
@@ -442,7 +580,8 @@ let exact_application descriptors = function
           if Parametric_adt.same_application descriptor application then
             Some ((Parametric_adt.type_id descriptor).type_index, arguments)
           else None)
-  | Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _ | Parameter _ ->
+  | Unit | Bool | Int | Mathematical_int | Bit_vector _ | Tuple _ | Aggregate _
+  | Parameter _ ->
       None
 
 let schemas_for_types ~descriptors types =
@@ -535,13 +674,15 @@ let aggregate_type_of_sst parametric_adts = function
                 (Parametric_type.Application (constructor, arguments));
             aggregate_type_arguments = arguments })
         (Parametric_adt.find parametric_adts constructor)
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int
+  | Sst.Bit_vector _ | Sst.Tuple _
   | Sst.Parameter _ ->
       None
 
 let vir_sort_of_sst parametric_adts = function
   | Sst.Int | Sst.Mathematical_int -> Some Vir.Integer
   | Sst.Bool -> Some Vir.Boolean
+  | Sst.Bit_vector width -> Some (Vir.Bit_vector width)
   | Sst.Parameter binder -> Some (Vir.Parametric binder)
   | (Sst.Aggregate _ | Sst.Application _) as typ ->
       Option.map (fun aggregate -> Vir.Aggregate aggregate)
@@ -585,10 +726,46 @@ let routing ~bindings ~span ~aggregate_sort ~error ~fallback =
   { bindings; span; aggregate_sort; error; fallback }
 
 let routed_selector route selector_ domain range =
-  match Option.bind route.bindings (fun bindings -> selector bindings selector_) with
-  | Some function_ -> Ok function_
-  | None ->
+  let[@log_value.debug] range_identity =
+    match selector_.Vir.selector_range with
+    | Vir.Bit_vector width -> Bv_width.structural_identity_material width
+    | Integer -> "integer"
+    | Boolean -> "boolean"
+    | Aggregate aggregate ->
+        "aggregate:" ^ Aggregate_logic_symbol_private.type_label aggregate
+    | Parametric binder ->
+        "parametric:" ^ Parametric_type.binder_to_string binder
+  in
+  match
+    Option.map (fun bindings -> resolve_selector bindings selector_) route.bindings
+  with
+  | Some (Declared_selector function_) ->
+      [%log.trace "resolved selector through exact logical datatype schema"
+        ~stage:(Delator.Field.string "logical-adt-selector-routing")
+        ~selector_index:(Delator.Field.int selector_.Vir.selector_index)
+        ~range_identity:
+          (Delator.Field.string (range_identity [@log_value.debug]))
+        ~decision:(Delator.Field.string "declared")];
+      Ok function_
+  | Some Invalid_declared_selector ->
+      [%log.debug "rejected selector incompatible with declared logical datatype"
+        ~stage:(Delator.Field.string "logical-adt-selector-routing")
+        ~selector_index:(Delator.Field.int selector_.Vir.selector_index)
+        ~range_identity:
+          (Delator.Field.string (range_identity [@log_value.debug]))
+        ~decision:(Delator.Field.string "rejected")];
+      Error
+        (route.error
+           "selector does not match the declared logical datatype schema")
+  | None | Some Unavailable_selector_schema ->
+      [%log.trace "routed selector through schema-unavailable fallback"
+        ~stage:(Delator.Field.string "logical-adt-selector-routing")
+        ~selector_index:(Delator.Field.int selector_.Vir.selector_index)
+        ~range_identity:
+          (Delator.Field.string (range_identity [@log_value.debug]))
+        ~decision:(Delator.Field.string "fallback")];
       route.fallback (selector_name selector_) [ domain ] range route.span
+[@@delator.instrument] [@@delator.level debug]
 
 let routed_constructor route aggregate constructor_ domain =
   match
@@ -599,6 +776,17 @@ let routed_constructor route aggregate constructor_ domain =
   | None ->
       route.fallback
         (Aggregate_logic_symbol_private.constructor aggregate constructor_)
+        domain (route.aggregate_sort aggregate) route.span
+
+let routed_record_constructor route aggregate record_type domain =
+  match
+    Option.bind route.bindings (fun bindings ->
+        constructor_at bindings aggregate 0)
+  with
+  | Some function_ -> Ok function_
+  | None ->
+      route.fallback
+        (Aggregate_logic_symbol_private.record_constructor aggregate record_type)
         domain (route.aggregate_sort aggregate) route.span
 
 let routed_tag route owner value =

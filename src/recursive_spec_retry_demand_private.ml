@@ -66,6 +66,7 @@ let rec of_goal = function
   | Vir.Boolean_constant _ | Vir.Boolean_symbol _ | Vir.Boolean_not _
   | Vir.Boolean_and _ | Vir.Boolean_or _ | Vir.Integer_compare _
   | Vir.Boolean_equal _ | Vir.Boolean_not_equal _ | Vir.Boolean_selector _
+  | Vir.Bv_equal _ | Vir.Bv_not_equal _ | Vir.Bv_compare _
   | Vir.Boolean_invariant_application _
   | Vir.Logical_adt_schema _
   | Vir.Boolean_recursive_spec_application _

@@ -193,6 +193,7 @@ let model_value = function
   | Z3_bridge.Boolean value -> Solver_backend.Boolean value
   | Z3_bridge.Aggregate_identity value ->
       Solver_backend.Aggregate_identity value
+  | Z3_bridge.Bit_vector value -> Solver_backend.Bit_vector value
 
 let ordinary_outcome policy = function
   | Z3_bridge.Verified -> Solver_backend.Verified
@@ -220,7 +221,7 @@ let direct_config policy model =
     model;
   }
 
-let solve_vir job ~controlled ~requires ~ordinary =
+let solve_vir job ~controlled ~requires ~deliver_original_model =
   let attempt =
     Z3_bridge.solve_vir_local ~controlled
       ~rlimit:(Solver_policy_private.rlimit job.solver_policy)
@@ -228,7 +229,7 @@ let solve_vir job ~controlled ~requires ~ordinary =
   in
   let outcome =
     Result.map
-      (if ordinary then ordinary_outcome job.solver_policy
+      (if deliver_original_model then ordinary_outcome job.solver_policy
        else private_outcome job.solver_policy)
       attempt.result
     |> Result.map_error (fun error -> Bridge_error error)
@@ -458,7 +459,7 @@ let solve_prepared job =
   match job.route with
   | Ordinary controlled ->
       let outcome, telemetry =
-        solve_vir job ~controlled ~requires:[] ~ordinary:true
+        solve_vir job ~controlled ~requires:[] ~deliver_original_model:true
       in
       {
         result_index = job.canonical_index;
@@ -472,8 +473,26 @@ let solve_prepared job =
           Some (Solver_backend_counter_private.contribution telemetry);
       }
   | Direct (route, controlled) ->
+      let deliver_original_model =
+        List.exists
+          (fun (symbol : Vir.symbol) ->
+            match symbol.sort with
+            | Vir.Bit_vector _ -> true
+            | Integer | Boolean | Aggregate _ | Parametric _ -> false)
+          job.obligation.projection_symbols
+      in
+      [%log.trace "selected local direct-route model delivery"
+        ~stage:(Delator.Field.string "local-model-delivery")
+        ~canonical_index:(Delator.Field.int job.canonical_index)
+        ~deliver_original_model:
+          (Delator.Field.bool deliver_original_model)
+        ~ordinary_contribution:(Delator.Field.bool false)
+        ~decision:
+          (Delator.Field.string
+             (if deliver_original_model then "preserved" else "suppressed"))];
       let outcome, telemetry =
-        solve_vir job ~controlled ~requires:direct_requirements ~ordinary:false
+        solve_vir job ~controlled ~requires:direct_requirements
+          ~deliver_original_model
       in
       let route_counts =
         match route with

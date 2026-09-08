@@ -53,9 +53,32 @@ let validate_binders program (definition : Sst.function_definition) =
       | Ok None -> ordinary_error
       | Error (span, message) -> fail definition.function_id span message)
 
-let validate_type descriptors function_id span binders typ =
+let validate_type descriptors (function_id : Sst.function_id) span binders typ =
   let rec loop = function
-    | Parametric_type.Unit | Bool | Int | Mathematical_int | Aggregate _ -> Ok ()
+    | Parametric_type.Unit | Bool | Int | Mathematical_int | Aggregate _ ->
+        Ok ()
+    | Bit_vector width -> (
+        match
+          Bv_width.authenticate_bound
+            (Bv_backend_capability_receipt_private.capability ())
+            width
+        with
+        | Ok () ->
+            [%log.trace "authenticated parametric declaration BV width"
+              ~stage:(Delator.Field.string "parametric-sst-type-validation")
+              ~function_name:(Delator.Field.string function_id.function_name)
+              ~width:(Delator.Field.int (Bv_width.to_int width))
+              ~decision:(Delator.Field.string "accepted")];
+            Ok ()
+        | Error message ->
+            [%log.debug "rejected parametric declaration BV width"
+              ~stage:(Delator.Field.string "parametric-sst-type-validation")
+              ~function_name:(Delator.Field.string function_id.function_name)
+              ~width:(Delator.Field.int (Bv_width.to_int width))
+              ~reason:(Delator.Field.string message)
+              ~decision:(Delator.Field.string "rejected")];
+            fail function_id span
+              ("bit-vector type lacks an authenticated bound width: " ^ message))
     | Tuple components ->
         iter_result (fun (_, component) -> loop component) components
     | Parameter binder ->
@@ -102,10 +125,8 @@ let validate_pattern descriptors function_id binders (pattern : Sst.pattern) =
   in
   loop pattern
 
-let validate_call descriptors functions (definition : Sst.function_definition)
+let validate_call descriptors functions ~function_id ~binders
     (expression : Sst.expression) call_form callee type_arguments arguments =
-  let function_id = definition.Sst.function_id in
-  let binders = definition.type_binders in
   let* () =
     iter_result
       (validate_type descriptors function_id expression.Sst.span binders)
@@ -180,9 +201,7 @@ let validate_call descriptors functions (definition : Sst.function_definition)
       | Ok () -> Ok ()
       | Error (span, message) -> fail function_id span message)
 
-let validate_expression descriptors functions definition expression =
-  let function_id = definition.Sst.function_id in
-  let binders = definition.type_binders in
+let validate_expression descriptors functions ~function_id ~binders expression =
   let rec loop (expression : Sst.expression) =
     let* () =
       validate_type descriptors function_id expression.span binders expression.typ
@@ -193,6 +212,98 @@ let validate_expression descriptors functions definition expression =
     | Mutable_read _ | Owned_tree_rebase _ | Optional_absent | Reveal _
     | Reveal_with_fuel _ ->
         Ok ()
+    | Bv_literal value -> (
+        match expression.typ with
+        | Bit_vector width when Bv_width.equal width value.Bv_value.width ->
+            Ok ()
+        | Bit_vector _ ->
+            fail function_id expression.span
+              "bit-vector literal width differs from its expression type"
+        | Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _
+        | Parameter _ | Application _ ->
+            fail function_id expression.span
+              "bit-vector literal does not have a bit-vector expression type")
+    | Bv_int_to_bv_mod { width; input; source_authority } ->
+        let* () = loop input in
+        let* () =
+          if Parametric_type.equal input.typ Mathematical_int then Ok ()
+          else
+            fail function_id expression.span
+              "Int-to-BV input is not a mathematical integer"
+        in
+        let* () =
+          match expression.typ with
+          | Bit_vector result_width when Bv_width.equal width result_width ->
+              Ok ()
+          | Bit_vector _ ->
+              fail function_id expression.span
+                "Int-to-BV width differs from its expression type"
+          | Unit | Bool | Int | Mathematical_int | Tuple _ | Aggregate _
+          | Parameter _ | Application _ ->
+              fail function_id expression.span
+                "Int-to-BV result does not have a bit-vector expression type"
+        in
+        (match
+           Numeric_bv_projection_evidence_private.validate ~width
+             source_authority
+         with
+        | Ok () -> Ok ()
+        | Error message -> fail function_id expression.span message)
+    | Bv_to_int_unsigned operand | Bv_to_int_signed operand ->
+        let* () = loop operand in
+        if
+          Parametric_type.equal expression.typ Mathematical_int
+          &&
+          match operand.typ with Bit_vector _ -> true | _ -> false
+        then Ok ()
+        else
+          fail function_id expression.span
+            "BV-to-Int view has incompatible operand or result type"
+    | Bv_not operand ->
+        let* () = loop operand in
+        if Parametric_type.equal expression.typ operand.typ then
+          match operand.typ with
+          | Bit_vector _ -> Ok ()
+          | _ ->
+              fail function_id expression.span
+                "bit-vector complement operand is not a bit vector"
+        else
+          fail function_id expression.span
+            "bit-vector complement changes exact width identity"
+    | Bv_binary (_, left, right) ->
+        let* () = loop left in
+        let* () = loop right in
+        if
+          Parametric_type.equal expression.typ left.typ
+          && Parametric_type.equal left.typ right.typ
+        then
+          match left.typ with
+          | Bit_vector _ -> Ok ()
+          | _ ->
+              fail function_id expression.span
+                "bit-vector binary operands are not bit vectors"
+        else
+          fail function_id expression.span
+            "bit-vector binary operands or result differ in exact width identity"
+    | Bv_compare (_, left, right) ->
+        let* () = loop left in
+        let* () = loop right in
+        if
+          Parametric_type.equal expression.typ Bool
+          && Parametric_type.equal left.typ right.typ
+        then
+          match left.typ with
+          | Bit_vector _ -> Ok ()
+          | _ ->
+              fail function_id expression.span
+                "bit-vector comparison operands are not bit vectors"
+        else
+          fail function_id expression.span
+            "bit-vector comparison operands differ in exact width identity or result is not Boolean"
+    | Logical_constant_reference { type_arguments; _ } ->
+        iter_result
+          (validate_type descriptors function_id expression.span binders)
+          type_arguments
     | Lift_runtime_int operand -> loop operand
     | Tuple_value values -> visit (List.map snd values)
     | Record_value { fields; _ } -> visit (List.map snd fields)
@@ -269,8 +380,8 @@ let validate_expression descriptors functions definition expression =
           visit values
         else
           let* () =
-            validate_call descriptors functions definition expression call_form
-              callee type_arguments arguments
+            validate_call descriptors functions ~function_id ~binders expression
+              call_form callee type_arguments arguments
           in
           visit values
     | Callback_call application | Callback_requires application ->
@@ -283,7 +394,9 @@ let validate_expression descriptors functions definition expression =
   loop expression
 
 let validate_staged descriptors functions definition staged =
-  validate_expression descriptors functions definition staged.Sst.expression
+  validate_expression descriptors functions
+    ~function_id:definition.Sst.function_id ~binders:definition.type_binders
+    staged.Sst.expression
 
 let validate_contracts descriptors functions definition =
   let contracts = definition.Sst.contracts in
@@ -309,7 +422,27 @@ let validate_definition descriptors functions definition =
   let* () =
     iter_result
       (function
-        | Sst.Callback_parameter _ -> Ok ()
+        | Sst.Callback_parameter formal ->
+            let callback = formal.binding in
+            let* () =
+              iter_result
+                (validate_type descriptors function_id callback.callback_span
+                   binders)
+                (Callback_shape_private.endpoint_types callback.callback_shape)
+            in
+            let* () =
+              validate_type descriptors function_id callback.callback_span
+                binders
+                (Callback_shape_private.result callback.callback_shape)
+            in
+            [%log.trace "validated parametric callback declaration schema"
+              ~stage:(Delator.Field.string "parametric-callback-schema")
+              ~function_name:(Delator.Field.string function_id.function_name)
+              ~endpoint_count:
+                (Delator.Field.int
+                   (Callback_shape_private.arity callback.callback_shape))
+              ~decision:(Delator.Field.string "accepted")];
+            Ok ()
         | Sst.Value_parameter parameter ->
             let* () = validate_pattern descriptors function_id binders parameter.pattern in
             match parameter.optional_default with
@@ -318,7 +451,8 @@ let validate_definition descriptors functions definition =
                 let* () =
                   validate_pattern descriptors function_id binders default.optional_pattern
                 in
-                validate_expression descriptors functions definition default.optional_expression)
+                validate_expression descriptors functions
+                  ~function_id ~binders default.optional_expression)
       definition.parameters
   in
   let* () =
@@ -333,6 +467,68 @@ let validate_definition descriptors functions definition =
   | External_specification _ | Trusted_external_spec_target _
   | Trusted_external_body _ | Symbolic_declaration _ ->
       Ok ()
+
+let constant_function_id (definition : Sst.logical_constant_definition) =
+  {
+    Sst.function_index = definition.constant_id.constant_index;
+    function_name = definition.constant_id.constant_name;
+  }
+
+let validate_constant_binders definition =
+  let function_id = constant_function_id definition in
+  let expected_owner =
+    Parametric_type.owner ~index:definition.Sst.constant_id.constant_index
+      ~name:definition.constant_id.constant_name
+  in
+  let rec loop ordinal = function
+    | [] -> Ok ()
+    | (binder : Parametric_type.binder) :: rest ->
+        if Parametric_type.compare_owner binder.owner expected_owner <> 0 then
+          fail function_id definition.constant_span
+            "logical constant type binder owner differs from its declaration"
+        else if binder.ordinal <> ordinal then
+          fail function_id definition.constant_span
+            "logical constant type binders are duplicated or reordered"
+        else loop (ordinal + 1) rest
+  in
+  loop 0 definition.constant_type_binders
+
+let validate_constant_definition descriptors functions definition =
+  let function_id = constant_function_id definition in
+  let binders = definition.Sst.constant_type_binders in
+  let* () =
+    validate_type descriptors function_id definition.constant_span binders
+      definition.constant_declared_type
+  in
+  let declared_parameters =
+    Parametric_type.parameters definition.constant_declared_type
+    |> List.sort_uniq Parametric_type.compare_binder
+  in
+  let expected_parameters =
+    List.sort_uniq Parametric_type.compare_binder binders
+  in
+  let* () =
+    if
+      List.length declared_parameters = List.length expected_parameters
+      && List.for_all2
+           (fun left right -> Parametric_type.compare_binder left right = 0)
+           declared_parameters expected_parameters
+    then Ok ()
+    else
+      fail function_id definition.constant_span
+        "logical constant binders do not exactly describe its declared type"
+  in
+  match definition.constant_equation with
+  | None -> Ok ()
+  | Some equation ->
+      let* () =
+        if equation.constant_body.stage = Sst.Logical then Ok ()
+        else
+          fail function_id definition.constant_span
+            "logical constant body is not in the logical stage"
+      in
+      validate_expression descriptors functions ~function_id ~binders
+        equation.constant_body.expression
 
 let validate_program (program : Sst.program) =
   let* () =
@@ -352,6 +548,14 @@ let validate_program (program : Sst.program) =
         fail function_id span (error.descriptor ^ ": " ^ error.message)
   in
   let* () = iter_result (validate_binders program) program.functions in
+  let* () =
+    iter_result validate_constant_binders program.logical_constants
+  in
+  let* () =
+    iter_result
+      (validate_constant_definition program.parametric_adts program.functions)
+      program.logical_constants
+  in
   iter_result
     (validate_definition program.parametric_adts program.functions)
     program.functions

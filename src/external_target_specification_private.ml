@@ -911,7 +911,7 @@ let authenticates_definition registration ~program ~definition link =
   | Some summary -> same_link summary.summary_link link
   | None -> false
 
-let authenticate_call registration ~program ~caller:_ ~callee
+let authenticate_call registration ~program ~callee
     ~(expression : Sst.expression) =
   if not (authentic registration program) then
     Error "external target specification registration is stale"
@@ -940,22 +940,43 @@ let authenticate_call registration ~program ~caller:_ ~callee
                 ~actual_result:expression.typ ~arguments
           | _ -> Error "external target call is not direct and saturated"
 
-let validate_call registration ~program ~functions ~caller_id ~callee
+let validate_call registration ~program ~functions
+    ~(caller_id : Sst.function_id) ~(callee : Sst.function_definition)
     ~expression =
   let* registration =
     Option.to_result
       ~none:"external target call has no private authentication"
       registration
   in
-  let* caller =
-    List.find_opt
-      (fun definition -> definition.Sst.function_id = caller_id)
-      functions
-    |> Option.to_result
-         ~none:"external target caller is absent from the program"
+  let caller_kind =
+    if
+      List.exists
+        (fun definition -> definition.Sst.function_id = caller_id)
+        functions
+    then Some "function"
+    else if
+      List.exists
+        (fun definition ->
+          definition.Sst.constant_id.constant_index = caller_id.function_index
+          && String.equal definition.constant_id.constant_name
+               caller_id.function_name)
+        program.Sst.logical_constants
+    then Some "logical-constant"
+    else None
   in
+  let* (caller_kind [@log_value.trace]) =
+    Option.to_result ~none:"external target caller is absent from the program"
+      caller_kind
+  in
+  [%log.trace "authenticated external target semantic caller"
+    ~stage:(Delator.Field.string "external-target-call-validation")
+    ~caller_kind:
+      (Delator.Field.string (caller_kind [@log_value.trace]))
+    ~caller_name:(Delator.Field.string caller_id.function_name)
+    ~callee_name:(Delator.Field.string callee.function_id.function_name)
+    ~decision:(Delator.Field.string "accepted")];
   let* _ =
-    authenticate_call registration ~program ~caller ~callee ~expression
+    authenticate_call registration ~program ~callee ~expression
   in
   Ok ()
 

@@ -54,6 +54,7 @@ let definition_digest (definition : Sst.function_definition) =
          Sst.policy = definition.Sst.policy;
          parametric_adts = [];
          types = [];
+         logical_constants = [];
          functions = [ definition ];
        })
 
@@ -150,8 +151,29 @@ let rec expression_dump substitutions (expression : Sst.expression) =
     | Sst.Int_constant value -> "int:" ^ Z.to_string value
     | Sst.Bool_constant value -> "bool:" ^ string_of_bool value
     | Sst.Unit_constant -> "unit"
+    | Sst.Bv_literal value ->
+        "bv-literal:"
+        ^ Parametric_type.structural_identity_material
+            (Sst.Bit_vector value.Bv_value.width)
+        ^ ":" ^ Bv_value.canonical_decimal value
     | Sst.Variable { binding; _ } -> Printf.sprintf "var#%d" binding.id
     | Sst.Lift_runtime_int operand -> "lift-int(" ^ recurse operand ^ ")"
+    | Sst.Bv_int_to_bv_mod { width; input; source_authority } ->
+        "bv-intmod:"
+        ^ Parametric_type.structural_identity_material (Sst.Bit_vector width)
+        ^ ":"
+        ^ Numeric_bv_projection_evidence_private.full_key source_authority
+        ^ "(" ^ recurse input ^ ")"
+    | Sst.Bv_to_int_unsigned operand ->
+        "bv-unsigned(" ^ recurse operand ^ ")"
+    | Sst.Bv_to_int_signed operand -> "bv-signed(" ^ recurse operand ^ ")"
+    | Sst.Bv_not operand -> "bv-not(" ^ recurse operand ^ ")"
+    | Sst.Bv_binary (operation, left, right) ->
+        "bv-" ^ Bv_operation_private.binary_name operation ^ "("
+        ^ children [ left; right ] ^ ")"
+    | Sst.Bv_compare (comparison, left, right) ->
+        "bv-" ^ Bv_operation_private.comparison_name comparison ^ "("
+        ^ children [ left; right ] ^ ")"
     | Sst.Tuple_value values -> "tuple(" ^ children (List.map snd values) ^ ")"
     | Sst.Record_value { record_type; fields } ->
         Printf.sprintf "record:%s#%d(%s)" record_type.type_name
@@ -261,6 +283,13 @@ let rec expression_dump substitutions (expression : Sst.expression) =
         ^ "("
         ^ children (Symbolic_application_private.arguments application)
         ^ ")"
+    | Sst.Logical_constant_reference { constant; type_arguments } ->
+        "logical-constant:"
+        ^ constant.constant_origin.origin_digest
+        ^ "<"
+        ^ String.concat ","
+            (List.map (canonical_type substitutions) type_arguments)
+        ^ ">"
   in
   desc ^ ":" ^ canonical_type substitutions expression.typ
 

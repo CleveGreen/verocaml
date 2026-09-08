@@ -104,6 +104,19 @@ let binding_names structure =
     structure
   |> List.sort String.compare
 
+let logical_constant_markers structure =
+  structure
+  |> List.concat_map (fun item ->
+         match item.Parsetree.pstr_desc with
+         | Pstr_value (_, bindings) ->
+             bindings
+             |> List.concat_map (fun binding ->
+                    binding.Parsetree.pvb_attributes
+                    |> List.filter (fun (attribute : Parsetree.attribute) ->
+                           String.equal attribute.attr_name.txt
+                             "verocaml.internal.logical_constant.definition.v1"))
+         | _ -> [])
+
 let module_structure expression =
   let rec find expression =
     match expression.Parsetree.pmod_desc with
@@ -124,6 +137,7 @@ let implementation_source =
   {|
 module type SERVICE = sig
   val execute : int -> int
+  val answer : int
   val model : int -> int
   val invariant : int -> bool
   val lemma : int -> unit
@@ -131,6 +145,7 @@ end
 
 module Service : SERVICE = struct
   let execute value = value
+  let answer : int = 42 [@@verocaml.spec]
   let model value = value [@@verocaml.spec]
   let invariant value = value >= 0 [@@verocaml.type_invariant]
   let lemma _value = () [@@verocaml.proof]
@@ -155,9 +170,9 @@ let semantic_implementation route mode =
     Parse.implementation (Lexing.from_string implementation_source)
     |> transform_structure route mode
   in
-  let module_type_names, module_names =
+  let module_type_names, module_names, constant_marker_count =
     List.fold_left
-      (fun (module_type_names, module_names) item ->
+      (fun (module_type_names, module_names, constant_marker_count) item ->
         match item.Parsetree.pstr_desc with
         | Pstr_modtype
             {
@@ -165,24 +180,33 @@ let semantic_implementation route mode =
               pmtd_type = Some { pmty_desc = Pmty_signature signature; _ };
               _;
             } ->
-            (value_names signature, module_names)
+            (value_names signature, module_names, constant_marker_count)
         | Pstr_module
             {
               pmb_name = { txt = Some "Service"; _ };
               pmb_expr;
               _;
             } ->
-            (module_type_names, binding_names (module_structure pmb_expr))
-        | _ -> (module_type_names, module_names))
-      ([], []) structure
+            let body = module_structure pmb_expr in
+            ( module_type_names,
+              binding_names body,
+              List.length (logical_constant_markers body) )
+        | _ -> (module_type_names, module_names, constant_marker_count))
+      ([], [], 0) structure
   in
   let expected =
     match mode with
     | Ordinary -> [ "execute" ]
-    | Retained -> [ "execute"; "invariant"; "lemma"; "model" ]
+    | Retained -> [ "answer"; "execute"; "invariant"; "lemma"; "model" ]
   in
   require_names "module type" expected module_type_names;
-  require_names "module implementation" expected module_names
+  require_names "module implementation" expected module_names;
+  let expected_marker_count = match mode with Ordinary -> 0 | Retained -> 1 in
+  if constant_marker_count <> expected_marker_count then
+    failwith
+      (Printf.sprintf
+         "logical constant marker count differs: expected %d, got %d"
+         expected_marker_count constant_marker_count)
 
 let nested_signature_names signature =
   List.find_map

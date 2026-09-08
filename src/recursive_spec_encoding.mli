@@ -148,6 +148,13 @@ val proof_entry_activations :
 val error_to_string : error -> string
 
 module For_testing : sig
+  (** Construct a query through the recursive-proof term translator without
+      issuing or simulating verified recursive-definition authority. *)
+  val internal_bv_proof_query :
+    span:Diagnostic.span ->
+    Vir.boolean_term ->
+    (Logic_ir.query, error) result
+
   val termination_obligations : prepared -> Vir.obligation list
   val verify_with_requirements :
     ?rlimit:int ->

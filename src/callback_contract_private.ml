@@ -561,9 +561,18 @@ let recursive_helper_error format =
 
 let recursive_helper_expression_children (expression : Sst.expression) =
   match expression.expression_desc with
+  | Sst.Bv_literal _ -> []
+  | Sst.Bv_int_to_bv_mod { input; _ }
+  | Sst.Bv_to_int_unsigned input
+  | Sst.Bv_to_int_signed input
+  | Sst.Bv_not input ->
+      [ input ]
+  | Sst.Bv_binary (_, left, right) | Sst.Bv_compare (_, left, right) ->
+      [ left; right ]
   | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
   | Sst.Variable _ | Sst.Mutable_read _ | Sst.Owned_tree_rebase _
-  | Sst.Reveal _ | Sst.Reveal_with_fuel _ | Sst.Optional_absent ->
+  | Sst.Reveal _ | Sst.Reveal_with_fuel _ | Sst.Optional_absent
+  | Sst.Logical_constant_reference _ ->
       []
   | Sst.Lift_runtime_int operand -> [ operand ]
   | Sst.Tuple_value values -> List.map snd values
@@ -629,8 +638,16 @@ let validate_builtin_assertion_predicate predicate =
     in
     match expression.expression_desc with
     | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
-    | Sst.Variable _ ->
+    | Sst.Bv_literal _
+    | Sst.Variable _ | Sst.Logical_constant_reference _ ->
         Ok ()
+    | Sst.Bv_int_to_bv_mod { input; _ }
+    | Sst.Bv_to_int_unsigned input
+    | Sst.Bv_to_int_signed input
+    | Sst.Bv_not input ->
+        pure input
+    | Sst.Bv_binary (_, left, right) | Sst.Bv_compare (_, left, right) ->
+        all [ left; right ]
     | Sst.Lift_runtime_int operand -> pure operand
     | Sst.Tuple_value values -> all (List.map snd values)
     | Sst.Record_value { fields; _ } -> all (List.map snd fields)

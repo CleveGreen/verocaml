@@ -35,6 +35,20 @@ type public_type = {
   field_modes : (Sst.field_id * Sst.instance_mode) list;
 }
 
+type public_logical_constant =
+  | Public_defined_logical_value of {
+      logical_constant : Sst.logical_constant_definition;
+      logical_constant_path : string;
+      logical_constant_uid : string;
+      logical_constant_dependency_closure : string;
+      logical_constant_trust_dependencies : string list;
+    }
+  | Public_symbolic_logical_value of {
+      symbolic_callable : public_callable;
+      logical_constant_path : string;
+      logical_constant_uid : string;
+    }
+
 type public_model = {
   callable : public_callable;
   domain : Sst.type_id;
@@ -54,12 +68,14 @@ type public_invariant = {
 
 type handle = {
   issuer : unit ref;
+  authentication_index : int;
   nonserializable : unit -> unit;
   unit_name : string;
   interface_digest : string;
   mode_signature_digest : string;
   types : public_type list;
   callables : public_callable list;
+  logical_constants : public_logical_constant list;
   external_specifications : public_callable list;
   models : public_model list;
   invariants : public_invariant list;
@@ -67,6 +83,7 @@ type handle = {
   transitive_dependencies : handle list;
   semantic_snapshot : Sst_validation.validated_program;
   private_driver_completion : Verification_driver_private.completion;
+  numeric_provider : Numeric_provider_private.t;
   private_implementation : Cmt_input.implementation;
   source_digest : string;
   family_digest : string;
@@ -89,11 +106,13 @@ type staged_dependency = {
   mode_signature_digest : string;
   types : public_type list;
   callables : public_callable list;
+  logical_constants : public_logical_constant list;
   external_specifications : public_callable list;
   models : public_model list;
   invariants : public_invariant list;
   semantic_snapshot : Sst_validation.validated_program;
   private_driver_completion : Verification_driver_private.completion;
+  numeric_provider : Numeric_provider_private.t;
   direct_dependencies : staged_dependency list;
 }
 

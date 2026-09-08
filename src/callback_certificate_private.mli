@@ -75,3 +75,4 @@ val captures : t -> capture list
 val same_identity : t -> t -> bool
 val same_origin : t -> t -> bool
 val describe : t -> string
+val identity_material : t -> string

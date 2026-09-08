@@ -52,7 +52,7 @@ let transparent_schema_embedding descriptors definitions typ =
           constructors
   in
   let rec supported visiting = function
-    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> true
+    | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ -> true
     | Sst.Parameter _ -> false
     | Sst.Application (constructor, arguments) ->
         application constructor arguments
@@ -89,6 +89,8 @@ let argument_has_type typ argument =
   | Sst.Unit, Vir.Recursive_boolean_argument (Vir.Boolean_constant true) -> true
   | (Sst.Int | Sst.Mathematical_int), Vir.Recursive_integer_argument _ -> true
   | Sst.Bool, Vir.Recursive_boolean_argument _ -> true
+  | Sst.Bit_vector width, Vir.Recursive_bv_argument term ->
+      Bv_width.equal width term.Vir.bit_vector_width
   | Sst.Aggregate type_id, Vir.Recursive_aggregate_argument aggregate ->
       exact_aggregate_type type_id aggregate
   | ( Sst.Unit,
@@ -102,7 +104,11 @@ let argument_has_type typ argument =
       (Vir.Recursive_integer_argument _ | Vir.Recursive_aggregate_argument _) )
   | ( Sst.Aggregate _,
       (Vir.Recursive_integer_argument _ | Vir.Recursive_boolean_argument _) )
+  | ( Sst.Bit_vector _,
+      ( Vir.Recursive_integer_argument _ | Vir.Recursive_boolean_argument _
+      | Vir.Recursive_aggregate_argument _ ) )
   | Sst.Tuple _, _
+  | _, Vir.Recursive_bv_argument _
   | _, Vir.Recursive_parametric_argument _
   | (Sst.Parameter _ | Sst.Application _), _ ->
       false
@@ -118,6 +124,10 @@ let selected_argument descriptors aggregate make_selector path = function
       Some
         (Vir.Recursive_boolean_argument
            (Vir.Boolean_selector (make_selector path Vir.Boolean, aggregate)))
+  | Sst.Bit_vector width ->
+      Vir.bv_selector (make_selector path (Vir.Bit_vector width)) aggregate
+      |> Result.to_option
+      |> Option.map (fun term -> Vir.Recursive_bv_argument term)
   | Sst.Aggregate type_id ->
       let selected_type = aggregate_type type_id in
       Some
@@ -313,7 +323,7 @@ let rec nested_equalities descriptors definitions aggregate make_selector path
       | Sst.Unit_pattern | Sst.Record_pattern _ | Sst.Constructor_pattern _
       | Sst.Or_pattern _ ->
           Error "immutable tuple pattern changed shape")
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int -> Ok []
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ -> Ok []
   | Sst.Parameter _ ->
       Error "open reconstruction has no exact schema"
 
@@ -427,7 +437,7 @@ and reconstruct_application descriptors definitions (pattern : Sst.pattern)
               Error "application reconstruction pattern changed shape")
       | Some _ | None ->
           Error "application reconstruction has no exact schema")
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
   | Sst.Aggregate _
   | Sst.Parameter _ ->
       Error "application reconstruction received a non-application pattern"
@@ -561,7 +571,7 @@ and reconstruct_aggregate descriptors definitions (pattern : Sst.pattern)
       | Sst.Unit_pattern | Sst.Tuple_pattern _ | Sst.Or_pattern _ ->
           Error "immutable aggregate pattern changed shape")
   | Sst.Aggregate _ -> Ok []
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
   | Sst.Parameter _
   | Sst.Application _ ->
       Error "aggregate reconstruction received a non-aggregate/open pattern"
@@ -571,7 +581,7 @@ let pattern_reconstruction_equalities descriptors definitions
   match pattern.Sst.typ with
   | Sst.Application _ ->
       reconstruct_application descriptors definitions pattern aggregate
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _ | Sst.Tuple _
   | Sst.Aggregate _
   | Sst.Parameter _ ->
       reconstruct_aggregate descriptors definitions pattern aggregate
@@ -585,6 +595,13 @@ let rec owned_tree_transitions expression =
       transition :: owned_tree_transitions value
   | Sst.Owned_tree_rebase { transition } -> [ transition ]
   | Sst.Lift_runtime_int operand -> owned_tree_transitions operand
+  | Sst.Bv_int_to_bv_mod { input; _ }
+  | Sst.Bv_to_int_unsigned input
+  | Sst.Bv_to_int_signed input
+  | Sst.Bv_not input ->
+      owned_tree_transitions input
+  | Sst.Bv_binary (_, left, right) | Sst.Bv_compare (_, left, right) ->
+      nested [ left; right ]
   | Sst.Tuple_value components ->
       nested (List.map snd components)
   | Sst.Record_value { fields; _ } -> nested (List.map snd fields)
@@ -637,5 +654,7 @@ let rec owned_tree_transitions expression =
   | Sst.Use_type_invariant { value; _ } ->
       owned_tree_transitions value
   | Sst.Int_constant _ | Sst.Bool_constant _ | Sst.Unit_constant
-  | Sst.Variable _ | Sst.Mutable_read _ | Sst.Forall _ | Sst.Exists _ ->
+  | Sst.Bv_literal _
+  | Sst.Variable _ | Sst.Mutable_read _ | Sst.Forall _ | Sst.Exists _
+  | Sst.Logical_constant_reference _ ->
       []

@@ -6,6 +6,7 @@ let nested_imported_application = function
       } ->
       true
   | Recursive_integer_argument _ | Recursive_boolean_argument _
+  | Recursive_bv_argument _
   | Recursive_aggregate_argument _ | Recursive_parametric_argument _ ->
       false
 

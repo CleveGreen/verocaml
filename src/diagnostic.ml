@@ -90,6 +90,10 @@ type classification =
       reason : string;
       remedy : string;
     }
+  | Invalid_logical_constant_declaration of string
+  | Invalid_logical_constant_use of string
+  | Invalid_logical_constant_authentication of string
+  | Invalid_numeric_declaration of string
   | Executable_function_in_specification of { function_name : string }
   | Unannotated_erased_call of {
       caller_name : string;
@@ -131,6 +135,9 @@ let failure_class = function
   | Unsupported_target _ | Unsupported_input _ | Invalid_recursive_rank _
   | Invalid_broadcast _ | Invalid_symbolic_declaration _
   | Invalid_symbolic_application _ | Invalid_symbolic_authentication _
+  | Invalid_logical_constant_declaration _ | Invalid_logical_constant_use _
+  | Invalid_logical_constant_authentication _
+  | Invalid_numeric_declaration _
   | Executable_function_in_specification _ | Unannotated_erased_call _
   | Invalid_verification_call _ | Invalid_semantic_program _
   | Unsupported_construct _ ->
@@ -238,6 +245,15 @@ let code_and_message = function
   | Invalid_symbolic_dependency { provider; reason; remedy } ->
       ( "VERO_DEPENDENCY",
         Printf.sprintf "symbolic provider %s: %s; %s" provider reason remedy )
+  | Invalid_logical_constant_declaration detail ->
+      ("VERO_LOGICAL_CONSTANT_DECLARATION", detail)
+  | Invalid_logical_constant_use detail ->
+      ("VERO_LOGICAL_CONSTANT_USE", detail)
+  | Invalid_logical_constant_authentication detail ->
+      ( "VERO_INVALID_LOGICAL_CONSTANT",
+        "Logical constant validation failed: " ^ detail )
+  | Invalid_numeric_declaration detail ->
+      ("VERO_NUMERIC_DECLARATION", detail)
   | Executable_function_in_specification { function_name } ->
       ( "VERO_EXEC_IN_SPEC",
         Printf.sprintf
@@ -418,6 +434,22 @@ let default_submessages = function
         Hint
           "Use [%%verocaml.symbolic val ...] in specification or proof code and rebuild with the matching VeroCaml PPX.";
       ]
+  | Invalid_logical_constant_declaration _
+  | Invalid_logical_constant_authentication _ ->
+      [
+        Hint
+          "Write `let name : type = expression [@@verocaml.spec]` and rebuild through Dune with the matching VeroCaml PPX.";
+      ]
+  | Invalid_logical_constant_use _ ->
+      [
+        Hint
+          "Logical constants are ghost-only; use them in a specification, proof, contract, or proof region.";
+      ]
+  | Invalid_numeric_declaration _ ->
+      [
+        Hint
+          "Use declaration paths for numeric carrier and semantic references, then rebuild with the matching retained VeroCaml PPX.";
+      ]
   | Unsupported_construct Unsupported_type ->
       [
         Hint
@@ -497,7 +529,8 @@ let make classification span =
     ~end_line:(Delator.Field.int span.end_pos.line)
     ~end_column:(Delator.Field.int span.end_pos.column)];
   (match classification with
-  | Invalid_broadcast _detail | Invalid_symbolic_authentication _detail ->
+  | Invalid_broadcast _detail | Invalid_symbolic_authentication _detail
+  | Invalid_logical_constant_authentication _detail ->
       [%log.debug "diagnostic internal detail"
         ~code:(Delator.Field.string code)
         ~detail:(Delator.Field.string _detail)]
@@ -505,6 +538,8 @@ let make classification span =
   | Incompatible_magic | Input_io_error | Invalid_recursive_rank _
   | Invalid_broadcast_dependency _ | Invalid_symbolic_dependency _
   | Invalid_symbolic_declaration _ | Invalid_symbolic_application _
+  | Invalid_logical_constant_declaration _ | Invalid_logical_constant_use _
+  | Invalid_numeric_declaration _
   | Executable_function_in_specification _ | Unannotated_erased_call _
   | Invalid_verification_call _ | Invalid_imported_specification _
   | Invalid_semantic_program _ | Unsupported_construct _ ->

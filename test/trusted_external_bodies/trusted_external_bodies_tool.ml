@@ -118,7 +118,7 @@ let structural () =
       span;
     }
   in
-  let program = Sst.{ policy = Default_linear_z3; parametric_adts = []; types = []; functions = [ definition ] } in
+  let program = Sst.{ policy = Default_linear_z3; parametric_adts = []; types = []; logical_constants = []; functions = [ definition ] } in
   match Sst_validation.validate program with
   | Error _ ->
       print_endline "raw semantic trusted-external-body provenance rejected";

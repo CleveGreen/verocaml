@@ -57,6 +57,24 @@ val recognizers :
   (int * Logic_ir.function_symbol) list option
 val selector : t -> Vir.selector -> Logic_ir.function_symbol option
 
+type selector_resolution =
+  | Declared_selector of Logic_ir.function_symbol
+  | Invalid_declared_selector
+  | Unavailable_selector_schema
+
+val resolve_selector : t -> Vir.selector -> selector_resolution
+
+type record_schema_validation =
+  | Validated_record_schema
+  | Unavailable_record_schema
+
+val validate_record_fields :
+  schemas:Logical_adt_schema_private.t list ->
+  aggregate_type:Vir.aggregate_type ->
+  record_type:Sst.type_id ->
+  fields:(Sst.field_id * Vir.recursive_spec_argument) list ->
+  (record_schema_validation, string) result
+
 val schemas : Vir.obligation -> Logical_adt_schema_private.t list
 val contains : Logical_adt_schema_private.t list -> Vir.aggregate_type -> bool
 
@@ -113,6 +131,13 @@ val routed_constructor :
   'error routing ->
   Vir.aggregate_type ->
   Sst.constructor_id ->
+  Logic_ir.sort list ->
+  (Logic_ir.function_symbol, 'error) result
+
+val routed_record_constructor :
+  'error routing ->
+  Vir.aggregate_type ->
+  Sst.type_id ->
   Logic_ir.sort list ->
   (Logic_ir.function_symbol, 'error) result
 

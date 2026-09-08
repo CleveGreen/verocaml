@@ -6,6 +6,7 @@ type bindings = {
 type sort_reference =
   | Int_sort
   | Bool_sort
+  | Bv_sort of string
   | Named_sort of int
   | Recursive_self
 
@@ -60,6 +61,12 @@ let get_accessors = Z3.Datatype.get_accessors
 let detach_sort = function
   | Logic_ir.Int -> Int_sort
   | Bool -> Bool_sort
+  | Bv width ->
+      Bv_sort
+        (Bv_width.encode_reference
+           (Bv_backend_capability_receipt_private.capability ())
+           width
+        |> Result.fold ~ok:Fun.id ~error:(fun message -> invalid_arg message))
   | Named sort -> Named_sort (Logic_ir.View.named_sort_index sort)
 
 let detach datatype =
@@ -96,7 +103,7 @@ let detach datatype =
     constructors =
       List.map constructor (Logic_ir.View.datatype_constructors datatype) }
 
-let declare_detached ~context ~resolve_named_sort datatype =
+let declare_detached ~context ~resolve_named_sort ~resolve_bv_sort datatype =
   let constructors = datatype.constructors in
   let make_constructor constructor =
     let fields = constructor.fields in
@@ -107,6 +114,7 @@ let declare_detached ~context ~resolve_named_sort datatype =
              match field.field_sort with
              | Int_sort -> (Some (mk_integer_sort context), 0)
              | Bool_sort -> (Some (mk_boolean_sort context), 0)
+             | Bv_sort reference -> (Some (resolve_bv_sort reference), 0)
              | Named_sort index -> (Some (resolve_named_sort index), 0)
              | Recursive_self -> (None, 0))
            fields)
@@ -175,7 +183,16 @@ let declare ~context ~resolve_sort datatype =
                (fun field ->
                  match Logic_ir.View.datatype_field_sort field with
                  | Logic_ir.Field_sort (Logic_ir.Named sort) -> Some sort
-                 | Field_sort (Int | Bool) | Recursive_self -> None)
+                 | Field_sort (Int | Bool | Bv _) | Recursive_self -> None)
                fields)))
   in
-  declare_detached ~context ~resolve_named_sort detached
+  let resolve_bv_sort reference =
+    let width =
+      Bv_width.decode_reference
+        (Bv_backend_capability_receipt_private.capability ())
+        reference
+      |> Result.fold ~ok:Fun.id ~error:(fun message -> invalid_arg message)
+    in
+    resolve_sort (Logic_ir.Bv width)
+  in
+  declare_detached ~context ~resolve_named_sort ~resolve_bv_sort detached

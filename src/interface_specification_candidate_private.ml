@@ -409,6 +409,8 @@ type public_surface = {
   public_callable_names : string list;
   public_external_type_constructors : Parametric_type.constructor list;
   public_symbolic_names : string list;
+  public_logical_values :
+    (string * Retained_interface_authority_private.logical_value) list;
 }
 
 let embedded_public_surface ~unit_name
@@ -469,14 +471,33 @@ let embedded_public_surface ~unit_name
                 | Types.Sig_type
                     (ident, declaration, _, Types.Exported) ->
                     let name = qualify (Ident.name ident) in
-                    let revealed_types =
-                      match declaration.Types.type_kind with
-                      | Type_record _ | Type_record_unboxed_product _
-                      | Type_variant _ | Type_open ->
-                          name :: revealed_types
-                      | Type_abstract _ -> revealed_types
-                    in
-                    collect (name :: types) revealed_types callables rest
+                    (match
+                       ( declaration.Types.type_kind,
+                         declaration.Types.type_manifest,
+                         External_type_specification_marker_private.classify
+                           declaration.Types.type_attributes )
+                     with
+                    | ( Type_abstract _,
+                        Some _,
+                        External_type_specification_marker_private.Ordinary ) ->
+                        [%log.trace
+                          "excluded compiler-normalized type alias from public logical type surface"
+                          ~unit_name:(Delator.Field.string unit_name)
+                          ~path:(Delator.Field.string name)
+                          ~stage:
+                            (Delator.Field.string "embedded-public-surface")
+                          ~decision:
+                            (Delator.Field.string "normalized-alias")];
+                        collect types revealed_types callables rest
+                    | _ ->
+                        let revealed_types =
+                          match declaration.Types.type_kind with
+                          | Type_record _ | Type_record_unboxed_product _
+                          | Type_variant _ | Type_open ->
+                              name :: revealed_types
+                          | Type_abstract _ -> revealed_types
+                        in
+                        collect (name :: types) revealed_types callables rest)
                 | Sig_value (ident, _, Types.Exported) ->
                     let name = qualify (Ident.name ident) in
                     if
@@ -627,10 +648,40 @@ let embedded_public_surface ~unit_name
                              (Failure
                                 "symbolic interface provider path mismatch"))
                 in
+                let public_logical_values =
+                  candidate.interface_logical_values
+                  |> List.map (fun descriptor ->
+                         match
+                           relative_path
+                             descriptor.Retained_interface_authority_private.logical_value_path
+                         with
+                         | Some path -> (path, descriptor)
+                         | None ->
+                             raise
+                               (Failure
+                                  "logical-value interface provider path mismatch"))
+                in
+                let public_callable_names =
+                  List.filter
+                    (fun name -> not (List.mem_assoc name public_logical_values))
+                    public_callable_names
+                in
                 if
                   List.exists
-                    (fun name -> not (List.mem name public_callable_names))
+                    (fun name ->
+                      match List.assoc_opt name public_logical_values with
+                      | Some descriptor ->
+                          descriptor.Retained_interface_authority_private.logical_value_class
+                          <> Retained_interface_authority_private.Symbolic_value
+                          || List.mem name public_callable_names
+                      | None -> not (List.mem name public_callable_names))
                     public_symbolic_names
+                  || List.exists
+                       (fun (name, descriptor) ->
+                         descriptor.Retained_interface_authority_private.logical_value_class
+                           = Retained_interface_authority_private.Symbolic_value
+                         && not (List.mem name public_symbolic_names))
+                       public_logical_values
                 then
                   raise
                     (Failure
@@ -642,6 +693,7 @@ let embedded_public_surface ~unit_name
                     public_callable_names;
                     public_external_type_constructors = [];
                     public_symbolic_names;
+                    public_logical_values;
                   })
       with Cmi_format.Error _ | Invalid_argument _ | Failure _ ->
           reject "malformed embedded public signature")
@@ -665,6 +717,7 @@ let public_type_constructor surface constructor =
 
 let rec public_typ surface binders = function
   | Sst.Unit | Bool | Int | Mathematical_int -> true
+  | Bit_vector _ -> false
   | Tuple components ->
       List.for_all (fun (_, typ) -> public_typ surface binders typ) components
   | Aggregate type_id -> surface_has_type surface type_id
@@ -769,16 +822,21 @@ let public_canonical_application_constructor surface = function
       && not
            (List.mem constructor.Parametric_type.constructor_path
               surface.public_type_names)
-  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Tuple _
+  | Sst.Unit | Sst.Bool | Sst.Int | Sst.Mathematical_int | Sst.Bit_vector _
+  | Sst.Tuple _
   | Sst.Aggregate _
   | Sst.Parameter _ ->
       false
 
-let rec public_expression surface binders (expression : Sst.expression) =
+let rec public_expression ?(imported_specification_call = fun _ -> false) surface binders (expression : Sst.expression) =
+  let public_expression surface binders expression = public_expression ~imported_specification_call surface binders expression in
   public_typ surface binders expression.Sst.typ
   &&
   match expression.expression_desc with
   | Sst.Int_constant _ | Bool_constant _ | Unit_constant -> true
+  | Bv_literal _ | Bv_int_to_bv_mod _ | Bv_to_int_unsigned _
+  | Bv_to_int_signed _ | Bv_not _ | Bv_binary _ | Bv_compare _ ->
+      false
   | Lift_runtime_int operand -> public_expression surface binders operand
   | Variable { binding; _ } | Mutable_read binding ->
       public_binding surface binders binding
@@ -858,8 +916,9 @@ let rec public_expression surface binders (expression : Sst.expression) =
       && Option.fold ~none:true
            ~some:(public_expression surface binders)
            quantifier.quantifier_trigger
-  | Direct_call { callee; arguments; _ } ->
-      public_function surface callee
+  | Direct_call { callee; arguments; type_arguments; _ } ->
+      (public_function surface callee || imported_specification_call expression)
+      && List.for_all (public_typ surface binders) type_arguments
       && List.for_all
            (fun argument ->
              public_expression surface binders
@@ -893,7 +952,7 @@ let rec public_expression surface binders (expression : Sst.expression) =
            (Symbolic_application_private.arguments application)
   | Callback_call _ | Callback_requires _ | Callback_ensures _
   | Optional_absent | Optional_present _ | Optional_forward _ | Reveal _ | Reveal_with_fuel _ | Use_type_invariant _
-  | Local_assert _ ->
+  | Local_assert _ | Logical_constant_reference _ ->
       false
 
 let public_field_definition surface binders field =
@@ -912,14 +971,14 @@ let surface_type_kind_is_public surface binders = function
                constructor.constructor_fields)
         constructors
 
-let public_clause surface binders clause =
+let public_clause ~imported_specification_call surface binders clause =
   Option.fold ~none:true
     ~some:(public_pattern surface binders)
     (Sst_validation.contract_clause_binder clause)
-  && public_expression surface binders
+  && public_expression ~imported_specification_call surface binders
        (Sst_validation.contract_clause_expression clause)
 
-let public_callable_descriptor surface descriptor =
+let public_callable_descriptor ?(imported_specification_call = fun _ -> false) surface descriptor =
   let definition = Sst_validation.callable_definition descriptor in
   let binders = definition.Sst.type_binders in
   let contract = Sst_validation.callable_contract descriptor in
@@ -931,14 +990,14 @@ let public_callable_descriptor surface descriptor =
        definition.parameters
   && public_typ surface binders definition.result_type
   && List.for_all
-       (public_clause surface binders)
+       (public_clause ~imported_specification_call surface binders)
        (Sst_validation.contract_requires contract)
   && List.for_all
-       (public_clause surface binders)
+       (public_clause ~imported_specification_call surface binders)
        (Sst_validation.contract_ensures contract)
   && List.for_all
        (fun decrease ->
-         public_clause surface binders
+         public_clause ~imported_specification_call surface binders
            (Sst_validation.decrease_clause decrease))
        (Sst_validation.contract_decreases contract)
 

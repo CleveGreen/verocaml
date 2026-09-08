@@ -84,6 +84,10 @@ type classification =
       reason : string;
       remedy : string;
     }
+  | Invalid_logical_constant_declaration of string
+  | Invalid_logical_constant_use of string
+  | Invalid_logical_constant_authentication of string
+  | Invalid_numeric_declaration of string
   | Executable_function_in_specification of { function_name : string }
   | Unannotated_erased_call of {
       caller_name : string;
